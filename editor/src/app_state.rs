@@ -46,6 +46,12 @@ fn key_times(timeline: &ankhimate_core::animation::Timeline) -> Vec<f32> {
 }
 
 pub struct AppState {
+    /// Physics simulation for the viewport (T-503, ADR 0007).
+    ///
+    /// Owned here rather than in the document: it is derived state that depends
+    /// on elapsed wall time, so it must not be saved, undone, or shared with an
+    /// exporter.
+    pub physics: ankhimate_core::physics::PhysicsState,
     /// The only undoable, savable state.
     pub doc: Document,
     /// UI/interaction state — never undoable, never saved.
@@ -66,6 +72,7 @@ impl Default for AppState {
             session,
             history: History::default(),
             pose: ankhimate_core::pose::Pose::new(),
+            physics: ankhimate_core::physics::PhysicsState::new(),
         };
         state.refresh_pose();
         state
@@ -586,6 +593,21 @@ impl AppState {
     /// only state that moves is `Session.playhead`. Returns `true` if the pose
     /// changed and the viewport needs a repaint.
     pub fn advance_playback(&mut self, dt: f32) -> bool {
+        // Physics runs while playing, and — when asked — while tuning values in
+        // Setup with no clip to play (T-503). Both go through the same field so
+        // `refresh_pose` has one rule.
+        let simulating = self.session.playing
+            || (self.session.simulate_in_setup && !self.session.is_animating());
+        if simulating && !self.physics.paused {
+            self.session.physics_dt = Some(dt);
+        }
+        if simulating && !self.session.playing {
+            // Nothing else advances in Setup, so the repaint has to come from
+            // here or the simulation would only step when something else
+            // happened to redraw.
+            self.refresh_pose();
+            return true;
+        }
         if !self.session.playing {
             return false;
         }
@@ -738,7 +760,11 @@ impl AppState {
         // Borrow the document immutably and the pose mutably at the same time by
         // splitting the fields explicitly.
         let Self {
-            doc, session, pose, ..
+            doc,
+            session,
+            pose,
+            physics,
+            ..
         } = self;
 
         // `(animation, time, alpha)` for the current playhead — Animate mode
@@ -754,7 +780,16 @@ impl AppState {
                 },
                 WorkMode::Setup => Vec::new(),
             };
-        ankhimate_core::pose::evaluate(&doc.skeleton, &animations, pose);
+        // Physics advances only while something is actually moving: during
+        // playback, or when the rigger has asked to simulate while tuning
+        // values in Setup (T-503). A still frame evaluates to the rest pose, so
+        // scrubbing the timeline is reproducible.
+        let dt = session.physics_dt.take().unwrap_or(0.0);
+        if dt > 0.0 {
+            ankhimate_core::pose::evaluate_with(&doc.skeleton, &animations, physics, dt, pose);
+        } else {
+            ankhimate_core::pose::evaluate(&doc.skeleton, &animations, pose);
+        }
 
         if self.session.has_previews() {
             self.apply_previews();

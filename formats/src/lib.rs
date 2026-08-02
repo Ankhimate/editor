@@ -638,4 +638,49 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert!(!keys[0].value && keys[1].value);
     }
+    /// T-503: a physics constraint's dials must round-trip. Its bone lives in
+    /// the schema's `target` field so the constraint shape stays uniform, which
+    /// is exactly the sort of mapping that silently loses data.
+    #[test]
+    fn physics_constraints_survive_a_round_trip() {
+        use ankhimate_core::constraints::{Constraint, PhysicsConstraint};
+
+        let mut skel = sample_skeleton();
+        let bone = skel.bones.keys().next().unwrap();
+        skel.add_constraint(Constraint::Physics(PhysicsConstraint {
+            inertia: 0.8,
+            strength: 55.0,
+            damping: 0.25,
+            mass: 2.5,
+            wind: glam::vec2(3.0, 0.0),
+            gravity: glam::vec2(0.0, -9.8),
+            mix: 0.75,
+            rotate: true,
+            translate: true,
+            ..PhysicsConstraint::sway("hair", bone)
+        }));
+
+        let anims = SlotMap::with_key();
+        let assets = AssetDb::new();
+        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
+        let loaded = from_json(&json).unwrap();
+        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
+
+        let Some(Constraint::Physics(p)) = loaded.skeleton.constraints.values().next() else {
+            panic!("the physics constraint came back");
+        };
+        assert_eq!(p.name, "hair");
+        assert!((p.inertia - 0.8).abs() < 1e-6);
+        assert!((p.strength - 55.0).abs() < 1e-6);
+        assert!((p.damping - 0.25).abs() < 1e-6);
+        assert!((p.mass - 2.5).abs() < 1e-6);
+        assert!((p.wind - glam::vec2(3.0, 0.0)).length() < 1e-6);
+        assert!((p.gravity - glam::vec2(0.0, -9.8)).length() < 1e-5);
+        assert!((p.mix - 0.75).abs() < 1e-6);
+        assert!(p.rotate && p.translate);
+        assert_eq!(
+            loaded.skeleton.bones[p.bone].name, skel.bones[bone].name,
+            "it points at the same bone"
+        );
+    }
 }

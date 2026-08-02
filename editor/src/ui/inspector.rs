@@ -277,6 +277,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     // ── Constraints (T-501) ──────────────────────────────────────────────
     constraint_inspector(ui, state, bone_id);
     ik_inspector(ui, state, bone_id);
+    physics_inspector(ui, state, bone_id);
 
     // ── Slot section (T-205) ─────────────────────────────────────────────
     // Below the transform: it describes what the bone *shows*, which is the
@@ -680,6 +681,175 @@ fn selected_chain(state: &AppState) -> Vec<ankhimate_core::ids::BoneId> {
         }
     }
     ordered
+}
+
+/// Physics constraints on the selected bone (T-503).
+fn physics_inspector(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    bone_id: ankhimate_core::ids::BoneId,
+) {
+    use crate::commands::constraint_cmds::{
+        AddPhysics, PhysicsProps, RemoveConstraint, SetPhysicsProps,
+    };
+    use ankhimate_core::constraints::Constraint;
+
+    let setup = state.session.can_edit_structure();
+    let existing: Vec<(ankhimate_core::ids::ConstraintId, String, PhysicsProps)> = state
+        .doc
+        .skeleton
+        .constraint_order
+        .iter()
+        .filter_map(|id| {
+            let Some(Constraint::Physics(p)) = state.doc.skeleton.constraints.get(*id) else {
+                return None;
+            };
+            (p.bone == bone_id).then(|| (*id, p.name.clone(), PhysicsProps::from_constraint(p)))
+        })
+        .collect();
+
+    let mut edit: Option<(ankhimate_core::ids::ConstraintId, PhysicsProps)> = None;
+    let mut remove: Option<ankhimate_core::ids::ConstraintId> = None;
+
+    for (id, name, props) in &existing {
+        let mut next = *props;
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{name} (physics)"))
+                    .size(11.0)
+                    .strong(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(setup, egui::Button::new("✕").small())
+                    .on_hover_text("Delete this constraint")
+                    .clicked()
+                {
+                    remove = Some(*id);
+                }
+            });
+        });
+
+        for (label, value, range, hint) in [
+            (
+                "Inertia",
+                &mut next.inertia,
+                0.0..=1.0,
+                "How much the bone resists following its parent — this is what reads as weight",
+            ),
+            (
+                "Strength",
+                &mut next.strength,
+                0.0..=200.0,
+                "How hard it is pulled back to rest. Higher is stiffer and faster.",
+            ),
+            (
+                "Damping",
+                &mut next.damping,
+                0.0..=1.0,
+                "How quickly motion bleeds off. At 1 it barely overshoots; at 0 it never settles.",
+            ),
+            (
+                "Mass",
+                &mut next.mass,
+                0.05..=10.0,
+                "Heavier bones move less for the same push",
+            ),
+            (
+                "Mix",
+                &mut next.mix,
+                0.0..=1.0,
+                "0 is off, 1 is fully simulated",
+            ),
+        ] {
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [64.0, 18.0],
+                    egui::Label::new(egui::RichText::new(label).size(10.5)),
+                );
+                ui.add_enabled(setup, egui::Slider::new(value, range).max_decimals(2))
+                    .on_hover_text(hint);
+            });
+        }
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Wind").size(10.5));
+            ui.add_enabled(setup, egui::DragValue::new(&mut next.wind.x).speed(0.5))
+                .on_hover_text("Constant sideways push, in world units");
+            ui.add_enabled(setup, egui::DragValue::new(&mut next.wind.y).speed(0.5));
+            ui.label(egui::RichText::new("Gravity").size(10.5));
+            ui.add_enabled(setup, egui::DragValue::new(&mut next.gravity.y).speed(0.5))
+                .on_hover_text("Negative pulls down — world Y is up");
+        });
+        ui.horizontal(|ui| {
+            ui.add_enabled(setup, egui::Checkbox::new(&mut next.rotate, "Rotate"))
+                .on_hover_text("Let the simulation swing the bone");
+            ui.add_enabled(setup, egui::Checkbox::new(&mut next.translate, "Translate"))
+                .on_hover_text("Let it slide as well — for a bone with no length to swing on");
+        });
+
+        if next != *props {
+            edit = Some((*id, next));
+        }
+    }
+
+    // ── Simulation controls ──────────────────────────────────────────────
+    // The simulation is session state (ADR 0007), so these are not undoable and
+    // deliberately live next to the values they help tune.
+    if !existing.is_empty() {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui
+                .button("Reset")
+                .on_hover_text("Return every simulated bone to rest")
+                .clicked()
+            {
+                state.physics.reset();
+                state.refresh_pose();
+            }
+            let mut paused = state.physics.paused;
+            if ui
+                .checkbox(&mut paused, "Pause")
+                .on_hover_text("Freeze the simulation without losing where it is")
+                .changed()
+            {
+                state.physics.paused = paused;
+            }
+            let mut simulate = state.session.simulate_in_setup;
+            if ui
+                .checkbox(&mut simulate, "Run in Setup")
+                .on_hover_text(
+                    "Simulate while in Setup mode, so these values can be tuned \
+                     without an animation to play",
+                )
+                .changed()
+            {
+                state.session.simulate_in_setup = simulate;
+                if !simulate {
+                    state.physics.reset();
+                    state.refresh_pose();
+                }
+            }
+        });
+    }
+
+    ui.add_space(4.0);
+    if ui
+        .add_enabled(setup, egui::Button::new("Add physics").small())
+        .on_hover_text("Make this bone sway — hair, a tail, a chain, cloth")
+        .clicked()
+    {
+        let name = format!("physics {}", state.doc.skeleton.constraints.len() + 1);
+        state.dispatch(Box::new(AddPhysics::new(bone_id, name)));
+    }
+
+    if let Some((id, props)) = edit {
+        state.dispatch(Box::new(SetPhysicsProps::new(id, props)));
+    }
+    if let Some(id) = remove {
+        state.dispatch(Box::new(RemoveConstraint::new(id)));
+    }
 }
 
 /// The selected vertex's bone influences, as numbers (T-403).

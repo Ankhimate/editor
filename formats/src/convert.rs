@@ -257,6 +257,9 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 offsets: None,
                 local: false,
                 relative: false,
+                physics: None,
+                forces: None,
+                channels: None,
                 extra: Default::default(),
             },
             Constraint::Transform(tc) => schema::Constraint {
@@ -283,6 +286,31 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 ]),
                 local: tc.local,
                 relative: tc.relative,
+                physics: None,
+                forces: None,
+                channels: None,
+                extra: Default::default(),
+            },
+            Constraint::Physics(p) => schema::Constraint {
+                name: p.name.clone(),
+                kind: "physics".to_string(),
+                // A physics constraint has no separate target; the bone it
+                // simulates goes in `target` so the schema shape stays uniform
+                // and `bones` stays the "chain" field.
+                target: bone_name(p.bone),
+                bones: Vec::new(),
+                bend_direction: 1.0,
+                mix: p.mix,
+                softness: 0.0,
+                stretch: false,
+                stretch_limit: 1.1,
+                mixes: None,
+                offsets: None,
+                local: false,
+                relative: false,
+                physics: Some([p.inertia, p.strength, p.damping, p.mass]),
+                forces: Some([p.wind.x, p.wind.y, p.gravity.x, p.gravity.y]),
+                channels: Some([p.rotate, p.translate]),
                 extra: Default::default(),
             },
         })
@@ -712,6 +740,24 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
                     mix_shear: mixes[3],
                     local: c.local,
                     relative: c.relative,
+                })
+            }
+            "physics" => {
+                let [inertia, strength, damping, mass] = c.physics.unwrap_or([0.5, 40.0, 0.5, 1.0]);
+                let [wx, wy, gx, gy] = c.forces.unwrap_or([0.0; 4]);
+                let [rotate, translate] = c.channels.unwrap_or([true, false]);
+                Constraint::Physics(ankhimate_core::constraints::PhysicsConstraint {
+                    name: c.name.clone(),
+                    bone: target,
+                    inertia,
+                    strength,
+                    damping,
+                    mass,
+                    wind: glam::vec2(wx, wy),
+                    gravity: glam::vec2(gx, gy),
+                    mix: c.mix,
+                    rotate,
+                    translate,
                 })
             }
             "ik" => Constraint::Ik(IkConstraint {

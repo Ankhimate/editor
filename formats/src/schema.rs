@@ -254,6 +254,17 @@ pub struct Constraint {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub relative: bool,
 
+    // ── Physics constraints (T-503) ──────────────────────────────────────
+    /// `[inertia, strength, damping, mass]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physics: Option<[f32; 4]>,
+    /// `[wind_x, wind_y, gravity_x, gravity_y]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forces: Option<[f32; 4]>,
+    /// `[rotate, translate]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channels: Option<[bool; 2]>,
+
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,

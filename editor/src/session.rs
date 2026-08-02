@@ -213,6 +213,12 @@ pub struct Session {
 
     /// A spritesheet waiting to be sliced (T-305). Cancelling drops it.
     pub pending_atlas: Option<crate::ui::atlas::PendingAtlas>,
+    /// Seconds for the next physics step, set by the frame loop and consumed by
+    /// `refresh_pose` (T-503). `None` means "still frame": evaluate the rest
+    /// pose, so scrubbing stays reproducible.
+    pub physics_dt: Option<f32>,
+    /// Simulate physics in Setup mode, so values can be tuned without a clip.
+    pub simulate_in_setup: bool,
     /// Index of the event marker being dragged in the timeline lane (T-506).
     pub dragging_event: Option<usize>,
     /// The open UV editing pane, if any (T-401).
@@ -278,6 +284,8 @@ impl Session {
             trace_refined: false,
             pending_trace: None,
             pending_atlas: None,
+            physics_dt: None,
+            simulate_in_setup: false,
             dragging_event: None,
             uv_pane: None,
             clipboard: crate::clipboard::Clipboard::Empty,

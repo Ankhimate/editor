@@ -588,6 +588,9 @@ pub fn render_bones(
         let is_ik_target = state.doc.skeleton.constraints.values().any(|c| match c {
             ankhimate_core::constraints::Constraint::Ik(ik) => ik.target == bone_id,
             ankhimate_core::constraints::Constraint::Transform(tc) => tc.target == bone_id,
+            // A physics bone is an ordinary bone that happens to wobble; it has
+            // no target handle to draw.
+            ankhimate_core::constraints::Constraint::Physics(_) => false,
         });
 
         // We still draw the IK target gizmo with egui, but we'll collect bone instance data for wgpu.

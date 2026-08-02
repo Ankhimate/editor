@@ -626,7 +626,7 @@ angles; constraint order changes the result deterministically; save/load round-t
 **Accept:** a 5-bone tail follows a curved path with even spacing; animating path position slides
 the chain along the curve; unit test on arc-length sampling at constant speed.
 
-### T-503 ∥ Physics constraint (F-13)
+### ✅ T-503 ∥ Physics constraint (F-13)
 **Deps:** T-104 · **Refs:** PLAN §2.5, §2.6 determinism rule
 - `Constraint::Physics { bone, inertia, strength, damping, mass, wind, gravity, mix, x/y/rotate/
   scale channels }` — sway/bounce for hair, tails, cloth, chains.

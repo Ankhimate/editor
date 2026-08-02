@@ -8,7 +8,9 @@
 use super::EditCommand;
 use crate::doc::Document;
 use crate::session::WorkMode;
-use ankhimate_core::constraints::{Constraint, IkConstraint, TransformConstraint};
+use ankhimate_core::constraints::{
+    Constraint, IkConstraint, PhysicsConstraint, TransformConstraint,
+};
 use ankhimate_core::ids::{BoneId, ConstraintId};
 
 /// Add a transform constraint driving `bones` from `target`.
@@ -409,6 +411,154 @@ impl EditCommand for SetIkProps {
 
     fn label(&self) -> &str {
         "Edit IK Constraint"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Add a physics constraint to a bone (T-503).
+pub struct AddPhysics {
+    bone: BoneId,
+    name: String,
+    created: Option<ConstraintId>,
+}
+
+impl AddPhysics {
+    pub fn new(bone: BoneId, name: impl Into<String>) -> Self {
+        Self {
+            bone,
+            name: name.into(),
+            created: None,
+        }
+    }
+}
+
+impl EditCommand for AddPhysics {
+    fn apply(&mut self, doc: &mut Document) {
+        if !doc.skeleton.bones.contains_key(self.bone) {
+            return;
+        }
+        self.created = Some(doc.skeleton.add_constraint(Constraint::Physics(
+            PhysicsConstraint::sway(self.name.clone(), self.bone),
+        )));
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let Some(id) = self.created.take() {
+            doc.skeleton.remove_constraint(id);
+        }
+    }
+
+    fn label(&self) -> &str {
+        "Add Physics"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Everything editable about a physics constraint.
+#[derive(Clone, Copy, PartialEq)]
+pub struct PhysicsProps {
+    pub inertia: f32,
+    pub strength: f32,
+    pub damping: f32,
+    pub mass: f32,
+    pub wind: glam::Vec2,
+    pub gravity: glam::Vec2,
+    pub mix: f32,
+    pub rotate: bool,
+    pub translate: bool,
+}
+
+impl PhysicsProps {
+    pub fn from_constraint(p: &PhysicsConstraint) -> Self {
+        Self {
+            inertia: p.inertia,
+            strength: p.strength,
+            damping: p.damping,
+            mass: p.mass,
+            wind: p.wind,
+            gravity: p.gravity,
+            mix: p.mix,
+            rotate: p.rotate,
+            translate: p.translate,
+        }
+    }
+
+    fn write_to(&self, p: &mut PhysicsConstraint) {
+        p.inertia = self.inertia;
+        p.strength = self.strength;
+        p.damping = self.damping;
+        p.mass = self.mass;
+        p.wind = self.wind;
+        p.gravity = self.gravity;
+        p.mix = self.mix;
+        p.rotate = self.rotate;
+        p.translate = self.translate;
+    }
+}
+
+pub struct SetPhysicsProps {
+    id: ConstraintId,
+    after: PhysicsProps,
+    before: Option<PhysicsProps>,
+}
+
+impl SetPhysicsProps {
+    pub fn new(id: ConstraintId, after: PhysicsProps) -> Self {
+        Self {
+            id,
+            after,
+            before: None,
+        }
+    }
+}
+
+impl EditCommand for SetPhysicsProps {
+    fn apply(&mut self, doc: &mut Document) {
+        let Some(Constraint::Physics(p)) = doc.skeleton.constraints.get_mut(self.id) else {
+            return;
+        };
+        if self.before.is_none() {
+            self.before = Some(PhysicsProps::from_constraint(p));
+        }
+        self.after.write_to(p);
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let (Some(before), Some(Constraint::Physics(p))) = (
+            self.before.take(),
+            doc.skeleton.constraints.get_mut(self.id),
+        ) {
+            before.write_to(p);
+        }
+    }
+
+    fn merge(&mut self, next: &dyn EditCommand) -> bool {
+        let Some(other) = next.as_any().downcast_ref::<SetPhysicsProps>() else {
+            return false;
+        };
+        if other.id != self.id {
+            return false;
+        }
+        self.after = other.after;
+        true
+    }
+
+    fn label(&self) -> &str {
+        "Edit Physics"
     }
 
     fn requires_mode(&self) -> Option<WorkMode> {
