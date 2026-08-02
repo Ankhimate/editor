@@ -17,6 +17,7 @@
 pub mod asset_cmds;
 pub mod attachment_cmds;
 pub mod bone_cmds;
+pub mod clip_cmds;
 pub mod key_cmds;
 pub mod mesh_cmds;
 pub mod slot_cmds;

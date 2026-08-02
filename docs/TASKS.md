@@ -509,7 +509,7 @@ size" restores the imported dimensions after a manual resize; every edit is one 
 
 > (T-401 → T-402 ∥ T-403) → T-404 → T-405.
 
-### 🟡 T-401 Mesh attachment editing UI
+### ✅ T-401 Mesh attachment editing UI
 **Deps:** T-301, T-207 · **Refs:** PLAN §2.4
 
 > **Core editing shipped.** `MeshAttachment::from_region` (quad with the region's exact corners and
@@ -523,11 +523,19 @@ size" restores the imported dimensions after a manual resize; every edit is one 
 > outline and trim triangles outside it. That is unsound — nothing distinguishes a perimeter vertex
 > from an interior one, and adding a vertex inside a quad makes the list a *valid* pentagon with a
 > notch, so the filter correctly carved away a triangle the user wanted. Concavity needs a real
-> contour, which only the tracer (T-402) can supply. The hull is the honest interim answer.
+> contour, which the tracer (T-402) supplies — or a user does, by pinning an edge. The hull remains
+> the default; a pinned edge is the override.
 >
-> **Still to do:** UV editing pane, manual edge add/remove, box-select, and sharing an asset between
-> attachments (the T-301 deviation) — that wants an id-carrying attachment and is best done with
-> T-403's weight work.
+> **Now complete.** Box-select landed on Ctrl+drag (a bare drag grabs a vertex in a dense mesh,
+> which is exactly when a box is wanted). Manual edges are `MeshAttachment.edges`, honoured by a
+> constrained Delaunay pass and toggled with `C` — Delaunay maximises the smallest angle, which
+> happily bridges a notch, and a pinned edge is how a user says "not there". The UV pane
+> (`ui/uv.rs`) drags where each vertex samples the texture, with a reset that re-projects from the
+> mesh's current bounds.
+>
+> **Deliberately not done:** sharing one asset between attachments (the T-301 deviation). It wants
+> an id-carrying attachment, which is a schema change, and belongs with the skin work in T-507
+> rather than bolted onto mesh editing.
 - "Convert to mesh" on a region attachment (command): 4-vertex quad with the same UVs.
 - Mesh edit mode (Setup): wireframe overlay, drag vertices (snap modifier), add vertex on edge
   (click), delete vertex (`X`), rectangle-select vertices, edges recomputed via constrained
@@ -550,7 +558,7 @@ topology edits are refused in Animate mode with the mode hint.
 **Accept:** unit test on a checked-in donut PNG (inner contour preserved); a 512² sprite traces in
 <100 ms release; tracing a weighted mesh does not silently drop weights.
 
-### 🟡 T-403 ∥ Weight painting + bind compensation (F-4)
+### ✅ T-403 ∥ Weight painting + bind compensation (F-4)
 **Deps:** T-401, T-102 · **Refs:** PLAN §5 F-4
 - Port `ui/canvas/tools/weight_paint.rs` to the post-T-101 model (BoneId, skin-resolved mesh,
   commands with stroke merging). Brush modes add / subtract / smooth / replace, radius + strength +
@@ -573,11 +581,18 @@ undo step; auto-weight on the sample arm produces smooth falloff (numeric test o
 **Accept:** waving-flag animation from 3 deform keys; mixes correctly with bone motion; save/load
 round-trip; vertex-count mismatch surfaces as a diagnostic rather than a panic.
 
-### 🟡 T-405 Clipping attachments (masking)
+### ✅ T-405 Clipping attachments (masking)
 **Deps:** T-401 · **Refs:** PLAN §2.4 (`ClippingAttachment`)
-- `Attachment::Clipping { vertices, end_slot }` in core + schema; renderer clips the slot range
-  (stencil pass in `custom_renderer.rs`); editor authoring reuses the mesh vertex tools; runtime
-  (T-604) emits the clip polygon in its batch stream.
+- `Attachment::Clipping { vertices, end_slot }` in core + schema; the renderer masks the slot range;
+  authoring is `ui/canvas/tools/clip_edit.rs` with the same gestures as mesh editing; runtime
+  (T-604) will reuse `core::clipping` directly.
+- **Not a stencil pass.** The editor renders inside egui's own render pass, which has no
+  depth-stencil attachment — taking one would mean rendering the viewport to a private texture
+  first. `core::clipping` cuts the triangles instead (ear-clip the polygon, Sutherland-Hodgman each
+  piece, interpolate UVs at the cut). That is exact rather than sampled, costs nothing at draw
+  time, and is what the runtime has to do anyway: it emits triangle batches to whatever renderer
+  the game brought, and cannot assume a stencil buffer exists there either. One implementation,
+  two consumers, no way for them to disagree about where a mask's edge falls.
 **Accept:** a character behind a clipped window renders masked in the editor and in the runtime
 example; disabling the clipping attachment restores the full draw.
 

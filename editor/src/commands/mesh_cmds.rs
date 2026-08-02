@@ -1,4 +1,4 @@
-﻿//! Mesh attachment editing as undoable commands (T-401).
+//! Mesh attachment editing as undoable commands (T-401).
 //!
 //! Mesh topology is rig data, so everything here is Setup-only (T-207).
 //! Animating the same geometry is what `Deform` timelines are for (T-404).
@@ -168,6 +168,14 @@ pub enum MeshEdit {
     RemoveVertices(Vec<usize>),
     /// Re-run triangulation over the current vertices.
     Retriangulate,
+    /// Pin an edge between two vertices so triangulation keeps it (T-401).
+    AddEdge(usize, usize),
+    /// Release a pinned edge, whichever order its endpoints are given in.
+    RemoveEdge(usize, usize),
+    /// Move UVs, addressed by vertex index — the UV pane's drag (T-401).
+    MoveUvs(Vec<(usize, glam::Vec2)>),
+    /// Re-project every UV from the mesh's bounds, undoing hand UV edits.
+    ResetUvs,
 }
 
 /// Apply a [`MeshEdit`] to one mesh attachment.
@@ -187,6 +195,10 @@ impl EditMesh {
             MeshEdit::AddVertex(_) => "Add Vertex",
             MeshEdit::RemoveVertices(_) => "Delete Vertices",
             MeshEdit::Retriangulate => "Retriangulate",
+            MeshEdit::AddEdge(_, _) => "Add Edge",
+            MeshEdit::RemoveEdge(_, _) => "Remove Edge",
+            MeshEdit::MoveUvs(_) => "Move UVs",
+            MeshEdit::ResetUvs => "Reset UVs",
         };
         Self {
             skin,
@@ -258,10 +270,66 @@ impl EditCommand for EditMesh {
                     if index < mesh.weights.len() {
                         mesh.weights.remove(index);
                     }
+                    // Pinned edges are vertex *indices*, so every removal shifts
+                    // the ones above it. An edge touching the removed vertex has
+                    // no meaning left and goes with it.
+                    mesh.edges
+                        .retain(|e| e[0] != index as u32 && e[1] != index as u32);
+                    for edge in &mut mesh.edges {
+                        for end in edge.iter_mut() {
+                            if *end > index as u32 {
+                                *end -= 1;
+                            }
+                        }
+                    }
                 }
                 crate::meshgen::retriangulate(mesh);
             }
             MeshEdit::Retriangulate => crate::meshgen::retriangulate(mesh),
+            MeshEdit::AddEdge(a, b) => {
+                let count = mesh.setup_vertices.len();
+                if *a == *b || *a >= count || *b >= count {
+                    self.before = None;
+                    return;
+                }
+                // Store one orientation so "is this edge pinned?" is a single
+                // lookup and the same edge cannot be pinned twice.
+                let edge = [(*a).min(*b) as u32, (*a).max(*b) as u32];
+                if mesh.edges.contains(&edge) {
+                    self.before = None;
+                    return;
+                }
+                mesh.edges.push(edge);
+                crate::meshgen::retriangulate(mesh);
+            }
+            MeshEdit::RemoveEdge(a, b) => {
+                let edge = [(*a).min(*b) as u32, (*a).max(*b) as u32];
+                let before = mesh.edges.len();
+                mesh.edges.retain(|e| *e != edge);
+                if mesh.edges.len() == before {
+                    self.before = None;
+                    return;
+                }
+                crate::meshgen::retriangulate(mesh);
+            }
+            MeshEdit::MoveUvs(moves) => {
+                for (index, uv) in moves {
+                    if let Some(slot) = mesh.uvs.get_mut(*index) {
+                        *slot = *uv;
+                    }
+                }
+            }
+            MeshEdit::ResetUvs => {
+                // Re-project from the *current* bounds, which is what "reset"
+                // means once vertices have moved: the texture spans the shape
+                // again rather than returning to some remembered rect.
+                let uvs: Vec<glam::Vec2> = mesh
+                    .setup_vertices
+                    .iter()
+                    .map(|v| mesh.uv_for_local(*v))
+                    .collect();
+                mesh.uvs = uvs;
+            }
         }
     }
 
@@ -275,14 +343,17 @@ impl EditCommand for EditMesh {
         let Some(other) = next.as_any().downcast_ref::<EditMesh>() else {
             return false;
         };
-        // Only vertex drags merge: inserting and deleting are discrete edits a
+        // Only drags merge: inserting, deleting and pinning are discrete edits a
         // user expects to undo one at a time.
+        if other.skin != self.skin || other.slot != self.slot || other.name != self.name {
+            return false;
+        }
         match (&mut self.edit, &other.edit) {
-            (MeshEdit::MoveVertices(ours), MeshEdit::MoveVertices(theirs))
-                if other.skin == self.skin
-                    && other.slot == self.slot
-                    && other.name == self.name =>
-            {
+            (MeshEdit::MoveVertices(ours), MeshEdit::MoveVertices(theirs)) => {
+                *ours = theirs.clone();
+                true
+            }
+            (MeshEdit::MoveUvs(ours), MeshEdit::MoveUvs(theirs)) => {
                 *ours = theirs.clone();
                 true
             }
@@ -346,6 +417,14 @@ mod tests {
                 pivot: glam::Vec2::splat(0.5),
             }),
         );
+        (doc, skin, slot)
+    }
+
+    /// A document whose slot already holds a 4-vertex mesh.
+    fn doc_with_mesh() -> (Document, SkinId, SlotId) {
+        let (mut doc, skin, slot) = doc_with_region();
+        let mut convert = ConvertToMesh::new(skin, slot, "art");
+        convert.apply(&mut doc);
         (doc, skin, slot)
     }
 
@@ -492,5 +571,135 @@ mod tests {
         assert_eq!(mesh.setup_vertices.len(), 3);
         assert_eq!(mesh.uvs.len(), 3);
         assert_eq!(mesh.weights.len(), 3, "weights track the vertex list");
+    }
+    /// A pinned edge is a constraint on the triangulation, so the proof it took
+    /// is that the edge appears in the triangle list.
+    #[test]
+    fn a_pinned_edge_survives_retriangulation() {
+        let (mut doc, skin, slot) = doc_with_mesh();
+        let mut history = History::default();
+        // Off-centre deliberately: the quad's corners are 0=TL and 2=BR, so a
+        // vertex at the middle would sit *on* the 0-2 diagonal, and a
+        // constraint cannot pass through a vertex.
+        history.push(
+            Box::new(EditMesh::new(
+                skin,
+                slot,
+                "art",
+                MeshEdit::AddVertex(glam::vec2(10.0, 10.0)),
+            )),
+            &mut doc,
+        );
+        history.push(
+            Box::new(EditMesh::new(skin, slot, "art", MeshEdit::AddEdge(0, 2))),
+            &mut doc,
+        );
+
+        let mesh = mesh_of(&doc, skin, slot);
+        assert_eq!(mesh.edges, vec![[0, 2]], "stored in a canonical order");
+        let present = mesh.triangles.iter().any(|t| {
+            let has = |v: u32| t.contains(&v);
+            has(0) && has(2)
+        });
+        assert!(
+            present,
+            "the pinned edge is in the mesh: {:?}",
+            mesh.triangles
+        );
+    }
+
+    #[test]
+    fn deleting_a_vertex_reindexes_the_edges_that_outlive_it() {
+        let (mut doc, skin, slot) = doc_with_mesh();
+        let mut history = History::default();
+        history.push(
+            Box::new(EditMesh::new(
+                skin,
+                slot,
+                "art",
+                MeshEdit::AddVertex(glam::vec2(0.0, 0.0)),
+            )),
+            &mut doc,
+        );
+        // Pin 2-3, then delete vertex 1 underneath it.
+        history.push(
+            Box::new(EditMesh::new(skin, slot, "art", MeshEdit::AddEdge(2, 3))),
+            &mut doc,
+        );
+        history.push(
+            Box::new(EditMesh::new(
+                skin,
+                slot,
+                "art",
+                MeshEdit::RemoveVertices(vec![1]),
+            )),
+            &mut doc,
+        );
+
+        let mesh = mesh_of(&doc, skin, slot);
+        assert_eq!(
+            mesh.edges,
+            vec![[1, 2]],
+            "the edge followed its vertices down one"
+        );
+    }
+
+    #[test]
+    fn an_edge_touching_a_deleted_vertex_goes_with_it() {
+        let (mut doc, skin, slot) = doc_with_mesh();
+        let mut history = History::default();
+        history.push(
+            Box::new(EditMesh::new(
+                skin,
+                slot,
+                "art",
+                MeshEdit::AddVertex(glam::vec2(0.0, 0.0)),
+            )),
+            &mut doc,
+        );
+        history.push(
+            Box::new(EditMesh::new(skin, slot, "art", MeshEdit::AddEdge(1, 3))),
+            &mut doc,
+        );
+        history.push(
+            Box::new(EditMesh::new(
+                skin,
+                slot,
+                "art",
+                MeshEdit::RemoveVertices(vec![1]),
+            )),
+            &mut doc,
+        );
+
+        assert!(
+            mesh_of(&doc, skin, slot).edges.is_empty(),
+            "an edge to a vertex that no longer exists is not a constraint"
+        );
+    }
+
+    #[test]
+    fn resetting_uvs_reprojects_from_the_current_bounds() {
+        let (mut doc, skin, slot) = doc_with_mesh();
+        let mut history = History::default();
+        history.push(
+            Box::new(EditMesh::new(
+                skin,
+                slot,
+                "art",
+                MeshEdit::MoveUvs(vec![(0, glam::vec2(0.9, 0.9))]),
+            )),
+            &mut doc,
+        );
+        assert_eq!(mesh_of(&doc, skin, slot).uvs[0], glam::vec2(0.9, 0.9));
+
+        history.push(
+            Box::new(EditMesh::new(skin, slot, "art", MeshEdit::ResetUvs)),
+            &mut doc,
+        );
+        let mesh = mesh_of(&doc, skin, slot);
+        assert_ne!(mesh.uvs[0], glam::vec2(0.9, 0.9), "the hand edit is gone");
+        // Undo has to bring the hand edit back, not the projection.
+        history.undo(&mut doc);
+        assert_eq!(mesh_of(&doc, skin, slot).uvs[0], glam::vec2(0.9, 0.9));
     }
 }

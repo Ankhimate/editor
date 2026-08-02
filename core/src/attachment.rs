@@ -89,6 +89,18 @@ pub struct MeshAttachment {
     pub weights: Vec<Vec<VertexWeight>>,
     pub ffd_keyframes: Vec<FfdKeyframe>,
 
+    /// Vertex pairs the triangulation must keep as edges (T-401).
+    ///
+    /// Delaunay picks the edges that maximise the smallest angle, which is the
+    /// right default and the wrong answer for a concave silhouette: it happily
+    /// bridges a notch because that triangle is nicely shaped. An edge listed
+    /// here is a constraint the retriangulation honours, so a user who knows
+    /// where the fold belongs can say so once instead of fighting the solver.
+    ///
+    /// Defaulted, so a mesh saved before this existed still loads.
+    #[serde(default)]
+    pub edges: Vec<[u32; 2]>,
+
     /// Inverse bind affine per influencing bone, captured at bind time.
     /// `Affine2`, not `Mat4` — ADR 0002.
     #[serde(skip)]
@@ -121,6 +133,7 @@ impl MeshAttachment {
             setup_vertices: corners.to_vec(),
             uvs,
             triangles: vec![[0, 1, 2], [0, 2, 3]],
+            edges: Vec::new(),
             weights: Vec::new(),
             ffd_keyframes: Vec::new(),
             inverse_bind_matrices: HashMap::new(),

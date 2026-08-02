@@ -5,15 +5,17 @@
 //! someone edits a mesh. The result — a triangle list — is what gets stored, so
 //! the runtime never needs this code.
 //!
-//! Delaunay via `spade`, covering the convex hull. Concave silhouettes need an
-//! explicit outline to trim against, which arrives with the tracer (T-402) —
-//! see [`retriangulate`] for why guessing one from vertex order does not work.
+//! Constrained Delaunay via `spade`, covering the convex hull. Concave
+//! silhouettes need an explicit outline to trim against: the tracer (T-402)
+//! produces one from the artwork, and a user can pin individual edges by hand
+//! (`MeshAttachment::edges`) — see [`retriangulate`] for why guessing one from
+//! vertex order does not work.
 
 use ankhimate_core::attachment::MeshAttachment;
 use glam::Vec2;
-use spade::{DelaunayTriangulation, Point2, Triangulation};
+use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation};
 
-/// Re-triangulate a mesh's current vertices (Delaunay, covering the hull).
+/// Re-triangulate a mesh's current vertices (constrained Delaunay, hull-covering).
 ///
 /// # Why there is no concavity handling here
 ///
@@ -35,7 +37,10 @@ pub fn retriangulate(mesh: &mut MeshAttachment) {
         return;
     }
 
-    let mut triangulation: DelaunayTriangulation<Point2<f64>> = DelaunayTriangulation::new();
+    // Constrained, always: with no `mesh.edges` a CDT is an ordinary Delaunay
+    // triangulation, so one path covers both cases.
+    let mut triangulation: ConstrainedDelaunayTriangulation<Point2<f64>> =
+        ConstrainedDelaunayTriangulation::new();
     // Map spade's handles back to our indices: insertion order is not preserved
     // by the triangulation, and duplicate points collapse.
     let mut handles = Vec::with_capacity(points.len());
@@ -46,6 +51,21 @@ pub fn retriangulate(mesh: &mut MeshAttachment) {
             // dropped from the topology but left in the vertex list so indices
             // (and any weights keyed to them) stay stable.
             Err(_) => handles.push(None),
+        }
+    }
+
+    // User edges (T-401). `can_add_constraint` first: spade panics if a new
+    // constraint crosses an existing one, and two edges the user drew across
+    // each other is a mistake to ignore, not to crash on.
+    for [a, b] in &mesh.edges {
+        let (Some(Some(from)), Some(Some(to))) = (
+            handles.get(*a as usize).copied(),
+            handles.get(*b as usize).copied(),
+        ) else {
+            continue;
+        };
+        if from != to && triangulation.can_add_constraint(from, to) {
+            triangulation.add_constraint(from, to);
         }
     }
 

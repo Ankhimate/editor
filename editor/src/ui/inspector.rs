@@ -284,6 +284,150 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     }
 }
 
+/// The selected vertex's bone influences, as numbers (T-403).
+///
+/// A heat map answers "roughly how much", which is what painting needs. It
+/// cannot answer "is this exactly 1.0, or 0.98 with a stray influence left over"
+/// — and a stray 0.02 on the wrong bone is precisely the bug that makes a mesh
+/// twitch in one frame of an animation. So: the numbers, editable, with the
+/// stray removable.
+///
+/// Shown for a single selected vertex. Multi-select would have to average or
+/// list every combination, and neither reads as an answer.
+fn influence_list(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    skin: ankhimate_core::ids::SkinId,
+    slot_id: ankhimate_core::ids::SlotId,
+    name: &str,
+) {
+    use ankhimate_core::attachment::{Attachment, VertexWeight};
+    use ankhimate_core::ids::BoneId;
+
+    let selected: Vec<usize> = state.session.selected_vertices.clone();
+    if selected.len() != 1 {
+        return;
+    }
+    let index = selected[0];
+
+    let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot_id, name) else {
+        return;
+    };
+    let Some(influences) = mesh.weights.get(index) else {
+        return;
+    };
+    // Names resolved up front: the edit below needs `&mut state`, and a bone
+    // lookup mid-edit would borrow it twice.
+    let rows: Vec<(BoneId, String, f32)> = influences
+        .iter()
+        .map(|w| {
+            let label = state
+                .doc
+                .skeleton
+                .bones
+                .get(w.bone)
+                .map(|b| b.name.clone())
+                .unwrap_or_else(|| "<deleted bone>".to_string());
+            (w.bone, label, w.weight)
+        })
+        .collect();
+    let total: f32 = rows.iter().map(|(_, _, w)| *w).sum();
+    let all_weights = mesh.weights.clone();
+    let setup = state.session.can_edit_structure();
+
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(format!("Influences · vertex {index}"))
+            .size(11.0)
+            .strong(),
+    );
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("Unweighted — rides its slot's bone rigidly")
+                .size(10.5)
+                .color(ui.visuals().weak_text_color()),
+        );
+        return;
+    }
+
+    let mut edit: Option<Vec<Vec<VertexWeight>>> = None;
+    for (bone, label, weight) in &rows {
+        ui.horizontal(|ui| {
+            let mut value = *weight;
+            if ui
+                .add_enabled(
+                    setup,
+                    egui::DragValue::new(&mut value)
+                        .speed(0.01)
+                        .range(0.0..=1.0)
+                        .max_decimals(3),
+                )
+                .changed()
+            {
+                let mut next = all_weights.clone();
+                if let Some(w) = next
+                    .get_mut(index)
+                    .and_then(|v| v.iter_mut().find(|w| w.bone == *bone))
+                {
+                    w.weight = value;
+                }
+                edit = Some(next);
+            }
+            ui.label(egui::RichText::new(label).size(11.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(setup, egui::Button::new("✕").small())
+                    .on_hover_text("Remove this influence")
+                    .clicked()
+                {
+                    let mut next = all_weights.clone();
+                    if let Some(v) = next.get_mut(index) {
+                        v.retain(|w| w.bone != *bone);
+                    }
+                    edit = Some(next);
+                }
+            });
+        });
+    }
+
+    ui.horizontal(|ui| {
+        // Weights that do not sum to 1 scale the vertex toward the origin, so
+        // the total is worth saying out loud rather than leaving to be inferred
+        // from a mesh that looks slightly wrong.
+        let off = (total - 1.0).abs() > 1e-3;
+        ui.label(
+            egui::RichText::new(format!("Total {total:.3}"))
+                .size(10.5)
+                .color(if off {
+                    egui::Color32::from_rgb(230, 150, 60)
+                } else {
+                    ui.visuals().weak_text_color()
+                }),
+        );
+        if off
+            && ui
+                .add_enabled(setup, egui::Button::new("Normalize").small())
+                .on_hover_text("Scale these influences so they sum to 1")
+                .clicked()
+        {
+            let mut next = all_weights.clone();
+            if let Some(v) = next.get_mut(index) {
+                crate::commands::weight_cmds::normalize(v);
+            }
+            edit = Some(next);
+        }
+    });
+
+    if let Some(weights) = edit {
+        state.dispatch(Box::new(crate::commands::weight_cmds::PaintWeights::new(
+            skin,
+            slot_id,
+            name.to_string(),
+            weights,
+        )));
+    }
+}
+
 /// Auto-weight the selected slot's mesh against the whole rig (T-403).
 fn auto_weight_selected(state: &mut AppState) {
     use crate::commands::attachment_cmds::owning_skin;
@@ -630,6 +774,41 @@ fn attachment_inspector(
         .get(slot_id)
         .and_then(|s| s.attachment.clone())
     else {
+        // An empty slot is where a clip is made: a clipping attachment carries
+        // no art, so a slot holding one holds nothing else. Offering it here
+        // makes "an empty slot" read as a choice rather than as a mistake.
+        ui.add_space(8.0);
+        if ui
+            .add_enabled(
+                state.session.can_edit_structure(),
+                egui::Button::new("Add clipping mask"),
+            )
+            .on_hover_text(
+                "Mask every slot drawn after this one with a polygon — a window, \
+                 a porthole, a spotlight",
+            )
+            .clicked()
+        {
+            let skin = state.session.active_skin;
+            // Named after the slot: a clip is one-per-slot in practice, and a
+            // name nobody chose still has to be recognisable in the skin.
+            let slot_name = state
+                .doc
+                .skeleton
+                .slots
+                .get(slot_id)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| "slot".to_string());
+            if state.dispatch(Box::new(crate::commands::clip_cmds::AddClipping::new(
+                skin,
+                slot_id,
+                format!("{slot_name}_clip"),
+                200.0,
+            ))) {
+                state.session.mesh_edit = true;
+                state.session.selected_vertices.clear();
+            }
+        }
         return;
     };
     let Some(skin) = owning_skin(&state.doc, state.session.active_skin, slot_id, &name) else {
@@ -651,11 +830,15 @@ fn attachment_inspector(
     // the canvas (T-401), not through transform fields.
     if let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot_id, &name) {
         let (vertices, triangles) = (mesh.setup_vertices.len(), mesh.triangles.len());
+        let pinned_edges = mesh.edges.len();
         ui.add_space(10.0);
         section_header(ui, egui_phosphor::regular::POLYGON, "Mesh");
         ui.add_space(2.0);
         info_row(ui, "Vertices", &vertices.to_string());
         info_row(ui, "Triangles", &triangles.to_string());
+        if pinned_edges > 0 {
+            info_row(ui, "Pinned edges", &pinned_edges.to_string());
+        }
         ui.add_space(4.0);
 
         let mut editing = state.session.mesh_edit;
@@ -663,7 +846,8 @@ fn attachment_inspector(
             .add_enabled(setup, egui::Checkbox::new(&mut editing, "Edit vertices"))
             .on_hover_text(
                 "Drag vertices · Ctrl+drag to box-select · shift-click to toggle\n\
-                 Click an edge to add a vertex · X deletes · Esc leaves",
+                 Click an edge to add a vertex · X deletes · Esc leaves\n\
+                 C pins the edge between two selected vertices, or releases it",
             )
             .changed()
         {
@@ -700,6 +884,116 @@ fn attachment_inspector(
                 ));
             }
         });
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(setup, egui::Button::new("UV editor…").small())
+                .on_hover_text(
+                    "Drag where each vertex samples the texture — the mesh's other                      shape, which the canvas cannot show",
+                )
+                .clicked()
+            {
+                state.session.uv_pane =
+                    Some(crate::ui::uv::UvPane::new(skin, slot_id, name.clone()));
+            }
+            let two_selected = state.session.selected_vertices.len() == 2;
+            if ui
+                .add_enabled(
+                    setup && two_selected,
+                    egui::Button::new("Pin/release edge").small(),
+                )
+                .on_hover_text(
+                    "Force the triangulation to keep the edge between the two                      selected vertices (C on the canvas)",
+                )
+                .clicked()
+                && let [a, b] = state.session.selected_vertices[..]
+            {
+                let pinned = {
+                    let edge = [(a.min(b)) as u32, (a.max(b)) as u32];
+                    matches!(
+                        state.doc.skeleton.skins[skin].get(slot_id, &name),
+                        Some(Attachment::Mesh(m)) if m.edges.contains(&edge)
+                    )
+                };
+                let edit = if pinned {
+                    crate::commands::mesh_cmds::MeshEdit::RemoveEdge(a, b)
+                } else {
+                    crate::commands::mesh_cmds::MeshEdit::AddEdge(a, b)
+                };
+                state.dispatch(Box::new(crate::commands::mesh_cmds::EditMesh::new(
+                    skin, slot_id, name.clone(), edit,
+                )));
+            }
+        });
+        influence_list(ui, state, skin, slot_id, &name);
+        return;
+    }
+
+    // Clipping attachments (T-405): a polygon and the range of slots it masks.
+    if let Some(Attachment::Clipping(clip)) = state.doc.skeleton.skins[skin].get(slot_id, &name) {
+        let vertices = clip.vertices.len();
+        let end_slot = clip.end_slot.clone();
+        ui.add_space(10.0);
+        section_header(ui, egui_phosphor::regular::SCISSORS, "Clipping");
+        ui.add_space(2.0);
+        info_row(ui, "Vertices", &vertices.to_string());
+        ui.add_space(4.0);
+
+        let mut editing = state.session.mesh_edit;
+        if ui
+            .add_enabled(setup, egui::Checkbox::new(&mut editing, "Edit polygon"))
+            .on_hover_text(
+                "Drag vertices · Ctrl+drag to box-select · shift-click to toggle\n\
+                 Click an edge to add a vertex · X deletes · Esc leaves",
+            )
+            .changed()
+        {
+            state.session.mesh_edit = editing;
+            state.session.selected_vertices.clear();
+        }
+
+        // Which slots this masks. The clip runs from its own place in the draw
+        // order until this slot, inclusive — naming the *end* rather than a list
+        // is what makes "everything behind the window" one choice instead of a
+        // checkbox per slot.
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Masks until").size(11.0));
+        let current = end_slot
+            .clone()
+            .unwrap_or_else(|| "(end of draw order)".to_string());
+        let mut chosen: Option<Option<String>> = None;
+        egui::ComboBox::from_id_salt("clip_end_slot")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(end_slot.is_none(), "(end of draw order)")
+                    .clicked()
+                {
+                    chosen = Some(None);
+                }
+                let names: Vec<String> = state
+                    .doc
+                    .skeleton
+                    .draw_order
+                    .iter()
+                    .filter_map(|id| state.doc.skeleton.slots.get(*id).map(|s| s.name.clone()))
+                    .collect();
+                for slot_name in names {
+                    if ui
+                        .selectable_label(end_slot.as_deref() == Some(&slot_name), &slot_name)
+                        .clicked()
+                    {
+                        chosen = Some(Some(slot_name));
+                    }
+                }
+            });
+        if let Some(end) = chosen {
+            state.dispatch(Box::new(crate::commands::clip_cmds::EditClip::new(
+                skin,
+                slot_id,
+                name.clone(),
+                crate::commands::clip_cmds::ClipEdit::SetEndSlot(end),
+            )));
+        }
         return;
     }
 

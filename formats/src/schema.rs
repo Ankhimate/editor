@@ -207,6 +207,9 @@ pub struct Mesh {
     pub uvs: Vec<f32>,
     #[serde(default)]
     pub triangles: Vec<u32>,
+    /// Flattened vertex-index pairs the triangulation must preserve (T-401).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edges: Vec<u32>,
     /// Per-vertex weights: `[(bone_name, weight), …]` per vertex.
     #[serde(default)]
     pub weights: Vec<Vec<(String, f32)>>,

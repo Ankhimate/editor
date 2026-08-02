@@ -1,7 +1,8 @@
-﻿use super::camera::screen_to_world;
+use super::camera::screen_to_world;
 use crate::app_state::AppState;
 use eframe::egui;
 
+pub mod clip_edit;
 pub mod create_bone;
 pub mod mesh_edit;
 pub mod select;

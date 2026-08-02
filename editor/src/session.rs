@@ -204,6 +204,8 @@ pub struct Session {
 
     /// A spritesheet waiting to be sliced (T-305). Cancelling drops it.
     pub pending_atlas: Option<crate::ui::atlas::PendingAtlas>,
+    /// The open UV editing pane, if any (T-401).
+    pub uv_pane: Option<crate::ui::uv::UvPane>,
 
     /// Copy buffer (T-209). Session state: copying is not an edit, so it never
     /// touches undo or a save file.
@@ -251,6 +253,7 @@ impl Session {
             trace_refined: false,
             pending_trace: None,
             pending_atlas: None,
+            uv_pane: None,
             clipboard: crate::clipboard::Clipboard::Empty,
         }
     }

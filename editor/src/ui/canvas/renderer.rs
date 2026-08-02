@@ -771,6 +771,21 @@ pub fn render_bones(
             }
         }
 
+        // Pinned edges (T-401) drawn thicker and in the selection colour: a
+        // constraint the user placed by hand has to be distinguishable from one
+        // the triangulation happened to pick, or there is no way to find it
+        // again to release it.
+        for [a, b] in &target.mesh.edges {
+            let (Some(&from), Some(&to)) = (positions.get(*a as usize), positions.get(*b as usize))
+            else {
+                continue;
+            };
+            painter.line_segment(
+                [to_pos(from), to_pos(to)],
+                egui::Stroke::new(2.5, theme.mesh_vertex_selected()),
+            );
+        }
+
         // Box-select in progress.
         if let Some(start) = state.session.vertex_box_start
             && let Some(cursor) = ui.ctx().pointer_latest_pos()
@@ -811,6 +826,50 @@ pub fn render_bones(
                 (false, false) => (3.0, theme.mesh_vertex()),
             };
             painter.circle_filled(p, radius, color);
+        }
+    }
+
+    // Clip polygon overlay (T-405). A clip draws no artwork of its own, so
+    // without this the only evidence it exists is the hole it cuts in something
+    // else — which is exactly the situation where you need to see its shape.
+    if let Some(target) = crate::ui::canvas::tools::clip_edit::target(state) {
+        let positions = crate::ui::canvas::tools::clip_edit::vertex_screen_positions(
+            &target,
+            state,
+            viewport_size,
+        );
+        let to_pos = |v: glam::Vec2| egui::pos2(rect.min.x + v.x, rect.min.y + v.y);
+        let count = positions.len();
+
+        for i in 0..count {
+            painter.line_segment(
+                [to_pos(positions[i]), to_pos(positions[(i + 1) % count])],
+                egui::Stroke::new(1.5, theme.mesh_edge()),
+            );
+        }
+        if let Some(start) = state.session.vertex_box_start
+            && let Some(cursor) = ui.ctx().pointer_latest_pos()
+        {
+            let band = egui::Rect::from_two_pos(to_pos(start), cursor);
+            painter.rect_filled(band, 0.0, theme.mesh_edge().gamma_multiply(0.15));
+            painter.rect_stroke(
+                band,
+                0.0,
+                egui::Stroke::new(1.0, theme.mesh_edge()),
+                egui::StrokeKind::Inside,
+            );
+        }
+        for (index, position) in positions.iter().enumerate() {
+            let selected = state.session.selected_vertices.contains(&index);
+            painter.circle_filled(
+                to_pos(*position),
+                if selected { 5.0 } else { 3.0 },
+                if selected {
+                    theme.mesh_vertex_selected()
+                } else {
+                    theme.mesh_vertex()
+                },
+            );
         }
     }
 
@@ -1120,17 +1179,16 @@ pub fn render_bones(
     // Textured attachments, in the pose's draw order (back to front) — the
     // animated order, so a draw-order key reorders the artwork live.
     //
-    // Clipping (T-405) is applied here rather than with a stencil buffer: the
+    // Clipping (T-405) cuts the geometry rather than using a stencil buffer: the
     // egui render pass this callback runs inside has no stencil attachment, and
-    // adding one would mean owning the whole pass. Instead a clipped draw has
-    // its vertices' alpha zeroed outside the polygon, which is exact at the
-    // vertices and interpolates across a triangle — good enough for the soft
-    // masks this is used for, and honest about what it is. A stencil pass is the
-    // upgrade path if hard edges are ever needed.
-    let mut clip: Option<(
-        ankhimate_core::attachment::ClippingAttachment,
-        Option<SlotId>,
-    )> = None;
+    // taking one would mean rendering the viewport to a private texture first.
+    // `core::clipping` does the cut, so the runtime — which cannot assume a
+    // stencil buffer exists in the host engine either — masks identically.
+    //
+    // The polygon is carried in **world** space. It is authored in its own
+    // bone's local space, and the slots it masks are on other bones; converting
+    // once here is the only place both spaces are in hand.
+    let mut clip: Option<(Vec<glam::Vec2>, Option<SlotId>)> = None;
     let mut sprite_draws: Vec<SpriteDraw> = Vec::new();
     for &slot_id in &state.pose.draw_order {
         // A clip starts here and runs until its end slot.
@@ -1148,26 +1206,54 @@ pub fn render_bones(
                     .find(|(_, s)| &s.name == name)
                     .map(|(id, _)| id)
             });
-            clip = Some((c.clone(), end));
+            let world = state
+                .doc
+                .skeleton
+                .slots
+                .get(slot_id)
+                .and_then(|s| state.pose.worlds.get(s.bone));
+            if let Some(world) = world {
+                let polygon: Vec<glam::Vec2> = c
+                    .vertices
+                    .iter()
+                    .map(|v| world.transform_point(*v))
+                    .collect();
+                clip = Some((polygon, end));
+            }
             continue;
         }
 
         if let Some(mut draw) = sprite_for_slot(state, slot_id) {
             if let Some((polygon, _)) = &clip
-                && let Some(bone) = state
-                    .doc
-                    .skeleton
-                    .slots
-                    .get(slot_id)
-                    .and_then(|s| state.pose.worlds.get(s.bone))
-                && let Some(inverse) = bone.invert()
+                && polygon.len() >= 3
             {
-                for vertex in &mut draw.vertices {
-                    let world = glam::vec2(vertex.position[0], vertex.position[1]);
-                    if !polygon.contains(inverse.transform_point(world)) {
-                        vertex.color[3] = 0.0;
-                    }
+                let subject: Vec<ankhimate_core::clipping::ClipVertex> = draw
+                    .vertices
+                    .iter()
+                    .map(|v| ankhimate_core::clipping::ClipVertex {
+                        position: glam::vec2(v.position[0], v.position[1]),
+                        uv: glam::vec2(v.uv[0], v.uv[1]),
+                    })
+                    .collect();
+                // Colour is per-slot here, so the first vertex's is every
+                // vertex's; a clipped triangle inherits it unchanged.
+                let color = draw.vertices.first().map(|v| v.color).unwrap_or([1.0; 4]);
+                let (clipped, indices) =
+                    ankhimate_core::clipping::clip_triangles(&subject, &draw.indices, polygon);
+                if indices.is_empty() {
+                    // Entirely masked: skip the draw call rather than submit an
+                    // empty one.
+                    continue;
                 }
+                draw.vertices = clipped
+                    .into_iter()
+                    .map(|v| MeshVertex {
+                        position: [v.position.x, v.position.y],
+                        uv: [v.uv.x, v.uv.y],
+                        color,
+                    })
+                    .collect();
+                draw.indices = indices;
             }
             sprite_draws.push(draw);
         }

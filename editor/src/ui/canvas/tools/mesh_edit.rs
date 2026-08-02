@@ -8,6 +8,8 @@
 //! * **Ctrl+drag** anywhere box-selects, shift-drag adds to the selection;
 //! * shift-click toggles one vertex;
 //! * click an edge to insert a vertex there;
+//! * `C` with two vertices selected pins the edge between them, or releases it
+//!   if it is already pinned (T-401);
 //! * `X` or `Delete` removes the selection;
 //! * `Escape` leaves mesh mode.
 //!
@@ -105,12 +107,47 @@ pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
     let positions = vertex_screen_positions(&target, ctx.state, viewport_size);
 
     // ── Keyboard ─────────────────────────────────────────────────────────
-    let (delete, escape) = ctx.ui.input(|i| {
+    let (delete, escape, edge) = ctx.ui.input(|i| {
         (
             i.key_pressed(egui::Key::X) || i.key_pressed(egui::Key::Delete),
             i.key_pressed(egui::Key::Escape),
+            i.key_pressed(egui::Key::C),
         )
     });
+    // `C` with exactly two vertices selected toggles the edge between them:
+    // pin it if the triangulation keeps wandering, release it if the pin was
+    // the mistake. One key both ways — there is nothing to remember.
+    if edge {
+        let selected = ctx.state.session.selected_vertices.clone();
+        if let [a, b] = selected[..] {
+            let pinned = {
+                let edge = [(a.min(b)) as u32, (a.max(b)) as u32];
+                target.mesh.edges.contains(&edge)
+            };
+            let edit = if pinned {
+                MeshEdit::RemoveEdge(a, b)
+            } else {
+                MeshEdit::AddEdge(a, b)
+            };
+            if ctx.state.dispatch(Box::new(EditMesh::new(
+                target.skin,
+                target.slot,
+                target.name.clone(),
+                edit,
+            ))) {
+                ctx.state.session.set_status(if pinned {
+                    "Edge released"
+                } else {
+                    "Edge pinned"
+                });
+            }
+        } else {
+            ctx.state
+                .session
+                .set_status("Select exactly two vertices to pin an edge between them");
+        }
+        return;
+    }
     if escape {
         ctx.state.session.mesh_edit = false;
         ctx.state.session.selected_vertices.clear();

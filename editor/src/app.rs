@@ -596,6 +596,7 @@ impl eframe::App for AnkhimateApp {
 
         // ── Mesh trace window (T-402) ────────────────────────────────────
         crate::ui::trace::ui(ctx, &mut self.state, &self.theme);
+        crate::ui::uv::ui(ctx, &mut self.state, &self.theme);
 
         // ── Spritesheet slicer (T-305) ───────────────────────────────────
         crate::ui::atlas::ui(ctx, &mut self.state);

@@ -194,9 +194,15 @@ impl CanvasTool for SelectTool {
             mouse_pos.map(|p| glam::vec2(p.x - ctx.rect.min.x, p.y - ctx.rect.min.y));
         let viewport_size = glam::Vec2::new(ctx.rect.width(), ctx.rect.height());
 
-        // Mesh vertex editing owns the pointer while it is on (T-401).
+        // Mesh vertex editing owns the pointer while it is on (T-401), and clip
+        // polygon editing likewise (T-405). Both hang off the same toggle; the
+        // selected attachment's kind decides which one answers.
         if super::mesh_edit::target(ctx.state).is_some() {
             super::mesh_edit::update(ctx, mouse_screen);
+            return;
+        }
+        if super::clip_edit::target(ctx.state).is_some() {
+            super::clip_edit::update(ctx, mouse_screen);
             return;
         }
 

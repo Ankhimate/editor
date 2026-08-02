@@ -1,4 +1,4 @@
-﻿pub mod assets;
+pub mod assets;
 pub mod atlas;
 pub mod canvas;
 pub mod draw_order;
@@ -8,6 +8,7 @@ pub mod timeline;
 pub mod toolbar;
 pub mod trace;
 pub mod tree;
+pub mod uv;
 
 use eframe::egui;
 use egui_tiles::{Behavior, TileId, UiResponse};
