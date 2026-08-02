@@ -37,6 +37,9 @@ pub struct Pose {
     pub deforms: HashMap<(SlotId, String), Vec<glam::Vec2>>,
     /// Animated IK mix overrides. Absent means "use the constraint's own `mix`".
     pub ik_mix: SecondaryMap<ConstraintId, f32>,
+    /// Animated transform-constraint mixes, `[rotate, translate, scale, shear]`
+    /// (T-501). Absent means "use the constraint's own values".
+    pub transform_mix: SecondaryMap<ConstraintId, [f32; 4]>,
 }
 
 impl Pose {
@@ -83,6 +86,7 @@ impl Pose {
         self.draw_order.clear();
         self.deforms.clear();
         self.ik_mix.clear();
+        self.transform_mix.clear();
     }
 }
 
@@ -225,13 +229,43 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                             .get(*constraint)
                             .copied()
                             .or_else(|| {
-                                skel.constraints
-                                    .get(*constraint)
-                                    .map(|Constraint::Ik(ik)| ik.mix)
+                                skel.constraints.get(*constraint).and_then(|c| match c {
+                                    Constraint::Ik(ik) => Some(ik.mix),
+                                    // An `IkMix` key pointed at a non-IK
+                                    // constraint: nothing to blend from.
+                                    Constraint::Transform(_) => None,
+                                })
                             })
                             .unwrap_or(0.0);
                         out.ik_mix
                             .insert(*constraint, current + (mix - current) * alpha);
+                    }
+                }
+                Timeline::TransformConstraintMix { constraint, keys } => {
+                    if let Some(mixes) = animation::sample(keys, time, &mut hint) {
+                        // Same crossfade shape as `IkMix`: blend from whatever
+                        // is already there — an earlier animation's contribution
+                        // or the constraint's authored value — toward this
+                        // animation's opinion, weighted by its alpha.
+                        let current = out
+                            .transform_mix
+                            .get(*constraint)
+                            .copied()
+                            .or_else(|| {
+                                skel.constraints.get(*constraint).and_then(|c| match c {
+                                    Constraint::Transform(tc) => Some([
+                                        tc.mix_rotate,
+                                        tc.mix_translate,
+                                        tc.mix_scale,
+                                        tc.mix_shear,
+                                    ]),
+                                    Constraint::Ik(_) => None,
+                                })
+                            })
+                            .unwrap_or([0.0; 4]);
+                        let blended =
+                            std::array::from_fn(|i| current[i] + (mixes[i] - current[i]) * alpha);
+                        out.transform_mix.insert(*constraint, blended);
                     }
                 }
                 Timeline::Deform {
@@ -347,8 +381,146 @@ fn apply_constraints(skel: &Skeleton, out: &mut Pose) {
                 }
                 apply_ik(skel, out, ik, mix);
             }
+            Constraint::Transform(tc) => {
+                // Per-channel mix overrides from timelines, falling back to the
+                // authored values.
+                let mixes = out.transform_mix.get(id).copied().unwrap_or([
+                    tc.mix_rotate,
+                    tc.mix_translate,
+                    tc.mix_scale,
+                    tc.mix_shear,
+                ]);
+                if mixes.iter().all(|m| *m == 0.0) || tc.bones.is_empty() {
+                    continue;
+                }
+                apply_transform_constraint(skel, out, tc, mixes);
+            }
         }
     }
+}
+
+/// Drive each constrained bone toward the target's transform, channel by
+/// channel (T-501).
+///
+/// Writes **local** transforms, like the IK pass and for the same reason
+/// (defect D3): a world write does not propagate to children, and the next
+/// constraint in the order would read a world that no longer matches the locals
+/// it is about to modify.
+fn apply_transform_constraint(
+    skel: &Skeleton,
+    out: &mut Pose,
+    tc: &crate::constraints::TransformConstraint,
+    [mix_rotate, mix_translate, mix_scale, mix_shear]: [f32; 4],
+) {
+    if skel.bones.get(tc.target).is_none() {
+        return;
+    }
+    // What the target contributes. In world mode it is the target's world
+    // transform decomposed; in local mode its own local transform.
+    let source = if tc.local {
+        out.locals
+            .get(tc.target)
+            .copied()
+            .unwrap_or_else(Transform::default)
+    } else {
+        out.world_decomposed(tc.target)
+    };
+
+    for &bone in &tc.bones {
+        // A bone driving itself would read its own output — the constraint
+        // would converge on nothing meaningful and the result would depend on
+        // constraint order in a way nobody could reason about.
+        if bone == tc.target || skel.bones.get(bone).is_none() {
+            continue;
+        }
+
+        // The goal for this bone, expressed in the same space as `source`.
+        let current = if tc.local {
+            out.locals.get(bone).copied().unwrap_or_default()
+        } else {
+            out.world_decomposed(bone)
+        };
+        let goal = if tc.relative {
+            Transform {
+                position: current.position + source.position + tc.offsets.position,
+                rotation: current.rotation + source.rotation + tc.offsets.rotation,
+                scale: current.scale * source.scale * tc.offsets.scale,
+                shear: current.shear + source.shear + tc.offsets.shear,
+            }
+        } else {
+            Transform {
+                position: source.position + tc.offsets.position,
+                rotation: source.rotation + tc.offsets.rotation,
+                scale: source.scale * tc.offsets.scale,
+                shear: source.shear + tc.offsets.shear,
+            }
+        };
+
+        // Blend each channel by its own mix, then write the result as a local
+        // delta so children follow.
+        let (Some(local), Some(_)) = (out.locals.get(bone).copied(), skel.bones.get(bone)) else {
+            continue;
+        };
+        let mut next = local;
+
+        if mix_rotate != 0.0 {
+            // Shortest-arc, so a constraint across the ±π boundary turns the
+            // short way — the same defect that broke IK blending.
+            let delta = wrap_angle(goal.rotation - current.rotation) * mix_rotate;
+            next.rotation = wrap_angle(next.rotation + delta);
+        }
+        if mix_translate != 0.0 {
+            let delta = (goal.position - current.position) * mix_translate;
+            // A world-space delta has to be rotated into the parent's frame
+            // before it can be added to a local position, or a constrained bone
+            // under a rotated parent slides off at an angle.
+            let delta = if tc.local {
+                delta
+            } else {
+                parent_inverse_direction(skel, out, bone, delta)
+            };
+            next.position += delta;
+        }
+        if mix_scale != 0.0 {
+            let delta = goal.scale - current.scale;
+            next.scale += delta * mix_scale;
+        }
+        if mix_shear != 0.0 {
+            let delta = glam::Vec2::new(
+                wrap_angle(goal.shear.x - current.shear.x),
+                wrap_angle(goal.shear.y - current.shear.y),
+            ) * mix_shear;
+            next.shear += delta;
+        }
+
+        if let Some(slot) = out.locals.get_mut(bone) {
+            *slot = next;
+        }
+        update_world_of(skel, out, bone);
+        update_subtree(skel, out, bone);
+    }
+}
+
+/// Rotate a world-space direction into a bone's parent space.
+///
+/// Only the linear part is applied — a direction has no origin, so the parent's
+/// translation must not be added to it.
+fn parent_inverse_direction(
+    skel: &Skeleton,
+    out: &Pose,
+    bone: BoneId,
+    world_delta: glam::Vec2,
+) -> glam::Vec2 {
+    let Some(parent) = skel.bones.get(bone).and_then(|b| b.parent) else {
+        return world_delta;
+    };
+    let Some(inverse) = out.world(parent).invert() else {
+        // A zero-scaled parent has no invertible frame; leaving the delta in
+        // world space is wrong but finite, and the alternative is a NaN that
+        // spreads through the whole subtree.
+        return world_delta;
+    };
+    inverse.transform_vector(world_delta)
 }
 
 /// Rotate one bone toward `target_world_rot`, shortest-arc, scaled by `mix`.
@@ -428,7 +600,7 @@ fn apply_ik(skel: &Skeleton, out: &mut Pose, ik: &IkConstraint, mix: f32) {
 mod tests {
     use super::*;
     use crate::animation::Key;
-    use crate::constraints::IkConstraint;
+    use crate::constraints::{IkConstraint, TransformConstraint};
     use crate::skeleton::Bone;
 
     const EPS: f32 = 1e-4;
@@ -1190,6 +1362,326 @@ mod tests {
         assert!(
             (leaf_after - leaf_before).length() > 1.0,
             "leaf did not follow the IK chain: {leaf_before:?} -> {leaf_after:?}"
+        );
+    }
+    // ── Transform constraints (T-501) ────────────────────────────────────
+
+    /// A skeleton with an unparented target and a bone to drive from it.
+    fn target_and_driven() -> (Skeleton, BoneId, BoneId) {
+        let mut skel = Skeleton::new();
+        let target = skel.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(100.0, 50.0),
+                rotation: std::f32::consts::FRAC_PI_2, // 90°
+                scale: glam::vec2(2.0, 2.0),
+                ..Transform::default()
+            },
+            ..bone("target", None)
+        });
+        let driven = skel.add_bone(bone("driven", None));
+        (skel, target, driven)
+    }
+
+    /// The acceptance case: mix 0.5 lands exactly halfway, by hand-computed
+    /// angle rather than by "looks about right".
+    #[test]
+    fn a_rotation_constraint_at_half_mix_lands_halfway() {
+        let (mut skel, target, driven) = target_and_driven();
+        skel.add_constraint(Constraint::Transform(TransformConstraint {
+            mix_rotate: 0.5,
+            ..TransformConstraint::rotation_only("look", target, vec![driven])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        // Driven starts at 0°, target is at 90°, so halfway is 45°.
+        let angle = pose.world_decomposed(driven).rotation;
+        assert!(
+            (angle - std::f32::consts::FRAC_PI_4).abs() < EPS,
+            "expected 45°, got {}°",
+            angle.to_degrees()
+        );
+    }
+
+    #[test]
+    fn mix_zero_changes_nothing_and_mix_one_matches_the_target() {
+        for (mix, expected) in [(0.0, 0.0), (1.0, std::f32::consts::FRAC_PI_2)] {
+            let (mut skel, target, driven) = target_and_driven();
+            skel.add_constraint(Constraint::Transform(TransformConstraint {
+                mix_rotate: mix,
+                ..TransformConstraint::rotation_only("look", target, vec![driven])
+            }));
+            let mut pose = Pose::new();
+            evaluate(&skel, &[], &mut pose);
+            let angle = pose.world_decomposed(driven).rotation;
+            assert!(
+                (angle - expected).abs() < EPS,
+                "mix {mix}: expected {}°, got {}°",
+                expected.to_degrees(),
+                angle.to_degrees()
+            );
+        }
+    }
+
+    /// Each channel is independent: a rotation-only constraint must not drag
+    /// position or scale along with it.
+    #[test]
+    fn channels_are_independent() {
+        let (mut skel, target, driven) = target_and_driven();
+        skel.add_constraint(Constraint::Transform(TransformConstraint::rotation_only(
+            "look",
+            target,
+            vec![driven],
+        )));
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        let world = pose.world_decomposed(driven);
+        assert!(
+            world.position.length() < EPS,
+            "translate was untouched: {:?}",
+            world.position
+        );
+        assert!(
+            (world.scale.x - 1.0).abs() < EPS && (world.scale.y - 1.0).abs() < EPS,
+            "scale was untouched: {:?}",
+            world.scale
+        );
+    }
+
+    /// The offset is what makes "track that, but stay 10° off it" possible.
+    #[test]
+    fn the_offset_is_added_to_the_targets_transform() {
+        let (mut skel, target, driven) = target_and_driven();
+        skel.add_constraint(Constraint::Transform(TransformConstraint {
+            offsets: Transform {
+                rotation: 10.0_f32.to_radians(),
+                ..Transform::default()
+            },
+            ..TransformConstraint::rotation_only("look", target, vec![driven])
+        }));
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        let angle = pose.world_decomposed(driven).rotation.to_degrees();
+        assert!((angle - 100.0).abs() < 1e-2, "expected 100°, got {angle}°");
+    }
+
+    /// Relative mode adds to what the bone already has instead of replacing it,
+    /// which is what lets a constraint layer on top of an animation.
+    #[test]
+    fn relative_mode_adds_rather_than_replaces() {
+        let (mut skel, target, _) = target_and_driven();
+        let driven = skel.add_bone(Bone {
+            local_transform: Transform {
+                rotation: 20.0_f32.to_radians(),
+                ..Transform::default()
+            },
+            ..bone("posed", None)
+        });
+        skel.add_constraint(Constraint::Transform(TransformConstraint {
+            relative: true,
+            ..TransformConstraint::rotation_only("add", target, vec![driven])
+        }));
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        // 20° of its own plus 90° from the target.
+        let angle = pose.world_decomposed(driven).rotation.to_degrees();
+        assert!((angle - 110.0).abs() < 1e-2, "expected 110°, got {angle}°");
+    }
+
+    /// A driven bone's children have to follow, which only happens because the
+    /// constraint writes a *local* transform and re-runs FK (defect D3).
+    #[test]
+    fn children_of_a_constrained_bone_follow_it() {
+        let (mut skel, target, driven) = target_and_driven();
+        let child = skel.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(10.0, 0.0),
+                ..Transform::default()
+            },
+            ..bone("child", Some(driven))
+        });
+
+        let mut before = Pose::new();
+        evaluate(&skel, &[], &mut before);
+        let child_before = before.world_position(child);
+
+        skel.add_constraint(Constraint::Transform(TransformConstraint::rotation_only(
+            "look",
+            target,
+            vec![driven],
+        )));
+        let mut after = Pose::new();
+        evaluate(&skel, &[], &mut after);
+        let child_after = after.world_position(child);
+
+        // The child sat at +10 on X; a 90° turn swings it to +10 on Y.
+        assert!(
+            (child_before - glam::vec2(10.0, 0.0)).length() < EPS,
+            "child started on the X axis: {child_before:?}"
+        );
+        assert!(
+            (child_after - glam::vec2(0.0, 10.0)).length() < 1e-2,
+            "child swung with its parent: {child_after:?}"
+        );
+    }
+
+    /// Constraint order is the whole reason the list is ordered: two
+    /// constraints writing one bone resolve last-wins, deterministically.
+    #[test]
+    fn constraint_order_decides_the_result() {
+        let mut skel = Skeleton::new();
+        let a = skel.add_bone(Bone {
+            local_transform: Transform {
+                rotation: 30.0_f32.to_radians(),
+                ..Transform::default()
+            },
+            ..bone("a", None)
+        });
+        let b = skel.add_bone(Bone {
+            local_transform: Transform {
+                rotation: 60.0_f32.to_radians(),
+                ..Transform::default()
+            },
+            ..bone("b", None)
+        });
+        let driven = skel.add_bone(bone("driven", None));
+        let first = skel.add_constraint(Constraint::Transform(TransformConstraint::rotation_only(
+            "from_a",
+            a,
+            vec![driven],
+        )));
+        let second = skel.add_constraint(Constraint::Transform(
+            TransformConstraint::rotation_only("from_b", b, vec![driven]),
+        ));
+
+        skel.constraint_order = vec![first, second];
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        let b_last = pose.world_decomposed(driven).rotation.to_degrees();
+
+        skel.constraint_order = vec![second, first];
+        evaluate(&skel, &[], &mut pose);
+        let a_last = pose.world_decomposed(driven).rotation.to_degrees();
+
+        assert!((b_last - 60.0).abs() < 1e-2, "b ran last: {b_last}°");
+        assert!((a_last - 30.0).abs() < 1e-2, "a ran last: {a_last}°");
+    }
+
+    /// A constraint pointed at its own driven bone would read its own output.
+    #[test]
+    fn a_bone_cannot_be_driven_by_itself() {
+        let mut skel = Skeleton::new();
+        let solo = skel.add_bone(Bone {
+            local_transform: Transform {
+                rotation: 0.3,
+                ..Transform::default()
+            },
+            ..bone("solo", None)
+        });
+        skel.add_constraint(Constraint::Transform(TransformConstraint::rotation_only(
+            "self",
+            solo,
+            vec![solo],
+        )));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        assert!(
+            (pose.world_decomposed(solo).rotation - 0.3).abs() < EPS,
+            "the self-reference was skipped, not applied"
+        );
+    }
+
+    /// A `TransformConstraintMix` key overrides the authored mixes, so a
+    /// constraint can fade in over an animation.
+    #[test]
+    fn a_mix_timeline_overrides_the_authored_mixes() {
+        let (mut skel, target, driven) = target_and_driven();
+        let cid = skel.add_constraint(Constraint::Transform(TransformConstraint::rotation_only(
+            "look",
+            target,
+            vec![driven],
+        )));
+
+        let anim = Animation {
+            name: "fade".into(),
+            duration: 1.0,
+            looping: false,
+            events: Vec::new(),
+            timelines: vec![Timeline::TransformConstraintMix {
+                constraint: cid,
+                keys: vec![
+                    Key {
+                        time: 0.0,
+                        value: [0.0; 4],
+                        interp: crate::animation::Interp::Linear,
+                    },
+                    Key {
+                        time: 1.0,
+                        value: [1.0, 0.0, 0.0, 0.0],
+                        interp: crate::animation::Interp::Linear,
+                    },
+                ],
+            }],
+        };
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[(&anim, 0.0, 1.0)], &mut pose);
+        assert!(
+            pose.world_decomposed(driven).rotation.abs() < EPS,
+            "mix 0 at t=0 leaves the bone alone"
+        );
+
+        evaluate(&skel, &[(&anim, 0.5, 1.0)], &mut pose);
+        let half = pose.world_decomposed(driven).rotation.to_degrees();
+        assert!((half - 45.0).abs() < 1e-2, "mix 0.5 is halfway: {half}°");
+
+        evaluate(&skel, &[(&anim, 1.0, 1.0)], &mut pose);
+        let full = pose.world_decomposed(driven).rotation.to_degrees();
+        assert!(
+            (full - 90.0).abs() < 1e-2,
+            "mix 1 matches the target: {full}°"
+        );
+    }
+
+    /// Translation is blended in world space but written locally, so a
+    /// constrained bone under a rotated parent must not slide off at an angle.
+    #[test]
+    fn a_translate_constraint_under_a_rotated_parent_lands_on_the_target() {
+        let mut skel = Skeleton::new();
+        let target = skel.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(50.0, 0.0),
+                ..Transform::default()
+            },
+            ..bone("target", None)
+        });
+        // The parent is turned 90°, so a naive local write sends the child along
+        // the wrong axis.
+        let parent = skel.add_bone(Bone {
+            local_transform: Transform {
+                rotation: std::f32::consts::FRAC_PI_2,
+                ..Transform::default()
+            },
+            ..bone("parent", None)
+        });
+        let driven = skel.add_bone(bone("driven", Some(parent)));
+        skel.add_constraint(Constraint::Transform(TransformConstraint {
+            mix_rotate: 0.0,
+            mix_translate: 1.0,
+            ..TransformConstraint::rotation_only("follow", target, vec![driven])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        let world = pose.world_position(driven);
+        assert!(
+            (world - glam::vec2(50.0, 0.0)).length() < 1e-2,
+            "driven should sit on the target, got {world:?}"
         );
     }
 }

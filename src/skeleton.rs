@@ -297,6 +297,7 @@ impl Skeleton {
             .iter()
             .filter(|(_, c)| match c {
                 Constraint::Ik(ik) => ik.target == id || ik.bones.contains(&id),
+                Constraint::Transform(tc) => tc.target == id || tc.bones.contains(&id),
             })
             .map(|(cid, c)| (cid, c.name().to_string()))
             .collect();
