@@ -1,4 +1,4 @@
-﻿//! `.ankh` file format: read and write Ankhimate projects (T-108, ADR 0004).
+//! `.ankh` file format: read and write Ankhimate projects (T-108, ADR 0004).
 //!
 //! The stack, outermost to innermost:
 //!
@@ -313,6 +313,78 @@ mod tests {
         assert!(
             reserialized.contains("editor_note"),
             "unknown field written back out"
+        );
+    }
+    /// T-401/T-405: the two pieces of geometry that are *not* vertices — a
+    /// mesh's pinned edges and a clip's polygon — have to survive a save. Both
+    /// are new fields on old structures, which is exactly where a serializer
+    /// silently drops something.
+    #[test]
+    fn pinned_edges_and_clips_survive_a_round_trip() {
+        use ankhimate_core::attachment::{Attachment, ClippingAttachment, MeshAttachment};
+        use ankhimate_core::slot::Slot;
+
+        let mut skel = sample_skeleton();
+        let bone = skel.bones.keys().next().unwrap();
+        let art = skel.add_slot(Slot {
+            attachment: Some("art".into()),
+            ..Slot::new("art_slot".to_string(), bone)
+        });
+        let mask = skel.add_slot(Slot {
+            attachment: Some("mask".into()),
+            ..Slot::new("mask_slot".to_string(), bone)
+        });
+
+        let mesh = MeshAttachment {
+            texture: "arm".into(),
+            setup_vertices: vec![
+                glam::vec2(0.0, 0.0),
+                glam::vec2(10.0, 0.0),
+                glam::vec2(10.0, 10.0),
+                glam::vec2(0.0, 10.0),
+            ],
+            uvs: vec![
+                glam::vec2(0.0, 0.0),
+                glam::vec2(1.0, 0.0),
+                glam::vec2(1.0, 1.0),
+                glam::vec2(0.0, 1.0),
+            ],
+            triangles: vec![[0, 1, 2], [0, 2, 3]],
+            edges: vec![[0, 2]],
+            ..Default::default()
+        };
+        let clip = ClippingAttachment {
+            vertices: vec![
+                glam::vec2(-5.0, -5.0),
+                glam::vec2(5.0, -5.0),
+                glam::vec2(0.0, 5.0),
+            ],
+            end_slot: Some("art_slot".into()),
+        };
+        let skin = skel.default_skin;
+        skel.skins[skin].set(art, "art".to_string(), Attachment::Mesh(mesh));
+        skel.skins[skin].set(mask, "mask".to_string(), Attachment::Clipping(clip));
+
+        let anims = SlotMap::with_key();
+        let assets = AssetDb::new();
+        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
+        let loaded = from_json(&json).unwrap();
+        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
+
+        let skin = loaded.skeleton.default_skin;
+        let Some(Attachment::Mesh(mesh)) = loaded.skeleton.skins[skin].get(art, "art") else {
+            panic!("the mesh came back");
+        };
+        assert_eq!(mesh.edges, vec![[0, 2]], "pinned edges survived");
+
+        let Some(Attachment::Clipping(clip)) = loaded.skeleton.skins[skin].get(mask, "mask") else {
+            panic!("the clip came back");
+        };
+        assert_eq!(clip.vertices.len(), 3);
+        assert_eq!(
+            clip.end_slot.as_deref(),
+            Some("art_slot"),
+            "range preserved"
         );
     }
 }

@@ -340,6 +340,7 @@ fn attachment_to_schema(skeleton: &Skeleton, attachment: &att::Attachment) -> sc
             vertices: flatten_vec2(&m.setup_vertices),
             uvs: flatten_vec2(&m.uvs),
             triangles: m.triangles.iter().flat_map(|t| *t).collect(),
+            edges: m.edges.iter().flat_map(|e| *e).collect(),
             weights: m
                 .weights
                 .iter()
@@ -699,6 +700,7 @@ fn attachment_from_schema(
                 .chunks_exact(3)
                 .map(|c| [c[0], c[1], c[2]])
                 .collect(),
+            edges: m.edges.chunks_exact(2).map(|c| [c[0], c[1]]).collect(),
             weights: m
                 .weights
                 .iter()
