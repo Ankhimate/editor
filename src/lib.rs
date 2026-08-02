@@ -9,6 +9,7 @@
 pub mod animation;
 pub mod assets;
 pub mod attachment;
+pub mod clipping;
 pub mod constraints;
 pub mod ids;
 pub mod math;
