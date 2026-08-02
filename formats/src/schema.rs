@@ -236,6 +236,21 @@ pub struct Constraint {
     pub softness: f32,
     #[serde(default)]
     pub stretch: bool,
+
+    // ── Transform constraints (T-501) ────────────────────────────────────
+    // Defaulted and skipped when empty, so an IK constraint's JSON is
+    // unchanged by their existence.
+    /// `[rotate, translate, scale, shear]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mixes: Option<[f32; 4]>,
+    /// `[x, y, rotation_degrees, scale_x, scale_y, shear_x_deg, shear_y_deg]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offsets: Option<[f32; 7]>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relative: bool,
+
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,
@@ -293,6 +308,11 @@ pub enum Timeline {
     IkMix {
         constraint: String,
         keys: Vec<ScalarKey>,
+    },
+    /// `[rotate, translate, scale, shear]` per key (T-501).
+    TransformConstraintMix {
+        constraint: String,
+        keys: Vec<ColorKey>,
     },
     Deform {
         slot: String,

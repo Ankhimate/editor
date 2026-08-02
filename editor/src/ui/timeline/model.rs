@@ -341,6 +341,10 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
             GroupKey::Global,
             read_only_row("ik mix", keys.iter().map(|k| (k.time, k.interp))),
         ),
+        Timeline::TransformConstraintMix { keys, .. } => (
+            GroupKey::Global,
+            read_only_row("constraint mix", keys.iter().map(|k| (k.time, k.interp))),
+        ),
         Timeline::Deform { keys, .. } => (
             GroupKey::Global,
             read_only_row("deform", keys.iter().map(|k| (k.time, k.interp))),

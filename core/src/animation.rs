@@ -130,6 +130,16 @@ pub enum Timeline {
         constraint: ConstraintId,
         keys: Vec<Key<f32>>,
     },
+    /// Absolute per-channel mixes for a transform constraint (T-501), in the
+    /// order `[rotate, translate, scale, shear]`.
+    ///
+    /// One timeline rather than four because the channels are almost always
+    /// keyed together — "the constraint fades in" means all of it — and four
+    /// dopesheet rows per constraint would bury the bone rows that matter.
+    TransformConstraintMix {
+        constraint: ConstraintId,
+        keys: Vec<Key<[f32; 4]>>,
+    },
     /// Per-vertex offsets from the attachment's setup vertices.
     Deform {
         slot: SlotId,
@@ -155,6 +165,7 @@ impl Timeline {
             Timeline::SlotAttachment { keys, .. } => last!(keys),
             Timeline::DrawOrder { keys } => last!(keys),
             Timeline::IkMix { keys, .. } => last!(keys),
+            Timeline::TransformConstraintMix { keys, .. } => last!(keys),
             Timeline::Deform { keys, .. } => last!(keys),
         }
     }
@@ -169,6 +180,7 @@ impl Timeline {
             Timeline::SlotAttachment { keys, .. } => keys.is_empty(),
             Timeline::DrawOrder { keys } => keys.is_empty(),
             Timeline::IkMix { keys, .. } => keys.is_empty(),
+            Timeline::TransformConstraintMix { keys, .. } => keys.is_empty(),
             Timeline::Deform { keys, .. } => keys.is_empty(),
         }
     }

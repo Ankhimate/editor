@@ -603,12 +603,15 @@ example; disabling the clipping attachment restores the full draw.
 > Everything here is what separates "keyframes work" from "professional rig". All ∥ except T-504
 > which touches the IK solver T-104 wrote.
 
-### T-501 ∥ Transform constraint
+### ✅ T-501 ∥ Transform constraint
 **Deps:** T-104 · **Refs:** PLAN §2.5
 - `Constraint::Transform { target: BoneId, bones: Vec<BoneId>, offsets: Transform, mix_rotate,
   mix_translate, mix_scale, mix_shear, local: bool, relative: bool }`, applied in
   `constraint_order`. Per-mix timelines (`TransformConstraintMix`).
-- Inspector: pick target, add/remove constrained bones, mix sliders (keyable via T-210).
+- Inspector: pick target, mix sliders, offset, local/relative toggles, delete. Listed on the
+  **driven** bone rather than the target — "why is this bone moving on its own" is the question a
+  rigger asks, and the answer is whichever constraints write to it.
+- This is also the first constraint authoring UI of any kind; IK constraints had none.
 **Accept:** a "look at" setup — head follows a target bone with mix 0.5 — matches hand-computed
 angles; constraint order changes the result deterministically; save/load round-trip.
 

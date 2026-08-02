@@ -15,7 +15,7 @@ use crate::schema;
 use ankhimate_core::animation as anim;
 use ankhimate_core::assets::{AssetDb, ImageAsset};
 use ankhimate_core::attachment as att;
-use ankhimate_core::constraints::{Constraint, IkConstraint};
+use ankhimate_core::constraints::{Constraint, IkConstraint, TransformConstraint};
 use ankhimate_core::ids::{AnimationId, BoneId, ConstraintId, SlotId};
 use ankhimate_core::math::Transform;
 use ankhimate_core::skeleton::{Bone, Skeleton};
@@ -252,6 +252,35 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 mix: ik.mix,
                 softness: ik.softness,
                 stretch: ik.stretch,
+                mixes: None,
+                offsets: None,
+                local: false,
+                relative: false,
+                extra: Default::default(),
+            },
+            Constraint::Transform(tc) => schema::Constraint {
+                name: tc.name.clone(),
+                kind: "transform".to_string(),
+                target: bone_name(tc.target),
+                bones: tc.bones.iter().copied().map(bone_name).collect(),
+                bend_direction: 1.0,
+                mix: 1.0,
+                softness: 0.0,
+                stretch: false,
+                mixes: Some([tc.mix_rotate, tc.mix_translate, tc.mix_scale, tc.mix_shear]),
+                // Angles are degrees at the document boundary (ADR 0002), the
+                // same as every rotation key.
+                offsets: Some([
+                    tc.offsets.position.x,
+                    tc.offsets.position.y,
+                    tc.offsets.rotation.to_degrees(),
+                    tc.offsets.scale.x,
+                    tc.offsets.scale.y,
+                    tc.offsets.shear.x.to_degrees(),
+                    tc.offsets.shear.y.to_degrees(),
+                ]),
+                local: tc.local,
+                relative: tc.relative,
                 extra: Default::default(),
             },
         })
@@ -454,6 +483,19 @@ fn timeline_to_schema(
             constraint: constraint_name(*constraint),
             keys: scalar_keys(keys),
         },
+        anim::Timeline::TransformConstraintMix { constraint, keys } => {
+            schema::Timeline::TransformConstraintMix {
+                constraint: constraint_name(*constraint),
+                keys: keys
+                    .iter()
+                    .map(|k| schema::ColorKey {
+                        time: k.time,
+                        value: k.value,
+                        interp: interp_to_schema(k.interp),
+                    })
+                    .collect(),
+            }
+        }
         anim::Timeline::Deform {
             slot,
             attachment,
@@ -615,15 +657,47 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
         if !chain_ok {
             continue;
         }
-        let id = skeleton.constraints.insert(Constraint::Ik(IkConstraint {
-            name: c.name.clone(),
-            target,
-            bones: chain,
-            bend_direction: c.bend_direction,
-            mix: c.mix,
-            softness: c.softness,
-            stretch: c.stretch,
-        }));
+        // The `type` field decides the variant. An unknown kind is reported
+        // rather than guessed at: silently importing a constraint we do not
+        // understand as an IK one would move bones the author never asked to
+        // move.
+        let constraint = match c.kind.as_str() {
+            "transform" => {
+                let mixes = c.mixes.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+                let o = c.offsets.unwrap_or([0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+                Constraint::Transform(TransformConstraint {
+                    name: c.name.clone(),
+                    target,
+                    bones: chain,
+                    offsets: ankhimate_core::math::Transform {
+                        position: glam::vec2(o[0], o[1]),
+                        rotation: o[2].to_radians(),
+                        scale: glam::vec2(o[3], o[4]),
+                        shear: glam::vec2(o[5].to_radians(), o[6].to_radians()),
+                    },
+                    mix_rotate: mixes[0],
+                    mix_translate: mixes[1],
+                    mix_scale: mixes[2],
+                    mix_shear: mixes[3],
+                    local: c.local,
+                    relative: c.relative,
+                })
+            }
+            "ik" => Constraint::Ik(IkConstraint {
+                name: c.name.clone(),
+                target,
+                bones: chain,
+                bend_direction: c.bend_direction,
+                mix: c.mix,
+                softness: c.softness,
+                stretch: c.stretch,
+            }),
+            other => {
+                report.dangling("constraint type", other);
+                continue;
+            }
+        };
+        let id = skeleton.constraints.insert(constraint);
         constraint_ids.insert(c.name.clone(), id);
     }
     for name in &project.constraint_order {
@@ -841,6 +915,26 @@ fn timeline_from_schema(
             anim::Timeline::IkMix {
                 constraint: id,
                 keys: scalar_keys(keys),
+            }
+        }
+        schema::Timeline::TransformConstraintMix { constraint, keys } => {
+            let id = match constraint_ids.get(constraint) {
+                Some(&id) => id,
+                None => {
+                    report.dangling("timeline constraint", constraint);
+                    return None;
+                }
+            };
+            anim::Timeline::TransformConstraintMix {
+                constraint: id,
+                keys: keys
+                    .iter()
+                    .map(|k| anim::Key {
+                        time: k.time,
+                        value: k.value,
+                        interp: interp_from_schema(k.interp),
+                    })
+                    .collect(),
             }
         }
         schema::Timeline::Deform {

@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::session::{Tool, WorkMode};
+use crate::session::{Tool, TransformTool, WorkMode};
 use crate::theme::Theme;
 use eframe::egui;
 
@@ -63,6 +63,65 @@ pub fn ui(
             },
             || state.session.tool = Tool::WeightPaint,
         );
+
+        ui.add_space(6.0);
+        ui.add(egui::Separator::default().vertical().shrink(6.0));
+        ui.add_space(6.0);
+
+        // ── Transform gizmo (T/R/S/H) ──────────────────────────────────
+        // These pick which gizmo the Select tool shows, so choosing one also
+        // switches back to Select: clicking "Rotate" while the bone-creation
+        // tool is active otherwise sets a mode the next click cannot use.
+        //
+        // Enabled in both work modes on purpose — posing in Animate is the main
+        // reason to reach for them.
+        for spec in [
+            (
+                egui_phosphor::regular::ARROWS_OUT_CARDINAL,
+                "T",
+                "Translate",
+                TransformTool::Translate,
+            ),
+            (
+                egui_phosphor::regular::ARROW_CLOCKWISE,
+                "R",
+                "Rotate",
+                TransformTool::Rotate,
+            ),
+            (
+                egui_phosphor::regular::RESIZE,
+                "S",
+                "Scale",
+                TransformTool::Scale,
+            ),
+            (
+                egui_phosphor::regular::PARALLELOGRAM,
+                "H",
+                "Shear",
+                TransformTool::Shear,
+            ),
+        ] {
+            let (icon, shortcut, tooltip, tool) = spec;
+            tool_btn(
+                ui,
+                theme,
+                ToolBtn {
+                    icon,
+                    shortcut,
+                    tooltip,
+                    // Only lit while Select is active: the gizmo is not on
+                    // screen under the other tools, so showing it as the current
+                    // mode would be a lie.
+                    selected: state.session.tool == Tool::Select
+                        && state.session.active_transform_tool == tool,
+                    enabled: true,
+                },
+                || {
+                    state.session.active_transform_tool = tool;
+                    state.session.tool = Tool::Select;
+                },
+            );
+        }
 
         ui.add_space(6.0);
         ui.add(egui::Separator::default().vertical().shrink(6.0));

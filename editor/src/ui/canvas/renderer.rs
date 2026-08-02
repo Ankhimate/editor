@@ -527,8 +527,11 @@ pub fn render_bones(
             )
         };
 
+        // A target bone is drawn as a marker rather than a bone: it is a
+        // handle for a constraint, not part of the skeleton's silhouette.
         let is_ik_target = state.doc.skeleton.constraints.values().any(|c| match c {
             ankhimate_core::constraints::Constraint::Ik(ik) => ik.target == bone_id,
+            ankhimate_core::constraints::Constraint::Transform(tc) => tc.target == bone_id,
         });
 
         // We still draw the IK target gizmo with egui, but we'll collect bone instance data for wgpu.

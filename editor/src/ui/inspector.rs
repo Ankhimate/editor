@@ -1,4 +1,4 @@
-﻿use crate::app_state::AppState;
+use crate::app_state::AppState;
 use crate::commands::key_cmds::{BoneProperty, TimelineAddr};
 use crate::session::{Tool, TransformTool};
 use eframe::egui;
@@ -274,6 +274,9 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     readonly_row(ui, "Scale X", &format!("{:.3}", wt.scale.x));
     readonly_row(ui, "Scale Y", &format!("{:.3}", wt.scale.y));
 
+    // ── Constraints (T-501) ──────────────────────────────────────────────
+    constraint_inspector(ui, state, bone_id);
+
     // ── Slot section (T-205) ─────────────────────────────────────────────
     // Below the transform: it describes what the bone *shows*, which is the
     // less-used half of this panel.
@@ -281,6 +284,198 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         ui.add_space(10.0);
         slot_inspector(ui, state, slot_id);
         attachment_inspector(ui, state, slot_id);
+    }
+}
+
+/// Constraints driving the selected bone (T-501).
+///
+/// Listed on the **driven** bone, not the target: "why is this bone moving on
+/// its own" is the question a rigger actually asks, and the answer is whichever
+/// constraints write to it. A target bone can drive a dozen others and does not
+/// want a dozen sections.
+fn constraint_inspector(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    bone_id: ankhimate_core::ids::BoneId,
+) {
+    use crate::commands::constraint_cmds::{
+        AddTransformConstraint, RemoveConstraint, SetTransformProps, TransformProps,
+    };
+    use ankhimate_core::constraints::Constraint;
+
+    let setup = state.session.can_edit_structure();
+
+    // Constraints in application order, filtered to the ones touching this bone.
+    let driving: Vec<(ankhimate_core::ids::ConstraintId, String, TransformProps)> = state
+        .doc
+        .skeleton
+        .constraint_order
+        .iter()
+        .filter_map(|id| {
+            let Some(Constraint::Transform(tc)) = state.doc.skeleton.constraints.get(*id) else {
+                return None;
+            };
+            tc.bones
+                .contains(&bone_id)
+                .then(|| (*id, tc.name.clone(), TransformProps::from_constraint(tc)))
+        })
+        .collect();
+
+    ui.add_space(10.0);
+    section_header(ui, egui_phosphor::regular::LINK, "Constraints");
+    ui.add_space(2.0);
+
+    if driving.is_empty() {
+        ui.label(
+            egui::RichText::new("Nothing drives this bone")
+                .size(10.5)
+                .color(ui.visuals().weak_text_color()),
+        );
+    }
+
+    // Bone names for the target picker, resolved once.
+    let bones: Vec<(ankhimate_core::ids::BoneId, String)> = state
+        .doc
+        .skeleton
+        .bones
+        .iter()
+        .filter(|(id, _)| *id != bone_id)
+        .map(|(id, b)| (id, b.name.clone()))
+        .collect();
+
+    let mut edit: Option<(ankhimate_core::ids::ConstraintId, TransformProps)> = None;
+    let mut remove: Option<ankhimate_core::ids::ConstraintId> = None;
+
+    for (id, name, props) in &driving {
+        let mut next = props.clone();
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(name).size(11.0).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(setup, egui::Button::new("✕").small())
+                    .on_hover_text("Delete this constraint")
+                    .clicked()
+                {
+                    remove = Some(*id);
+                }
+            });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Target").size(10.5));
+            let current = bones
+                .iter()
+                .find(|(b, _)| *b == next.target)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_else(|| "<missing>".to_string());
+            egui::ComboBox::from_id_salt(("constraint_target", id))
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for (candidate, label) in &bones {
+                        if ui
+                            .selectable_label(*candidate == next.target, label)
+                            .clicked()
+                        {
+                            next.target = *candidate;
+                        }
+                    }
+                });
+        });
+
+        // The four channel mixes. Separate because "follow its rotation but not
+        // its position" is the common case, not the exception.
+        for (label, value, hint) in [
+            (
+                "Rotate",
+                &mut next.mix_rotate,
+                "How much of the target's rotation this bone takes",
+            ),
+            (
+                "Translate",
+                &mut next.mix_translate,
+                "How much of the target's position this bone takes",
+            ),
+            ("Scale", &mut next.mix_scale, "…its scale"),
+            ("Shear", &mut next.mix_shear, "…its shear"),
+        ] {
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [64.0, 18.0],
+                    egui::Label::new(egui::RichText::new(label).size(10.5)),
+                );
+                ui.add_enabled(setup, egui::Slider::new(value, 0.0..=1.0).max_decimals(2))
+                    .on_hover_text(hint);
+            });
+        }
+
+        ui.horizontal(|ui| {
+            let mut offset_degrees = next.offsets.rotation.to_degrees();
+            ui.label(egui::RichText::new("Offset°").size(10.5));
+            if ui
+                .add_enabled(
+                    setup,
+                    egui::DragValue::new(&mut offset_degrees)
+                        .speed(0.5)
+                        .range(-360.0..=360.0),
+                )
+                .on_hover_text("Added to the target's rotation — 'track it, but stay 10° off'")
+                .changed()
+            {
+                next.offsets.rotation = offset_degrees.to_radians();
+            }
+            ui.add_enabled(setup, egui::Checkbox::new(&mut next.local, "Local"))
+                .on_hover_text(
+                    "Copy the target's transform relative to its own parent, rather \
+                     than its world transform",
+                );
+            ui.add_enabled(setup, egui::Checkbox::new(&mut next.relative, "Add"))
+                .on_hover_text(
+                    "Add the target's transform to this bone's own instead of \
+                     replacing it — layers on top of an animation",
+                );
+        });
+
+        if next != *props {
+            edit = Some((*id, next));
+        }
+    }
+
+    ui.add_space(6.0);
+    // Creating one needs a second bone to point at; the picker above changes it
+    // afterwards, so any other bone is a fine starting target.
+    let default_target = state
+        .doc
+        .skeleton
+        .bones
+        .get(bone_id)
+        .and_then(|b| b.parent)
+        .or_else(|| bones.first().map(|(id, _)| *id));
+    if ui
+        .add_enabled(
+            setup && default_target.is_some(),
+            egui::Button::new("Add transform constraint").small(),
+        )
+        .on_hover_text(
+            "Drive this bone from another one — a head that tracks a look-at \
+             target, a wheel that mirrors a shaft",
+        )
+        .clicked()
+        && let Some(target) = default_target
+    {
+        let name = format!("constraint {}", state.doc.skeleton.constraints.len() + 1);
+        state.dispatch(Box::new(AddTransformConstraint::new(
+            name,
+            target,
+            vec![bone_id],
+        )));
+    }
+
+    if let Some((id, props)) = edit {
+        state.dispatch(Box::new(SetTransformProps::new(id, props)));
+    }
+    if let Some(id) = remove {
+        state.dispatch(Box::new(RemoveConstraint::new(id)));
     }
 }
 

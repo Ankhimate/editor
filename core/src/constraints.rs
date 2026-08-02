@@ -75,17 +75,91 @@ impl IkConstraint {
     }
 }
 
-/// One constraint of any kind. Post-v1 variants (transform, path, physics) slot
-/// in here without touching the application order or the `Pose` contract.
+/// Drive a set of bones from another bone's transform (T-501).
+///
+/// The general "follow that" constraint: a head that tracks a look-at bone, a
+/// wheel that mirrors a drive shaft, a group of bones that inherit a master's
+/// scale. IK asks *where should this chain point*; this asks *what should this
+/// bone's transform be*, channel by channel, each with its own mix.
+///
+/// # Absolute vs relative
+///
+/// `relative: false` — the constrained bone is driven **toward** the target's
+/// transform plus `offsets`. Mix 1 means "become the target".
+///
+/// `relative: true` — the target's transform is **added to** whatever the bone
+/// already has. Mix 1 means "move by as much as the target moved". This is what
+/// makes a constraint composable with an animation instead of overwriting it.
+///
+/// # Local vs world
+///
+/// `local: false` compares world transforms, which is what "point at the same
+/// direction as that bone" means when the two live under different parents.
+/// `local: true` compares the bones' own local transforms, so a constrained bone
+/// copies the target's *relationship to its parent* rather than its absolute
+/// placement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransformConstraint {
+    pub name: String,
+    /// The bone being followed.
+    pub target: BoneId,
+    /// Bones driven by it.
+    pub bones: Vec<BoneId>,
+    /// Added to the target's transform before mixing — the "offset" that lets a
+    /// head track a target while staying tilted 10° from it.
+    pub offsets: crate::math::Transform,
+    pub mix_rotate: f32,
+    pub mix_translate: f32,
+    pub mix_scale: f32,
+    pub mix_shear: f32,
+    /// Compare local transforms instead of world ones.
+    #[serde(default)]
+    pub local: bool,
+    /// Add the target's transform to the bone's own rather than replacing it.
+    #[serde(default)]
+    pub relative: bool,
+}
+
+impl TransformConstraint {
+    /// A constraint that copies rotation only — the common "look at" case.
+    pub fn rotation_only(name: impl Into<String>, target: BoneId, bones: Vec<BoneId>) -> Self {
+        Self {
+            name: name.into(),
+            target,
+            bones,
+            offsets: crate::math::Transform::default(),
+            mix_rotate: 1.0,
+            mix_translate: 0.0,
+            mix_scale: 0.0,
+            mix_shear: 0.0,
+            local: false,
+            relative: false,
+        }
+    }
+
+    /// Does any channel do anything?
+    pub fn has_effect(&self) -> bool {
+        !self.bones.is_empty()
+            && (self.mix_rotate != 0.0
+                || self.mix_translate != 0.0
+                || self.mix_scale != 0.0
+                || self.mix_shear != 0.0)
+    }
+}
+
+/// One constraint of any kind. Post-v1 variants (path, physics) slot in here
+/// without touching the application order or the `Pose` contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Constraint {
     Ik(IkConstraint),
+    Transform(TransformConstraint),
 }
 
 impl Constraint {
     pub fn name(&self) -> &str {
         match self {
             Constraint::Ik(ik) => &ik.name,
+            Constraint::Transform(tc) => &tc.name,
         }
     }
 
@@ -93,6 +167,7 @@ impl Constraint {
     pub fn affected_bones(&self) -> &[BoneId] {
         match self {
             Constraint::Ik(ik) => &ik.bones,
+            Constraint::Transform(tc) => &tc.bones,
         }
     }
 
@@ -100,6 +175,7 @@ impl Constraint {
     pub fn is_inert(&self) -> bool {
         match self {
             Constraint::Ik(ik) => ik.mix <= 0.0 || ik.bones.is_empty(),
+            Constraint::Transform(tc) => !tc.has_effect(),
         }
     }
 }

@@ -302,6 +302,7 @@ fn key_index_at(timeline: &Timeline, time: f32) -> Option<usize> {
         Timeline::SlotAttachment { keys, .. } => find!(keys),
         Timeline::DrawOrder { keys } => find!(keys),
         Timeline::IkMix { keys, .. } => find!(keys),
+        Timeline::TransformConstraintMix { keys, .. } => find!(keys),
         Timeline::Deform { keys, .. } => find!(keys),
     }
 }
