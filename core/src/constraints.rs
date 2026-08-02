@@ -354,11 +354,11 @@ pub fn enforce_bend(points: &mut [Vec2], bend_dir: f32) {
     if axis.length_squared() < 1e-9 {
         return;
     }
-    // Signed area of the chain against its own chord: positive is one side.
-    let side: f32 = points[1..points.len() - 1]
-        .iter()
-        .map(|p| axis.perp_dot(*p - root))
-        .sum();
+    // The **first** joint decides the side, not the sum of all of them. A long
+    // chain can have interior joints on either side of the chord while still
+    // reading as bending one way, and summing them lets a later joint outvote
+    // the elbow — which is the joint a rigger means by "bend this way".
+    let side = axis.perp_dot(points[1] - root);
     if side == 0.0 || side.signum() == bend_dir.signum() {
         return;
     }
