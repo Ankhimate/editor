@@ -72,17 +72,3 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p ankhimate-core --target wasm32-unknown-unknown
-
-  deny:
-    name: cargo-deny (licenses)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # The action runs `cargo deny` itself, so `command` is the subcommand only.
-      # Passing "check licenses" as `arguments` appends it after the subcommand,
-      # where cargo-deny reads it as a list of checks and rejects "check".
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check licenses

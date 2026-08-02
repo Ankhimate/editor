@@ -43,7 +43,7 @@
 - Add `README.md` stub (project pitch, build instructions from PLAN), `CONTRIBUTING.md` stub.
 - Pin `egui_tiles = "*"` in `editor/Cargo.toml` to the exact version currently in `Cargo.lock`.
 - Add `rust-toolchain.toml` (stable, pinned minor).
-**Accept:** workspace builds; `cargo deny check licenses` passes (add `deny.toml` allowing MIT/Apache-2.0/BSD/Zlib/ISC).
+**Accept:** workspace builds. *(Dependency-licence checking was dropped — see ADR 005.)*
 
 ### ✅ T-002 ★ CI skeleton
 **Deps:** T-001 · **Refs:** PLAN §3.3

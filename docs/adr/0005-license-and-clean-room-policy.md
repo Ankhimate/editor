@@ -44,7 +44,10 @@ codebase free of copyleft-derived code.
   in every `Cargo.toml`.
 - `CONTRIBUTING.md` documents the clean-room rule; a contributor who has read a
   GPL editor's source must not work on the matching Ankhimate feature.
-- `cargo-deny` (deny.toml) restricts dependency licenses to permissive sets so
-  the runtime embedding promise holds transitively.
+- Dependency licences are **not** machine-checked. The transitive tree must stay
+  permissive for the embedding promise to hold, so adding a dependency means
+  checking its licence by hand; a copyleft one breaks the promise for every game
+  that links the runtime. Reinstating `cargo-deny` in CI is the obvious fix if
+  this ever bites.
 - Third-party sample rigs carry licenses of their own and are **not** committed;
   tests that would use them skip when they are absent.

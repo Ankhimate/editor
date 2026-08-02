@@ -302,7 +302,7 @@ ankhimate-rs/
   xtask/                           — cargo xtask: CI checks, packaging, sample generation. [NEW]
 ```
 
-Dependency rule (enforced by CI, `cargo-deny` + a graph check in `xtask`):
+Dependency rule (enforced by a graph check in `xtask`):
 `core ← {formats, runtime, export, editor}`; `formats ← {editor, export, runtime}`; editor never
 appears in anyone's deps. `core` and `runtime` must compile for `wasm32-unknown-unknown`
 (comparable tools ship web builds — we keep that door open; the editor targets native first).
