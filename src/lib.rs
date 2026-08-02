@@ -467,4 +467,79 @@ mod tests {
             });
         assert_eq!(mix_keys, Some(1), "the mix timeline came back");
     }
+    /// T-504: softness, stretch and the stretch limit were serialized long
+    /// before they were implemented, and the two new IK timelines are new
+    /// schema. All of it has to come back.
+    #[test]
+    fn ik_completeness_fields_survive_a_round_trip() {
+        use ankhimate_core::animation::{Interp, Key, Timeline};
+        use ankhimate_core::constraints::{Constraint, IkConstraint};
+
+        let mut skel = sample_skeleton();
+        let mut ids = skel.bones.keys();
+        let root = ids.next().unwrap();
+        let target = ids.next().unwrap();
+
+        let cid = skel.add_constraint(Constraint::Ik(IkConstraint {
+            softness: 7.5,
+            stretch: true,
+            stretch_limit: 1.35,
+            bend_direction: -1.0,
+            ..IkConstraint::aim("reach", target, root)
+        }));
+
+        let mut anims = SlotMap::with_key();
+        anims.insert(Animation {
+            name: "clip".into(),
+            duration: 1.0,
+            looping: false,
+            events: Vec::new(),
+            timelines: vec![
+                Timeline::IkBendDirection {
+                    constraint: cid,
+                    keys: vec![Key {
+                        time: 0.0,
+                        value: -1.0,
+                        interp: Interp::Stepped,
+                    }],
+                },
+                Timeline::IkSoftness {
+                    constraint: cid,
+                    keys: vec![Key {
+                        time: 0.25,
+                        value: 3.0,
+                        interp: Interp::Linear,
+                    }],
+                },
+            ],
+        });
+
+        let assets = AssetDb::new();
+        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
+        let loaded = from_json(&json).unwrap();
+        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
+
+        let Some(Constraint::Ik(ik)) = loaded.skeleton.constraints.values().next() else {
+            panic!("the IK constraint came back");
+        };
+        assert!((ik.softness - 7.5).abs() < 1e-6);
+        assert!(ik.stretch);
+        assert!((ik.stretch_limit - 1.35).abs() < 1e-6);
+        assert!((ik.bend_direction + 1.0).abs() < 1e-6);
+
+        let kinds: Vec<&str> = loaded
+            .animations
+            .values()
+            .flat_map(|a| &a.timelines)
+            .map(|t| match t {
+                Timeline::IkBendDirection { .. } => "bend",
+                Timeline::IkSoftness { .. } => "softness",
+                _ => "other",
+            })
+            .collect();
+        assert!(
+            kinds.contains(&"bend") && kinds.contains(&"softness"),
+            "{kinds:?}"
+        );
+    }
 }
