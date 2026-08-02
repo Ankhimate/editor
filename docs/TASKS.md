@@ -666,12 +666,19 @@ a stepped, flip-free result.
 **Accept:** additive-blended flash effect renders identically in editor and runtime; a visibility
 key hides a slot at frame 10 and back at 20 with no interpolation artifacts; round-trips.
 
-### T-506 ∥ Event timeline
+### ✅ T-506 ∥ Event timeline
 **Deps:** T-106 · **Refs:** PLAN §2.7 (`events`, post-v1 → promoted)
 - `Animation.events: Vec<EventKey { time, name, int_value, float_value, string_value }>` +
   `Timeline::Event`; dopesheet row with named markers; runtime (T-604) reports events fired in a
   frame window, including during crossfades and looping wraps.
-- Editor: event definitions list on the document (name + default payload), drag markers, rename.
+- Editor: a marker lane under the ruler — double-click to add, drag to retime, right-click to rename
+  or delete. Events belong to the *clip*, not to a bone, so they get their own lane rather than a row
+  in the dopesheet's group tree.
+- `core::animation::events_in_window(anim, from, to, looping)` is the runtime contract: half-open
+  `(from, to]`, wraps on loop, and fires every event once per lap when `dt` overshoots the clip.
+- **Deferred:** a document-level event *definition* list (name + default payload, reused across
+  clips). Events carry their payload inline today, which is enough to author and to fire; shared
+  definitions are a convenience that wants the diagnostics pass (T-702) to flag typo'd names.
 **Accept:** a footstep event fires exactly once per loop at the right time in a runtime unit test
 (including when dt overshoots the loop boundary); events survive save/load.
 

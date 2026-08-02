@@ -299,6 +299,17 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 .iter()
                 .map(|t| timeline_to_schema(t, &bone_name, &slot_name, &constraint_name))
                 .collect(),
+            events: a
+                .events
+                .iter()
+                .map(|e| schema::Event {
+                    time: e.time,
+                    name: e.name.clone(),
+                    int_value: e.int_value,
+                    float_value: e.float_value,
+                    string_value: e.string_value.clone(),
+                })
+                .collect(),
             extra: Default::default(),
         })
         .collect();
@@ -737,7 +748,17 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
             name: a.name.clone(),
             duration: a.duration,
             timelines,
-            events: Vec::new(),
+            events: a
+                .events
+                .iter()
+                .map(|e| ankhimate_core::animation::EventKey {
+                    time: e.time,
+                    name: e.name.clone(),
+                    int_value: e.int_value,
+                    float_value: e.float_value,
+                    string_value: e.string_value.clone(),
+                })
+                .collect(),
             looping: a.looping,
         });
     }

@@ -542,4 +542,47 @@ mod tests {
             "{kinds:?}"
         );
     }
+    /// T-506: events were modelled in core but silently dropped on save — the
+    /// conversion built an empty list in both directions.
+    #[test]
+    fn animation_events_survive_a_round_trip() {
+        use ankhimate_core::animation::EventKey;
+
+        let skel = sample_skeleton();
+        let mut anims = SlotMap::with_key();
+        anims.insert(Animation {
+            name: "walk".into(),
+            duration: 1.0,
+            looping: true,
+            timelines: Vec::new(),
+            events: vec![
+                EventKey {
+                    time: 0.25,
+                    name: "footstep".into(),
+                    int_value: 3,
+                    float_value: 0.8,
+                    string_value: "left".into(),
+                },
+                EventKey {
+                    time: 0.75,
+                    name: "footstep".into(),
+                    int_value: 4,
+                    float_value: 0.8,
+                    string_value: "right".into(),
+                },
+            ],
+        });
+
+        let assets = AssetDb::new();
+        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
+        let loaded = from_json(&json).unwrap();
+        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
+
+        let events = &loaded.animations.values().next().expect("the clip").events;
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].name, "footstep");
+        assert_eq!(events[0].int_value, 3);
+        assert!((events[0].float_value - 0.8).abs() < 1e-6);
+        assert_eq!(events[1].string_value, "right");
+    }
 }

@@ -204,6 +204,8 @@ pub struct Session {
 
     /// A spritesheet waiting to be sliced (T-305). Cancelling drops it.
     pub pending_atlas: Option<crate::ui::atlas::PendingAtlas>,
+    /// Index of the event marker being dragged in the timeline lane (T-506).
+    pub dragging_event: Option<usize>,
     /// The open UV editing pane, if any (T-401).
     pub uv_pane: Option<crate::ui::uv::UvPane>,
 
@@ -253,6 +255,7 @@ impl Session {
             trace_refined: false,
             pending_trace: None,
             pending_atlas: None,
+            dragging_event: None,
             uv_pane: None,
             clipboard: crate::clipboard::Clipboard::Empty,
         }

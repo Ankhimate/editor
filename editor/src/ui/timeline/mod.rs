@@ -15,6 +15,7 @@
 //! divider position, the dopesheet/graph mode, and per-group fold state are UI
 //! state kept in egui memory — never in `Session`/undo.
 
+mod events;
 mod graph;
 mod model;
 mod ruler;
@@ -163,9 +164,18 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     let ruler_rect = egui::Rect::from_min_size(body.min, egui::vec2(body.width(), RULER_H));
     ruler::ui(ui, state, &layout, ruler_rect);
 
+    // ── Event lane, directly under the ruler (T-506) ─────────────────────
+    // Events belong to the clip rather than to any bone, so they get a lane of
+    // their own above the dopesheet instead of a row inside its group tree.
+    let event_rect = egui::Rect::from_min_size(
+        egui::pos2(body.left(), ruler_rect.bottom()),
+        egui::vec2(body.width(), events::LANE_HEIGHT),
+    );
+    events::ui(ui, state, &layout, event_rect);
+
     // ── Body: tree | divider | sheet ─────────────────────────────────────
     let body_rect =
-        egui::Rect::from_min_max(egui::pos2(body.left(), ruler_rect.bottom()), body.max);
+        egui::Rect::from_min_max(egui::pos2(body.left(), event_rect.bottom()), body.max);
     let tree_rect = egui::Rect::from_min_max(
         body_rect.min,
         egui::pos2(sheet_x0 - 1.0, body_rect.bottom()),
