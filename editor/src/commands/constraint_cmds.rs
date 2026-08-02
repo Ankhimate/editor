@@ -570,6 +570,142 @@ impl EditCommand for SetPhysicsProps {
     }
 }
 
+/// Add a path constraint driving `bones` along the path on `slot` (T-502).
+pub struct AddPathConstraint {
+    name: String,
+    slot: ankhimate_core::ids::SlotId,
+    bones: Vec<BoneId>,
+    created: Option<ConstraintId>,
+}
+
+impl AddPathConstraint {
+    pub fn new(
+        name: impl Into<String>,
+        slot: ankhimate_core::ids::SlotId,
+        bones: Vec<BoneId>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            slot,
+            bones,
+            created: None,
+        }
+    }
+}
+
+impl EditCommand for AddPathConstraint {
+    fn apply(&mut self, doc: &mut Document) {
+        if self.bones.is_empty() || !doc.skeleton.slots.contains_key(self.slot) {
+            return;
+        }
+        self.created = Some(doc.skeleton.add_constraint(Constraint::Path(
+            ankhimate_core::constraints::PathConstraint::new(
+                self.name.clone(),
+                self.slot,
+                self.bones.clone(),
+            ),
+        )));
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let Some(id) = self.created.take() {
+            doc.skeleton.remove_constraint(id);
+        }
+    }
+
+    fn label(&self) -> &str {
+        "Add Path Constraint"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Everything editable about a path constraint.
+#[derive(Clone, Copy, PartialEq)]
+pub struct PathProps {
+    pub position: f32,
+    pub spacing: f32,
+    pub mix_rotate: f32,
+    pub mix_translate: f32,
+}
+
+pub struct SetPathProps {
+    id: ConstraintId,
+    after: PathProps,
+    before: Option<PathProps>,
+}
+
+impl SetPathProps {
+    pub fn new(id: ConstraintId, after: PathProps) -> Self {
+        Self {
+            id,
+            after,
+            before: None,
+        }
+    }
+}
+
+impl EditCommand for SetPathProps {
+    fn apply(&mut self, doc: &mut Document) {
+        let Some(Constraint::Path(p)) = doc.skeleton.constraints.get_mut(self.id) else {
+            return;
+        };
+        if self.before.is_none() {
+            self.before = Some(PathProps {
+                position: p.position,
+                spacing: p.spacing,
+                mix_rotate: p.mix_rotate,
+                mix_translate: p.mix_translate,
+            });
+        }
+        p.position = self.after.position;
+        p.spacing = self.after.spacing;
+        p.mix_rotate = self.after.mix_rotate;
+        p.mix_translate = self.after.mix_translate;
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let (Some(before), Some(Constraint::Path(p))) = (
+            self.before.take(),
+            doc.skeleton.constraints.get_mut(self.id),
+        ) {
+            p.position = before.position;
+            p.spacing = before.spacing;
+            p.mix_rotate = before.mix_rotate;
+            p.mix_translate = before.mix_translate;
+        }
+    }
+
+    fn merge(&mut self, next: &dyn EditCommand) -> bool {
+        let Some(other) = next.as_any().downcast_ref::<SetPathProps>() else {
+            return false;
+        };
+        if other.id != self.id {
+            return false;
+        }
+        self.after = other.after;
+        true
+    }
+
+    fn label(&self) -> &str {
+        "Edit Path Constraint"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

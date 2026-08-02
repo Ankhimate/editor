@@ -213,6 +213,43 @@ impl PhysicsConstraint {
     }
 }
 
+/// Drive a chain of bones along a path attachment (T-502).
+///
+/// Tails, treads, belts, a train of carriages, vines: anything whose bones
+/// should follow a curve rather than each other. Strictly more general than
+/// binding mesh vertices to a spline, because the bones stay bones — they can
+/// carry art, be keyed, and have their own children.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathConstraint {
+    pub name: String,
+    /// The slot whose attachment is the path.
+    pub slot: crate::ids::SlotId,
+    /// Bones driven along it, in order from the path's start.
+    pub bones: Vec<BoneId>,
+    /// Where the chain starts, as a fraction of the path's length.
+    pub position: f32,
+    /// Scales the gap between bones; `1` spreads them over the whole path.
+    pub spacing: f32,
+    /// How much of the path's direction each bone takes.
+    pub mix_rotate: f32,
+    /// How much of the path's position each bone takes.
+    pub mix_translate: f32,
+}
+
+impl PathConstraint {
+    pub fn new(name: impl Into<String>, slot: crate::ids::SlotId, bones: Vec<BoneId>) -> Self {
+        Self {
+            name: name.into(),
+            slot,
+            bones,
+            position: 0.0,
+            spacing: 1.0,
+            mix_rotate: 1.0,
+            mix_translate: 1.0,
+        }
+    }
+}
+
 /// One constraint of any kind. Post-v1 variants (path, physics) slot in here
 /// without touching the application order or the `Pose` contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,6 +257,7 @@ pub enum Constraint {
     Ik(IkConstraint),
     Transform(TransformConstraint),
     Physics(PhysicsConstraint),
+    Path(PathConstraint),
 }
 
 impl Constraint {
@@ -228,6 +266,7 @@ impl Constraint {
             Constraint::Ik(ik) => &ik.name,
             Constraint::Transform(tc) => &tc.name,
             Constraint::Physics(p) => &p.name,
+            Constraint::Path(p) => &p.name,
         }
     }
 
@@ -240,6 +279,7 @@ impl Constraint {
             // one-element slice needs the field to *be* one, so it is stored as
             // an array.
             Constraint::Physics(p) => std::slice::from_ref(&p.bone),
+            Constraint::Path(p) => &p.bones,
         }
     }
 
@@ -249,6 +289,9 @@ impl Constraint {
             Constraint::Ik(ik) => ik.mix <= 0.0 || ik.bones.is_empty(),
             Constraint::Transform(tc) => !tc.has_effect(),
             Constraint::Physics(p) => p.mix <= 0.0 || (!p.rotate && !p.translate),
+            Constraint::Path(p) => {
+                p.bones.is_empty() || (p.mix_rotate == 0.0 && p.mix_translate == 0.0)
+            }
         }
     }
 }

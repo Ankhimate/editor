@@ -190,9 +190,10 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
 
     let region = match attachment {
         Attachment::Region(region) => region,
-        // A clip is geometry, not artwork: it masks other slots rather than
-        // drawing itself (T-405).
-        Attachment::Clipping(_) => return None,
+        // Clips and paths are geometry, not artwork: one masks other slots
+        // (T-405), the other drives bones along itself (T-502). Both are drawn
+        // as overlays when selected, not as sprites.
+        Attachment::Clipping(_) | Attachment::Path(_) => return None,
         // A mesh draws its own triangles. Vertices are in the bone's local
         // space, so the bone affine is all that is needed — weight skinning
         // (T-403) and deform offsets (T-404) slot in here later.
@@ -590,7 +591,8 @@ pub fn render_bones(
             ankhimate_core::constraints::Constraint::Transform(tc) => tc.target == bone_id,
             // A physics bone is an ordinary bone that happens to wobble; it has
             // no target handle to draw.
-            ankhimate_core::constraints::Constraint::Physics(_) => false,
+            ankhimate_core::constraints::Constraint::Physics(_)
+            | ankhimate_core::constraints::Constraint::Path(_) => false,
         });
 
         // We still draw the IK target gizmo with egui, but we'll collect bone instance data for wgpu.
@@ -903,7 +905,13 @@ pub fn render_bones(
         let to_pos = |v: glam::Vec2| egui::pos2(rect.min.x + v.x, rect.min.y + v.y);
         let count = positions.len();
 
-        for i in 0..count {
+        // A path is open; only a clip closes back to its first vertex.
+        let edges = if target.is_path {
+            count.saturating_sub(1)
+        } else {
+            count
+        };
+        for i in 0..edges {
             painter.line_segment(
                 [to_pos(positions[i]), to_pos(positions[(i + 1) % count])],
                 egui::Stroke::new(1.5, theme.mesh_edge()),

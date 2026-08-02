@@ -122,7 +122,7 @@ impl SetRegionProps {
         {
             Attachment::Region(r) => Some(r),
             // Meshes are edited in mesh mode; clips have no region transform.
-            Attachment::Mesh(_) | Attachment::Clipping(_) => None,
+            Attachment::Mesh(_) | Attachment::Clipping(_) | Attachment::Path(_) => None,
         }
     }
 }

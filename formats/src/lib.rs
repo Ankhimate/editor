@@ -683,4 +683,71 @@ mod tests {
             "it points at the same bone"
         );
     }
+    /// T-502: a path attachment and the constraint that drives bones along it.
+    /// The constraint is the only one whose source is a *slot*, which is
+    /// exactly the mapping most likely to be dropped.
+    #[test]
+    fn paths_and_path_constraints_survive_a_round_trip() {
+        use ankhimate_core::attachment::{Attachment, PathAttachment};
+        use ankhimate_core::constraints::{Constraint, PathConstraint};
+        use ankhimate_core::slot::Slot;
+
+        let mut skel = sample_skeleton();
+        let bone = skel.bones.keys().next().unwrap();
+        let slot = skel.add_slot(Slot {
+            attachment: Some("curve".into()),
+            ..Slot::new("path_slot".into(), bone)
+        });
+        let default = skel.default_skin;
+        skel.skins[default].set(
+            slot,
+            "curve".to_string(),
+            Attachment::Path(PathAttachment {
+                vertices: vec![glam::vec2(0.0, 0.0), glam::vec2(10.0, 5.0)],
+                closed: true,
+                constant_speed: false,
+            }),
+        );
+        skel.add_constraint(Constraint::Path(PathConstraint {
+            position: 0.3,
+            spacing: 0.7,
+            mix_rotate: 0.9,
+            mix_translate: 0.4,
+            ..PathConstraint::new("tail", slot, vec![bone])
+        }));
+
+        let anims = SlotMap::with_key();
+        let assets = AssetDb::new();
+        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
+        let loaded = from_json(&json).unwrap();
+        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
+
+        let path = loaded
+            .skeleton
+            .skins
+            .values()
+            .find_map(|s| {
+                s.entries.values().find_map(|a| match a {
+                    Attachment::Path(p) => Some(p.clone()),
+                    _ => None,
+                })
+            })
+            .expect("the path attachment came back");
+        assert_eq!(path.vertices.len(), 2);
+        assert!(path.closed);
+        assert!(!path.constant_speed, "the flag is not defaulted back on");
+
+        let Some(Constraint::Path(c)) = loaded.skeleton.constraints.values().next() else {
+            panic!("the path constraint came back");
+        };
+        assert_eq!(c.name, "tail");
+        assert!((c.position - 0.3).abs() < 1e-6);
+        assert!((c.spacing - 0.7).abs() < 1e-6);
+        assert!((c.mix_rotate - 0.9).abs() < 1e-6);
+        assert!((c.mix_translate - 0.4).abs() < 1e-6);
+        assert_eq!(
+            loaded.skeleton.slots[c.slot].name, "path_slot",
+            "it points at the same slot"
+        );
+    }
 }

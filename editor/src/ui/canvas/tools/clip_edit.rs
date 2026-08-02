@@ -12,8 +12,9 @@
 //! One function serving both would be a pile of branches on which kind it is.
 
 use super::ToolContext;
+use crate::commands::EditCommand;
 use crate::commands::attachment_cmds::owning_skin;
-use crate::commands::clip_cmds::{ClipEdit, EditClip};
+use crate::commands::clip_cmds::{ClipEdit, EditClip, EditPath};
 use ankhimate_core::attachment::{Attachment, ClippingAttachment};
 use ankhimate_core::ids::{SkinId, SlotId};
 use eframe::egui;
@@ -27,6 +28,9 @@ pub struct ClipTarget {
     pub name: String,
     pub clip: ClippingAttachment,
     pub world: ankhimate_core::transforms::Affine2,
+    /// A path attachment edits with the same gestures but is not a closed
+    /// polygon and routes to its own command (T-502).
+    pub is_path: bool,
 }
 
 /// Resolve the selected slot's clip, if clip editing applies right now.
@@ -42,16 +46,27 @@ pub fn target(state: &crate::app_state::AppState) -> Option<ClipTarget> {
     let slot = state.doc.skeleton.slots.get(slot_id)?;
     let name = slot.attachment.clone()?;
     let skin = owning_skin(&state.doc, state.session.active_skin, slot_id, &name)?;
-    let Attachment::Clipping(clip) = state.doc.skeleton.skins[skin].get(slot_id, &name)? else {
-        return None;
+    // Clips and paths are both "a polygon on a slot" as far as the gestures go;
+    // a path is simply open rather than closed.
+    let (clip, is_path) = match state.doc.skeleton.skins[skin].get(slot_id, &name)? {
+        Attachment::Clipping(clip) => (clip.clone(), false),
+        Attachment::Path(path) => (
+            ClippingAttachment {
+                vertices: path.vertices.clone(),
+                end_slot: None,
+            },
+            true,
+        ),
+        _ => return None,
     };
     let world = *state.pose.worlds.get(slot.bone)?;
     Some(ClipTarget {
         skin,
         slot: slot_id,
         name,
-        clip: clip.clone(),
+        clip,
         world,
+        is_path,
     })
 }
 
@@ -70,6 +85,25 @@ pub fn vertex_screen_positions(
             state.session.camera.world_to_screen(world, viewport_size)
         })
         .collect()
+}
+
+/// The right command for whichever kind of polygon this is.
+fn edit_command(target: &ClipTarget, edit: ClipEdit) -> Box<dyn EditCommand> {
+    if target.is_path {
+        Box::new(EditPath::new(
+            target.skin,
+            target.slot,
+            target.name.clone(),
+            edit,
+        ))
+    } else {
+        Box::new(EditClip::new(
+            target.skin,
+            target.slot,
+            target.name.clone(),
+            edit,
+        ))
+    }
 }
 
 pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
@@ -92,14 +126,16 @@ pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
     }
     if delete && !ctx.state.session.selected_vertices.is_empty() {
         let indices = ctx.state.session.selected_vertices.clone();
-        if ctx.state.dispatch(Box::new(EditClip::new(
-            target.skin,
-            target.slot,
-            target.name.clone(),
-            ClipEdit::RemoveVertices(indices),
-        ))) {
+        if ctx
+            .state
+            .dispatch(edit_command(&target, ClipEdit::RemoveVertices(indices)))
+        {
             ctx.state.session.selected_vertices.clear();
-        } else if target.clip.vertices.len() < 4 {
+        } else if target.is_path {
+            ctx.state
+                .session
+                .set_status("A path needs at least two vertices");
+        } else {
             ctx.state
                 .session
                 .set_status("A clip needs at least three vertices");
@@ -154,12 +190,8 @@ pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
                 .iter()
                 .filter_map(|&i| target.clip.vertices.get(i).map(|v| (i, *v + delta)))
                 .collect();
-            ctx.state.dispatch(Box::new(EditClip::new(
-                target.skin,
-                target.slot,
-                target.name.clone(),
-                ClipEdit::MoveVertices(moves),
-            )));
+            ctx.state
+                .dispatch(edit_command(&target, ClipEdit::MoveVertices(moves)));
         }
         return;
     }
@@ -206,9 +238,17 @@ pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
     // Not on a vertex: a click near an edge splits it. The new point goes
     // *between* that edge's endpoints — a ring has an order, and appending
     // would cut a corner across the polygon instead.
+    // A clip is a closed ring, a path is not: an open path has one fewer edge,
+    // and offering the phantom last→first one would insert a vertex on a
+    // segment that is not drawn.
     let count = positions.len();
+    let edges = if target.is_path {
+        count.saturating_sub(1)
+    } else {
+        count
+    };
     let mut best: Option<(usize, f32)> = None;
-    for i in 0..count {
+    for i in 0..edges {
         let (a, b) = (positions[i], positions[(i + 1) % count]);
         let distance = distance_to_segment(mouse, a, b);
         if best.is_none_or(|(_, d)| distance < d) {
@@ -225,12 +265,10 @@ pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
             .camera
             .screen_to_world(mouse, viewport_size);
         let local = inverse.transform_point(world);
-        if ctx.state.dispatch(Box::new(EditClip::new(
-            target.skin,
-            target.slot,
-            target.name.clone(),
+        if ctx.state.dispatch(edit_command(
+            &target,
             ClipEdit::InsertVertex(edge + 1, local),
-        ))) {
+        )) {
             ctx.state.session.selected_vertices = vec![edge + 1];
         }
         return;

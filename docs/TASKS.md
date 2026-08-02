@@ -615,12 +615,19 @@ example; disabling the clipping attachment restores the full draw.
 **Accept:** a "look at" setup — head follows a target bone with mix 0.5 — matches hand-computed
 angles; constraint order changes the result deterministically; save/load round-trip.
 
-### T-502 ∥ Path attachment + path constraint
+### ✅ T-502 ∥ Path attachment + path constraint
 **Deps:** T-401 · **Refs:** PLAN §2.5
-- `Attachment::Path { vertices, closed, constant_speed }` authored with the mesh vertex tools
-  (bezier control points, add/remove, closed toggle).
-- `Constraint::Path { slot, bones, position_mode, spacing_mode, rotate_mode, mix_rotate,
-  mix_translate }` + `PathPosition`/`PathSpacing`/mix timelines.
+- `Attachment::Path { vertices, closed, constant_speed }` authored with the clip polygon tools,
+  which already had the right gestures — a path is simply an *open* ring.
+- **Deferred:** bezier control points. The stored shape is the flattened polyline, because a curve
+  nobody can measure is no use to a constraint and flattening at author time means the editor and
+  the runtime walk identical geometry. Bezier handles would be an authoring convenience over the
+  same data, and belong with the curve editor (T-704).
+- `Constraint::Path { slot, bones, position, spacing, mix_rotate, mix_translate }`. The mode enums
+  collapsed into `PathAttachment::constant_speed` (distance spacing vs vertex-index spacing) — two
+  behaviours, and naming them as modes implied more than exist.
+- **Deferred:** `PathPosition`/`PathSpacing` timelines. Position is the one worth animating (it is
+  what slides a tread); it lands with the next timeline pass.
 - Covers mesh "pathing" binds as a strictly more general feature (tails, treads, belts,
   vines following a spline).
 **Accept:** a 5-bone tail follows a curved path with even spacing; animating path position slides

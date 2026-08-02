@@ -234,6 +234,207 @@ impl EditCommand for EditClip {
     }
 }
 
+/// Add a path attachment to a slot, with a starting line (T-502).
+///
+/// Like [`AddClipping`], it starts as real geometry rather than empty: a path
+/// with no vertices drives nothing, which would read as the command failing.
+pub struct AddPath {
+    skin: SkinId,
+    slot: SlotId,
+    name: String,
+    size: f32,
+    added: bool,
+}
+
+impl AddPath {
+    pub fn new(skin: SkinId, slot: SlotId, name: impl Into<String>, size: f32) -> Self {
+        Self {
+            skin,
+            slot,
+            name: name.into(),
+            size: size.max(1.0),
+            added: false,
+        }
+    }
+}
+
+impl EditCommand for AddPath {
+    fn apply(&mut self, doc: &mut Document) {
+        let Some(skin) = doc.skeleton.skins.get_mut(self.skin) else {
+            return;
+        };
+        if skin.get(self.slot, &self.name).is_some() {
+            return;
+        }
+        let half = self.size * 0.5;
+        skin.set(
+            self.slot,
+            self.name.clone(),
+            Attachment::Path(ankhimate_core::attachment::PathAttachment {
+                vertices: vec![
+                    glam::vec2(-half, 0.0),
+                    glam::vec2(0.0, half * 0.5),
+                    glam::vec2(half, 0.0),
+                ],
+                closed: false,
+                constant_speed: true,
+            }),
+        );
+        self.added = true;
+        if let Some(slot) = doc.skeleton.slots.get_mut(self.slot) {
+            slot.attachment = Some(self.name.clone());
+        }
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if !self.added {
+            return;
+        }
+        if let Some(skin) = doc.skeleton.skins.get_mut(self.skin) {
+            skin.remove(self.slot, &self.name);
+        }
+        if let Some(slot) = doc.skeleton.slots.get_mut(self.slot)
+            && slot.attachment.as_deref() == Some(self.name.as_str())
+        {
+            slot.attachment = None;
+        }
+        self.added = false;
+    }
+
+    fn label(&self) -> &str {
+        "Add Path"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Move a path attachment's vertices, sharing the clip tools' shape.
+pub struct EditPath {
+    skin: SkinId,
+    slot: SlotId,
+    name: String,
+    edit: ClipEdit,
+    before: Option<ankhimate_core::attachment::PathAttachment>,
+    label: &'static str,
+}
+
+impl EditPath {
+    pub fn new(skin: SkinId, slot: SlotId, name: impl Into<String>, edit: ClipEdit) -> Self {
+        let label = match &edit {
+            ClipEdit::MoveVertices(_) => "Move Path Vertices",
+            ClipEdit::InsertVertex(_, _) => "Add Path Vertex",
+            ClipEdit::RemoveVertices(_) => "Delete Path Vertices",
+            ClipEdit::SetEndSlot(_) => "Set Path",
+        };
+        Self {
+            skin,
+            slot,
+            name: name.into(),
+            edit,
+            before: None,
+            label,
+        }
+    }
+
+    fn path<'a>(
+        &self,
+        doc: &'a mut Document,
+    ) -> Option<&'a mut ankhimate_core::attachment::PathAttachment> {
+        match doc
+            .skeleton
+            .skins
+            .get_mut(self.skin)?
+            .entries
+            .get_mut(&(self.slot, self.name.clone()))?
+        {
+            Attachment::Path(path) => Some(path),
+            _ => None,
+        }
+    }
+}
+
+impl EditCommand for EditPath {
+    fn apply(&mut self, doc: &mut Document) {
+        let capture = self.before.is_none();
+        let Some(path) = self.path(doc) else {
+            return;
+        };
+        if capture {
+            self.before = Some(path.clone());
+        }
+        match &self.edit {
+            ClipEdit::MoveVertices(moves) => {
+                for (index, position) in moves {
+                    if let Some(v) = path.vertices.get_mut(*index) {
+                        *v = *position;
+                    }
+                }
+            }
+            ClipEdit::InsertVertex(index, position) => {
+                let at = (*index).min(path.vertices.len());
+                path.vertices.insert(at, *position);
+            }
+            ClipEdit::RemoveVertices(indices) => {
+                // Two points is still a path — a straight line drives a chain
+                // perfectly well — so the floor is lower than a clip's three.
+                if path.vertices.len().saturating_sub(indices.len()) < 2 {
+                    self.before = None;
+                    return;
+                }
+                let mut sorted = indices.clone();
+                sorted.sort_unstable_by(|a, b| b.cmp(a));
+                sorted.dedup();
+                for index in sorted {
+                    if index < path.vertices.len() {
+                        path.vertices.remove(index);
+                    }
+                }
+            }
+            ClipEdit::SetEndSlot(_) => {}
+        }
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let (Some(before), Some(path)) = (self.before.take(), self.path(doc)) {
+            *path = before;
+        }
+    }
+
+    fn merge(&mut self, next: &dyn EditCommand) -> bool {
+        let Some(other) = next.as_any().downcast_ref::<EditPath>() else {
+            return false;
+        };
+        if other.skin != self.skin || other.slot != self.slot || other.name != self.name {
+            return false;
+        }
+        match (&mut self.edit, &other.edit) {
+            (ClipEdit::MoveVertices(ours), ClipEdit::MoveVertices(theirs)) => {
+                *ours = theirs.clone();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn label(&self) -> &str {
+        self.label
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

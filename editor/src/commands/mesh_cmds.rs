@@ -213,7 +213,7 @@ impl EditMesh {
     fn mesh<'a>(&self, doc: &'a mut Document) -> Option<&'a mut MeshAttachment> {
         match attachment_mut(doc, self.skin, self.slot, &self.name)? {
             Attachment::Mesh(mesh) => Some(mesh),
-            Attachment::Region(_) | Attachment::Clipping(_) => None,
+            Attachment::Region(_) | Attachment::Clipping(_) | Attachment::Path(_) => None,
         }
     }
 }

@@ -152,6 +152,22 @@ pub enum Attachment {
     Region(Region),
     Mesh(Mesh),
     Clipping(Clipping),
+    Path(Path),
+}
+
+/// A curve bones can be driven along (T-502).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Path {
+    /// Flattened `[x, y, x, y, …]`, like `Mesh::vertices`.
+    #[serde(default)]
+    pub vertices: Vec<f32>,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(default = "yes")]
+    pub constant_speed: bool,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: Extra,
 }
 
 /// A masking polygon (T-405).
@@ -264,6 +280,14 @@ pub struct Constraint {
     /// `[rotate, translate]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channels: Option<[bool; 2]>,
+
+    // ── Path constraints (T-502) ─────────────────────────────────────────
+    /// Slot name whose attachment is the path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    /// `[position, spacing, mix_rotate, mix_translate]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<[f32; 4]>,
 
     #[serde(flatten)]
     #[serde(default)]

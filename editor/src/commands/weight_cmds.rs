@@ -47,7 +47,7 @@ fn mesh_mut<'a>(
         .get_mut(&(slot, name.to_string()))?
     {
         Attachment::Mesh(mesh) => Some(mesh),
-        Attachment::Region(_) | Attachment::Clipping(_) => None,
+        Attachment::Region(_) | Attachment::Clipping(_) | Attachment::Path(_) => None,
     }
 }
 

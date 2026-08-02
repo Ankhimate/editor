@@ -278,6 +278,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     constraint_inspector(ui, state, bone_id);
     ik_inspector(ui, state, bone_id);
     physics_inspector(ui, state, bone_id);
+    path_constraint_inspector(ui, state, bone_id);
 
     // ── Slot section (T-205) ─────────────────────────────────────────────
     // Below the transform: it describes what the bone *shows*, which is the
@@ -852,6 +853,158 @@ fn physics_inspector(
     }
 }
 
+/// Path constraints driving the selected bone (T-502).
+fn path_constraint_inspector(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    bone_id: ankhimate_core::ids::BoneId,
+) {
+    use crate::commands::constraint_cmds::{
+        AddPathConstraint, PathProps, RemoveConstraint, SetPathProps,
+    };
+    use ankhimate_core::attachment::Attachment;
+    use ankhimate_core::constraints::Constraint;
+
+    let setup = state.session.can_edit_structure();
+    let existing: Vec<(ankhimate_core::ids::ConstraintId, String, usize, PathProps)> = state
+        .doc
+        .skeleton
+        .constraint_order
+        .iter()
+        .filter_map(|id| {
+            let Some(Constraint::Path(p)) = state.doc.skeleton.constraints.get(*id) else {
+                return None;
+            };
+            p.bones.contains(&bone_id).then(|| {
+                (
+                    *id,
+                    p.name.clone(),
+                    p.bones.len(),
+                    PathProps {
+                        position: p.position,
+                        spacing: p.spacing,
+                        mix_rotate: p.mix_rotate,
+                        mix_translate: p.mix_translate,
+                    },
+                )
+            })
+        })
+        .collect();
+
+    let mut edit: Option<(ankhimate_core::ids::ConstraintId, PathProps)> = None;
+    let mut remove: Option<ankhimate_core::ids::ConstraintId> = None;
+
+    for (id, name, count, props) in &existing {
+        let mut next = *props;
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{name} (path, {count} bones)"))
+                    .size(11.0)
+                    .strong(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(setup, egui::Button::new("✕").small())
+                    .on_hover_text("Delete this constraint")
+                    .clicked()
+                {
+                    remove = Some(*id);
+                }
+            });
+        });
+        for (label, value, range, hint) in [
+            (
+                "Position",
+                &mut next.position,
+                0.0..=1.0,
+                "Where the chain starts along the path — animate it to slide the chain",
+            ),
+            (
+                "Spacing",
+                &mut next.spacing,
+                0.0..=2.0,
+                "Gap between bones. 1 spreads them over the whole path.",
+            ),
+            (
+                "Rotate",
+                &mut next.mix_rotate,
+                0.0..=1.0,
+                "How much of the path's direction each bone takes",
+            ),
+            (
+                "Translate",
+                &mut next.mix_translate,
+                0.0..=1.0,
+                "How much of the path's position each bone takes",
+            ),
+        ] {
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [64.0, 18.0],
+                    egui::Label::new(egui::RichText::new(label).size(10.5)),
+                );
+                ui.add_enabled(setup, egui::Slider::new(value, range).max_decimals(2))
+                    .on_hover_text(hint);
+            });
+        }
+        if next != *props {
+            edit = Some((*id, next));
+        }
+    }
+
+    // Creating one needs a slot that actually holds a path, and the chain is the
+    // current bone selection — the same gesture that creates an IK target.
+    let paths: Vec<(ankhimate_core::ids::SlotId, String)> = state
+        .doc
+        .skeleton
+        .slots
+        .iter()
+        .filter(|(id, slot)| {
+            slot.attachment.as_deref().is_some_and(|name| {
+                matches!(
+                    state.doc.skeleton.skins[state.doc.skeleton.default_skin].get(*id, name),
+                    Some(Attachment::Path(_))
+                )
+            })
+        })
+        .map(|(id, slot)| (id, slot.name.clone()))
+        .collect();
+
+    if !paths.is_empty() {
+        ui.add_space(4.0);
+        let chain = state.session.selected_bones.clone();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Drive along").size(10.5));
+            egui::ComboBox::from_id_salt(("path_pick", bone_id))
+                .selected_text("choose a path…")
+                .show_ui(ui, |ui| {
+                    for (slot, name) in &paths {
+                        if ui.selectable_label(false, name).clicked() && setup {
+                            let bones = if chain.is_empty() {
+                                vec![bone_id]
+                            } else {
+                                chain.clone()
+                            };
+                            let label =
+                                format!("path {}", state.doc.skeleton.constraints.len() + 1);
+                            state.dispatch(Box::new(AddPathConstraint::new(label, *slot, bones)));
+                        }
+                    }
+                });
+        })
+        .response
+        .on_hover_text("Selected bones follow the chosen path, in selection order");
+    }
+
+    if let Some((id, props)) = edit {
+        state.dispatch(Box::new(SetPathProps::new(id, props)));
+    }
+    if let Some(id) = remove {
+        state.dispatch(Box::new(RemoveConstraint::new(id)));
+    }
+}
+
 /// The selected vertex's bone influences, as numbers (T-403).
 ///
 /// A heat map answers "roughly how much", which is what painting needs. It
@@ -1371,6 +1524,34 @@ fn attachment_inspector(
                 skin,
                 slot_id,
                 format!("{slot_name}_clip"),
+                200.0,
+            ))) {
+                state.session.mesh_edit = true;
+                state.session.selected_vertices.clear();
+            }
+        }
+        if ui
+            .add_enabled(
+                state.session.can_edit_structure(),
+                egui::Button::new("Add path"),
+            )
+            .on_hover_text(
+                "A curve to drive bones along — a tail, a tread, a belt, vines                  following a spline",
+            )
+            .clicked()
+        {
+            let skin = state.session.active_skin;
+            let slot_name = state
+                .doc
+                .skeleton
+                .slots
+                .get(slot_id)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| "slot".to_string());
+            if state.dispatch(Box::new(crate::commands::clip_cmds::AddPath::new(
+                skin,
+                slot_id,
+                format!("{slot_name}_path"),
                 200.0,
             ))) {
                 state.session.mesh_edit = true;

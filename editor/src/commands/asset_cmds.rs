@@ -384,8 +384,9 @@ impl RenameAsset {
                 let texture = match attachment {
                     Attachment::Region(r) => &mut r.texture,
                     Attachment::Mesh(m) => &mut m.texture,
-                    // Clips reference no asset, so a rename cannot touch them.
-                    Attachment::Clipping(_) => continue,
+                    // Clips and paths reference no asset, so a rename cannot
+                    // touch them.
+                    Attachment::Clipping(_) | Attachment::Path(_) => continue,
                 };
                 if texture == from {
                     *texture = to.to_string();
@@ -519,7 +520,7 @@ mod tests {
             .map(|a| match a {
                 Attachment::Region(r) => r.texture.clone(),
                 Attachment::Mesh(m) => m.texture.clone(),
-                Attachment::Clipping(_) => String::new(),
+                Attachment::Clipping(_) | Attachment::Path(_) => String::new(),
             })
             .collect();
         assert!(textures.contains(&"arm".to_string()));

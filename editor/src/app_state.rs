@@ -703,8 +703,8 @@ impl AppState {
                 Attachment::Mesh(mesh) => {
                     !mesh.weights.is_empty() && mesh.inverse_bind_matrices.is_empty()
                 }
-                // Clips carry no weights, so they never need binds.
-                Attachment::Region(_) | Attachment::Clipping(_) => false,
+                // Clips and paths carry no weights, so they never need binds.
+                Attachment::Region(_) | Attachment::Clipping(_) | Attachment::Path(_) => false,
             })
         });
         if !needs_binds {
