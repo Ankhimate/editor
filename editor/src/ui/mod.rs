@@ -3,6 +3,7 @@ pub mod atlas;
 pub mod canvas;
 pub mod draw_order;
 pub mod inspector;
+pub mod skins;
 pub mod startup;
 pub mod timeline;
 pub mod toolbar;
@@ -21,6 +22,7 @@ pub enum Tab {
     Timeline,
     DrawOrder,
     Assets,
+    Skins,
 }
 
 pub struct AppBehavior<'a> {
@@ -85,6 +87,11 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                         });
                     });
             }
+            Tab::Skins => {
+                egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                    skins::ui(ui, self.state);
+                });
+            }
         }
         UiResponse::None
     }
@@ -97,6 +104,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             Tab::Timeline => "Timeline".into(),
             Tab::DrawOrder => "Draw Order".into(),
             Tab::Assets => "Assets".into(),
+            Tab::Skins => "Skins".into(),
         }
     }
 

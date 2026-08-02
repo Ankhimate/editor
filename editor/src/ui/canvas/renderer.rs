@@ -163,7 +163,7 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
     let attachment = state
         .doc
         .skeleton
-        .resolve_slot(state.session.active_skin, slot_id)?;
+        .resolve_slot_many(&state.session.skin_stack(), slot_id)?;
 
     // Hidden slots draw nothing at all (T-505) — distinct from alpha 0, which
     // still costs a draw call and still blends.
@@ -709,7 +709,7 @@ pub fn render_bones(
         && let Some(ankhimate_core::attachment::Attachment::Region(region)) = state
             .doc
             .skeleton
-            .resolve_slot(state.session.active_skin, slot_id)
+            .resolve_slot_many(&state.session.skin_stack(), slot_id)
         && let Some(bone_world) = state.pose.worlds.get(slot.bone)
     {
         let pivot_screen = state.session.camera.world_to_screen(
@@ -774,7 +774,7 @@ pub fn render_bones(
         && let Some(Attachment::Mesh(mesh)) = state
             .doc
             .skeleton
-            .resolve_slot(state.session.active_skin, slot_id)
+            .resolve_slot_many(&state.session.skin_stack(), slot_id)
         && let Some(bone_world) = state.pose.worlds.get(slot.bone)
     {
         let skinned = !mesh.weights.is_empty() && !mesh.inverse_bind_matrices.is_empty();
@@ -1140,7 +1140,7 @@ pub fn render_bones(
             if let Some(ankhimate_core::attachment::Attachment::Mesh(mesh)) = state
                 .doc
                 .skeleton
-                .resolve_slot(state.session.active_skin, slot_id)
+                .resolve_slot_many(&state.session.skin_stack(), slot_id)
                 .filter(|_| weight_painting)
             {
                 let mut wgpu_vertices = Vec::new();
@@ -1256,7 +1256,7 @@ pub fn render_bones(
         if let Some(Attachment::Clipping(c)) = state
             .doc
             .skeleton
-            .resolve_slot(state.session.active_skin, slot_id)
+            .resolve_slot_many(&state.session.skin_stack(), slot_id)
         {
             let end = c.end_slot.as_ref().and_then(|name| {
                 state

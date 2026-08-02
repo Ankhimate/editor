@@ -682,14 +682,17 @@ key hides a slot at frame 10 and back at 20 with no interpolation artifacts; rou
 **Accept:** a footstep event fires exactly once per loop at the right time in a runtime unit test
 (including when dt overshoots the loop boundary); events survive save/load.
 
-### T-507 ∥ Skin manager + multi-skin composition
+### ✅ T-507 ∥ Skin manager + multi-skin composition
 **Deps:** T-105, T-301 · **Refs:** PLAN §2.4, §5 F-14
 - Skin panel: create/rename/delete/duplicate skins, per-slot attachment grid, drag an asset into a
   (slot, skin) cell, "copy attachments from skin".
 - **Composition:** `Session.active_skins: Vec<SkinId>` (ordered, first match wins, default-skin
   fallback last) so outfits combine, as tools with a global "style" switch cannot. `resolve()`
   takes a slice; the single-skin call becomes a one-element slice.
-- Runtime/export bake resolves composition to a flat skin.
+- **Deferred:** the per-slot attachment grid and drag-an-asset-into-a-cell. The panel manages skins
+  (create/rename/duplicate/delete/copy) and composition; per-cell assignment is the attachment
+  inspector'''s job today and a grid is a second way to do it. Runtime/export bake of a composed skin
+  lands with T-603.
 **Accept:** hat-skin + armor-skin active together render both, with the first winning on conflict
 (unit test on `resolve`); a skin rename updates every reference; export bakes the composed result.
 

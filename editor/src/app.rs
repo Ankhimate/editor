@@ -62,6 +62,7 @@ impl Default for AnkhimateApp {
         let inspector = tiles.insert_pane(Tab::Inspector);
         let draw_order = tiles.insert_pane(Tab::DrawOrder);
         let assets = tiles.insert_pane(Tab::Assets);
+        let skins = tiles.insert_pane(Tab::Skins);
         let tree = tiles.insert_pane(Tab::Hierarchy);
         let timeline = tiles.insert_pane(Tab::Timeline);
 
@@ -72,7 +73,7 @@ impl Default for AnkhimateApp {
         let inspector_tab = tiles.insert_tab_tile(vec![inspector]);
         // Assets and draw order are both "what is in the rig" browsers, so they
         // can share.
-        let library_tab = tiles.insert_tab_tile(vec![assets, draw_order]);
+        let library_tab = tiles.insert_tab_tile(vec![assets, draw_order, skins]);
         let tree_tab = tiles.insert_tab_tile(vec![tree]);
         let timeline_tab = tiles.insert_tab_tile(vec![timeline]);
 

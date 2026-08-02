@@ -1,4 +1,4 @@
-﻿//! Session state — what the user is *doing*, not what they have *made*
+//! Session state — what the user is *doing*, not what they have *made*
 //! (PLAN §3.2).
 //!
 //! Never undoable, never saved. Selecting a different bone or panning the camera
@@ -170,7 +170,16 @@ pub struct Session {
 
     // ── Rendering ────────────────────────────────────────────────────────
     /// Skin attachments resolve through (T-105).
+    /// The skin edits are written to, and the highest-priority one for display.
     pub active_skin: SkinId,
+    /// Extra skins layered under `active_skin` for display only (T-507).
+    ///
+    /// Composition is a *viewing* state, not a document one: which outfits are
+    /// worn together is a question the game asks at runtime, and baking it into
+    /// the rig would mean re-authoring to see a different combination. Edits
+    /// always go to `active_skin` so "where did that attachment land" has one
+    /// answer.
+    pub layered_skins: Vec<SkinId>,
     /// Content hash per asset — the GPU texture cache key (T-301). Not the
     /// `AssetId`: slotmap keys are recycled across documents, and an id-keyed
     /// cache would draw the previous project's pixels.
@@ -215,6 +224,19 @@ pub struct Session {
 }
 
 impl Session {
+    /// Skins to resolve against, in priority order: the active one first, then
+    /// any layered under it. The default skin is `resolve_many`'s own fallback.
+    pub fn skin_stack(&self) -> Vec<SkinId> {
+        let mut stack = vec![self.active_skin];
+        stack.extend(
+            self.layered_skins
+                .iter()
+                .copied()
+                .filter(|s| *s != self.active_skin),
+        );
+        stack
+    }
+
     pub fn new(active_skin: SkinId) -> Self {
         Self {
             camera: crate::ui::canvas::camera::Camera2D::default(),
@@ -244,6 +266,7 @@ impl Session {
             pending_pose: Vec::new(),
             locked_bones: SecondaryMap::new(),
             active_skin,
+            layered_skins: Vec::new(),
             texture_keys: SecondaryMap::new(),
             uploaded_textures: HashSet::new(),
             thumbnails: std::collections::HashMap::new(),
