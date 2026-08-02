@@ -288,7 +288,9 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                                     Constraint::Ik(ik) => Some(ik.mix),
                                     // An `IkMix` key pointed at a non-IK
                                     // constraint: nothing to blend from.
-                                    Constraint::Transform(_) | Constraint::Physics(_) => None,
+                                    Constraint::Transform(_)
+                                    | Constraint::Physics(_)
+                                    | Constraint::Path(_) => None,
                                 })
                             })
                             .unwrap_or(0.0);
@@ -312,7 +314,9 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                             .or_else(|| {
                                 skel.constraints.get(*constraint).and_then(|c| match c {
                                     Constraint::Ik(ik) => Some(ik.softness),
-                                    Constraint::Transform(_) | Constraint::Physics(_) => None,
+                                    Constraint::Transform(_)
+                                    | Constraint::Physics(_)
+                                    | Constraint::Path(_) => None,
                                 })
                             })
                             .unwrap_or(0.0);
@@ -338,7 +342,9 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                                         tc.mix_scale,
                                         tc.mix_shear,
                                     ]),
-                                    Constraint::Ik(_) | Constraint::Physics(_) => None,
+                                    Constraint::Ik(_)
+                                    | Constraint::Physics(_)
+                                    | Constraint::Path(_) => None,
                                 })
                             })
                             .unwrap_or([0.0; 4]);
@@ -504,6 +510,7 @@ fn apply_constraints(
                 };
                 apply_physics(skel, out, id, p, physics, dt);
             }
+            Constraint::Path(p) => apply_path_constraint(skel, out, p),
         }
     }
 }
@@ -680,6 +687,85 @@ fn apply_physics(
     }
     update_world_of(skel, out, bone);
     update_subtree(skel, out, bone);
+}
+
+/// Drive a chain of bones along a path attachment (T-502).
+///
+/// Each bone is placed at its share of the path and turned to face along it,
+/// blended by the constraint's mixes. Positions are written as **local**
+/// transforms, like every other constraint, so children follow — a bone driven
+/// along a path can still have art and its own hierarchy hanging off it.
+fn apply_path_constraint(
+    skel: &Skeleton,
+    out: &mut Pose,
+    constraint: &crate::constraints::PathConstraint,
+) {
+    // The path is an attachment on a slot, resolved through the default skin —
+    // a path that changed with the outfit would move the rig when a hat is
+    // swapped, which is not what skins are for.
+    let Some(slot) = skel.slots.get(constraint.slot) else {
+        return;
+    };
+    let Some(name) = slot.attachment.as_deref() else {
+        return;
+    };
+    let Some(crate::attachment::Attachment::Path(path)) = skel
+        .skins
+        .get(skel.default_skin)
+        .and_then(|s| s.get(constraint.slot, name))
+    else {
+        return;
+    };
+
+    // Path vertices are in its own bone's local space; sampling in world space
+    // is what lets the driven bones live anywhere in the hierarchy.
+    let path_world = out.world(slot.bone);
+    let sampled = path.sample(&path_world);
+    if sampled.length() <= 1e-6 {
+        return;
+    }
+
+    // `constant_speed` picks which of the two spacings the chain gets: by
+    // distance (bones evenly spread however the curve bends) or by vertex index
+    // (bones crowd wherever the path has detail).
+    let placements = if path.constant_speed {
+        sampled.spread(
+            constraint.bones.len(),
+            constraint.position,
+            constraint.spacing,
+        )
+    } else {
+        sampled.spread_by_index(
+            constraint.bones.len(),
+            constraint.position,
+            constraint.spacing,
+        )
+    };
+
+    for (&bone, (target, angle)) in constraint.bones.iter().zip(placements) {
+        if skel.bones.get(bone).is_none() {
+            continue;
+        }
+        // Where the bone is now, so a partial mix means "part of the way there".
+        let current = out.world_position(bone);
+        let current_rotation = out.world_decomposed(bone).rotation;
+
+        if constraint.mix_translate != 0.0 {
+            let delta = (target - current) * constraint.mix_translate;
+            let local_delta = parent_inverse_direction(skel, out, bone, delta);
+            if let Some(local) = out.locals.get_mut(bone) {
+                local.position += local_delta;
+            }
+        }
+        if constraint.mix_rotate != 0.0 {
+            let delta = wrap_angle(angle - current_rotation) * constraint.mix_rotate;
+            if let Some(local) = out.locals.get_mut(bone) {
+                local.rotation = wrap_angle(local.rotation + delta);
+            }
+        }
+        update_world_of(skel, out, bone);
+        update_subtree(skel, out, bone);
+    }
 }
 
 /// Rotate a world-space direction into a bone's parent space.
@@ -2320,6 +2406,170 @@ mod tests {
         assert_eq!(
             pose.slot_dark_colors.get(slot).copied(),
             Some([0.2, 0.0, 0.4, 1.0])
+        );
+    }
+    // ── Path constraints (T-502) ─────────────────────────────────────────
+
+    /// The acceptance case: a 5-bone tail spaced evenly along a curved path,
+    /// and sliding along it when the position changes.
+    #[test]
+    fn a_five_bone_tail_follows_a_path_with_even_spacing() {
+        use crate::attachment::{Attachment, PathAttachment};
+        use crate::constraints::PathConstraint;
+        use crate::slot::Slot;
+
+        let mut skel = Skeleton::new();
+        // The path lives on its own bone at the origin.
+        let path_bone = skel.add_bone(bone("path", None));
+        let slot = skel.add_slot(Slot {
+            attachment: Some("curve".into()),
+            ..Slot::new("path_slot".into(), path_bone)
+        });
+        // An L: 100 along +X, then 100 up. Length 200.
+        let default = skel.default_skin;
+        skel.skins[default].set(
+            slot,
+            "curve".to_string(),
+            Attachment::Path(PathAttachment {
+                vertices: vec![
+                    glam::vec2(0.0, 0.0),
+                    glam::vec2(100.0, 0.0),
+                    glam::vec2(100.0, 100.0),
+                ],
+                closed: false,
+                constant_speed: true,
+            }),
+        );
+
+        // Five unparented bones, so each one's placement is its own.
+        let tail: Vec<BoneId> = (0..5)
+            .map(|i| skel.add_bone(bone(&format!("t{i}"), None)))
+            .collect();
+        let cid = skel.add_constraint(Constraint::Path(PathConstraint::new(
+            "tail",
+            slot,
+            tail.clone(),
+        )));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        // Evenly spaced by *distance*: 0, 50, 100, 150, 200 along the L.
+        let expected = [
+            glam::vec2(0.0, 0.0),
+            glam::vec2(50.0, 0.0),
+            glam::vec2(100.0, 0.0),
+            glam::vec2(100.0, 50.0),
+            glam::vec2(100.0, 100.0),
+        ];
+        for (i, (&b, want)) in tail.iter().zip(expected).enumerate() {
+            let got = pose.world_position(b);
+            assert!(
+                (got - want).length() < 0.5,
+                "bone {i} at {got:?}, expected {want:?}"
+            );
+        }
+
+        // Sliding the position moves the whole chain along the curve.
+        let Some(Constraint::Path(p)) = skel.constraints.get_mut(cid) else {
+            panic!("it is a path constraint");
+        };
+        p.position = 0.25;
+        p.spacing = 0.5;
+        evaluate(&skel, &[], &mut pose);
+        let first = pose.world_position(tail[0]);
+        assert!(
+            (first - glam::vec2(50.0, 0.0)).length() < 0.5,
+            "the chain slid to a quarter along: {first:?}"
+        );
+    }
+
+    /// Bones take the path's *direction*, which is what makes a tail read as a
+    /// tail rather than a row of dots.
+    #[test]
+    fn bones_on_a_path_face_along_it() {
+        use crate::attachment::{Attachment, PathAttachment};
+        use crate::constraints::PathConstraint;
+        use crate::slot::Slot;
+
+        let mut skel = Skeleton::new();
+        let path_bone = skel.add_bone(bone("path", None));
+        let slot = skel.add_slot(Slot {
+            attachment: Some("curve".into()),
+            ..Slot::new("path_slot".into(), path_bone)
+        });
+        let default = skel.default_skin;
+        skel.skins[default].set(
+            slot,
+            "curve".to_string(),
+            Attachment::Path(PathAttachment {
+                // Straight up, so every bone should end at 90°.
+                vertices: vec![glam::vec2(0.0, 0.0), glam::vec2(0.0, 100.0)],
+                closed: false,
+                constant_speed: true,
+            }),
+        );
+        let tail: Vec<BoneId> = (0..3)
+            .map(|i| skel.add_bone(bone(&format!("t{i}"), None)))
+            .collect();
+        skel.add_constraint(Constraint::Path(PathConstraint::new(
+            "tail",
+            slot,
+            tail.clone(),
+        )));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        for (i, &b) in tail.iter().enumerate() {
+            let angle = pose.world_decomposed(b).rotation.to_degrees();
+            assert!((angle - 90.0).abs() < 1.0, "bone {i} at {angle}°");
+        }
+    }
+
+    /// A path attachment that is missing, empty or degenerate must leave the
+    /// bones where they were rather than collapsing them onto the origin.
+    #[test]
+    fn a_degenerate_path_leaves_its_bones_alone() {
+        use crate::attachment::{Attachment, PathAttachment};
+        use crate::constraints::PathConstraint;
+        use crate::slot::Slot;
+
+        let mut skel = Skeleton::new();
+        let path_bone = skel.add_bone(bone("path", None));
+        let slot = skel.add_slot(Slot {
+            attachment: Some("curve".into()),
+            ..Slot::new("path_slot".into(), path_bone)
+        });
+        let default = skel.default_skin;
+        skel.skins[default].set(
+            slot,
+            "curve".to_string(),
+            Attachment::Path(PathAttachment {
+                // Two coincident points: no length, no direction.
+                vertices: vec![glam::vec2(5.0, 5.0), glam::vec2(5.0, 5.0)],
+                closed: false,
+                constant_speed: true,
+            }),
+        );
+        let driven = skel.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(42.0, 7.0),
+                ..Transform::default()
+            },
+            ..bone("driven", None)
+        });
+        skel.add_constraint(Constraint::Path(PathConstraint::new(
+            "tail",
+            slot,
+            vec![driven],
+        )));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        let at = pose.world_position(driven);
+        assert!(
+            (at - glam::vec2(42.0, 7.0)).length() < 1e-3,
+            "a zero-length path drives nothing: {at:?}"
         );
     }
 }

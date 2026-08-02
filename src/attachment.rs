@@ -294,11 +294,50 @@ impl ClippingAttachment {
     }
 }
 
+/// A curve bones can be driven along (T-502).
+///
+/// Authored as a polyline with the same vertex tools a mesh uses. The stored
+/// shape *is* the polyline: a bezier nobody can measure is no use to a
+/// constraint, and flattening at author time means the editor and the runtime
+/// walk identical geometry rather than two different subdivisions of one curve.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PathAttachment {
+    /// Vertices in the bone's local space, in order.
+    pub vertices: Vec<Vec2>,
+    /// Whether the last vertex connects back to the first.
+    #[serde(default)]
+    pub closed: bool,
+    /// Space bones by distance rather than by vertex index.
+    ///
+    /// On by default because the alternative bunches a chain wherever the curve
+    /// is tight, which is never what anyone wants and is hard to diagnose.
+    #[serde(default = "yes")]
+    pub constant_speed: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl PathAttachment {
+    /// Flatten into world space for sampling.
+    pub fn sample(&self, world: &crate::transforms::Affine2) -> crate::path::SampledPath {
+        crate::path::SampledPath::new(
+            self.vertices
+                .iter()
+                .map(|v| world.transform_point(*v))
+                .collect(),
+            self.closed,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Attachment {
     Region(RegionAttachment),
     Mesh(MeshAttachment),
     Clipping(ClippingAttachment),
+    Path(PathAttachment),
 }
 
 #[cfg(test)]
