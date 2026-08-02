@@ -29,6 +29,14 @@ perf.data*
 flamegraph.svg
 /dist/
 
+# ── Third-party rigs ─────────────────────────────────────────────────────────
+# Rigs authored in other tools, and anything converted from them. Converting a
+# file does not relicense the art inside it, so these stay local however they
+# arrived. Committed samples are the generated ones (walker.ankh, minimal.ankh).
+/samples/skf/
+/samples/skellina.ankh
+/samples/*_imported.ankh
+
 # ── Scratch output ───────────────────────────────────────────────────────────
 # Exported renders and test rigs written while trying things out. Real sample
 # projects live in samples/ and are committed.
