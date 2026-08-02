@@ -40,6 +40,7 @@ flamegraph.svg
 # exist while a specific import is being chased.
 /formats/examples/import_skf_once.rs
 /formats/examples/verify_once.rs
+/preview.png
 
 # ── Scratch output ───────────────────────────────────────────────────────────
 # Exported renders and test rigs written while trying things out. Real sample
