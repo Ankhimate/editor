@@ -773,9 +773,37 @@ mod tests {
         assert_eq!(loaded.skeleton.slots.len(), 10);
         assert_eq!(loaded.assets.images.len(), 10, "art came back with the rig");
 
-        let anim = loaded.animations.values().next().expect("the walk cycle");
-        assert_eq!(anim.name, "walk");
+        let anim = loaded
+            .animations
+            .values()
+            .find(|a| a.name == "walk")
+            .expect("the walk cycle");
         assert_eq!(anim.events.len(), 2, "two footsteps");
+
+        // The IK clip has to actually bend the leg, which is the whole reason
+        // the sample ships a constraint: a demo that needs a slider found first
+        // is not a demo.
+        let ik_clip = loaded
+            .animations
+            .values()
+            .find(|a| a.name == "leg_ik")
+            .expect("the IK clip");
+        let shin = loaded
+            .skeleton
+            .bones
+            .iter()
+            .find(|(_, b)| b.name == "shin_l")
+            .map(|(id, _)| id)
+            .expect("a near shin");
+        let mut ik_pose = ankhimate_core::pose::Pose::new();
+        ankhimate_core::pose::evaluate(&loaded.skeleton, &[(ik_clip, 0.0, 1.0)], &mut ik_pose);
+        let knee_start = ik_pose.world_decomposed(shin).rotation;
+        ankhimate_core::pose::evaluate(&loaded.skeleton, &[(ik_clip, 0.25, 1.0)], &mut ik_pose);
+        let knee_mid = ik_pose.world_decomposed(shin).rotation;
+        assert!(
+            (knee_start - knee_mid).abs() > 0.1,
+            "the knee solved to a different angle as the target moved:              {knee_start} vs {knee_mid}"
+        );
 
         // It has to actually move: the same rig at two times must differ.
         let mut pose = ankhimate_core::pose::Pose::new();

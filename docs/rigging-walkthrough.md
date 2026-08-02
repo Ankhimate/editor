@@ -37,9 +37,18 @@ the change becomes a key.
 **Scrub the timeline.** The dopesheet rows are bone properties; the strip under
 the ruler is the event lane, with two `footstep` markers at 0.0 and 0.5.
 
-**Find `leg_ik_l`** — select `thigh_l` and look at the Constraints section. Its
-mix is `0`, so it does nothing yet. Turn it up and drag the `foot_target_l` bone:
-the whole leg now follows the target instead of being posed joint by joint.
+**Try the IK.** In Setup mode, select `foot_target_l` and drag it. The near
+leg's thigh *and* shin both solve to reach it — that is IK. Rotating `thigh_l`
+by hand and watching the shin trail along is FK, which is a different thing and
+easy to mistake for the same one.
+
+Then switch the clip to **`leg_ik`** and play. It keys the foot target only; the
+leg works out its own angles. Compare its dopesheet with `walk`, which keys four
+bones by hand to do a similar job.
+
+The two clips share one rig because the constraint's mix is *keyed*: `walk` sets
+it to 0 at frame 0 so the hand-authored FK plays untouched, while Setup and
+`leg_ik` leave it at 1. A constraint is not all-or-nothing for the whole rig.
 
 ## Building one from scratch
 
