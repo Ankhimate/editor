@@ -338,6 +338,39 @@ pub fn stretch_factor(root_pos: Vec2, target_pos: Vec2, reach: f32, limit: f32) 
     (distance / reach).min(limit.max(1.0))
 }
 
+/// Enforce the requested bend side on a solved chain.
+///
+/// FABRIK's nudge above chooses the side it converges *from*; this checks the
+/// side it actually landed on and mirrors the interior joints across the
+/// root→tip axis if they disagree. Reflection preserves every segment length
+/// exactly, so the mirrored chain still reaches, and the result is deterministic
+/// rather than dependent on how the iteration happened to go.
+pub fn enforce_bend(points: &mut [Vec2], bend_dir: f32) {
+    if bend_dir == 0.0 || points.len() < 3 {
+        return;
+    }
+    let (root, tip) = (points[0], points[points.len() - 1]);
+    let axis = tip - root;
+    if axis.length_squared() < 1e-9 {
+        return;
+    }
+    // Signed area of the chain against its own chord: positive is one side.
+    let side: f32 = points[1..points.len() - 1]
+        .iter()
+        .map(|p| axis.perp_dot(*p - root))
+        .sum();
+    if side == 0.0 || side.signum() == bend_dir.signum() {
+        return;
+    }
+    let unit = axis.normalize_or_zero();
+    for point in &mut points[1..] {
+        let offset = *point - root;
+        let along = offset.dot(unit);
+        // Reflect across the chord: keep the component along it, flip the rest.
+        *point = root + unit * along - (offset - unit * along);
+    }
+}
+
 /// Iterations FABRIK may run before giving up on a chain.
 ///
 /// FABRIK converges quickly — a 3-bone chain is usually within tolerance in
@@ -365,13 +398,36 @@ pub const FABRIK_TOLERANCE: f32 = 0.01;
 /// no gimbal-adjacent failure at full extension — the cases where a CCD chain
 /// visibly judders. It is also deterministic and allocation-free here, which
 /// `evaluate`'s contract requires (PLAN §2.6).
-pub fn solve_fabrik(joints: &[Vec2], lengths: &[f32], target: Vec2) -> Vec<Vec2> {
+pub fn solve_fabrik(joints: &[Vec2], lengths: &[f32], target: Vec2, bend_dir: f32) -> Vec<Vec2> {
     let mut points = joints.to_vec();
     if points.len() < 2 || lengths.len() + 1 != points.len() {
         return points;
     }
     let root = points[0];
     let total: f32 = lengths.iter().sum();
+
+    // Which side the chain folds toward is *not* decided by reaching the target:
+    // a chain of three or more bones has infinitely many solutions, and FABRIK
+    // converges to whichever is nearest where it started. A rig authored with
+    // every rotation at zero — a flat, fully-extended chain — starts exactly on
+    // the boundary, so the elbow picks a side by floating-point noise and a leg
+    // can bend backwards.
+    //
+    // Nudging the interior joints off the axis before iterating removes the
+    // ambiguity: `bend_dir` chooses the side, and FABRIK converges to the
+    // nearest solution, which is now the intended one.
+    if bend_dir != 0.0 && points.len() > 2 {
+        let axis = target - root;
+        if axis.length_squared() > 1e-9 {
+            let normal = glam::vec2(-axis.y, axis.x).normalize_or_zero() * bend_dir.signum();
+            // A fraction of the shortest segment: enough to break the tie, small
+            // enough that an already-bent chain keeps the shape it had.
+            let nudge = lengths.iter().cloned().fold(f32::MAX, f32::min) * 0.05;
+            for point in &mut points[1..lengths.len()] {
+                *point += normal * nudge;
+            }
+        }
+    }
 
     // Out of reach: there is one answer and it is exact — point straight at the
     // target. Iterating would only approach it from below.

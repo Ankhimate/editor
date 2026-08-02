@@ -650,6 +650,10 @@ same dt sequence produce identical output; export at 30 fps and playback at 30 f
 **Deps:** T-104, T-207 · **Refs:** PLAN §2.5, §5 F-1
 - Implement the reserved `softness` and `stretch` fields; chains longer than 2 via FABRIK
   (documented iteration count/tolerance, deterministic).
+- **`bend_direction` applies to FABRIK too.** A chain of 3+ bones has infinitely many solutions;
+  reaching the target does not pick one. A rig authored with every rotation at zero starts perfectly
+  straight — on the boundary — where the fold side is decided by floating-point noise. The chain is
+  nudged off-axis before iterating and mirrored afterwards if it still landed on the wrong side.
 - Keyable IK properties beyond mix: `bend_direction` (stepped), `softness`, `stretch` — timelines
   `IkBendDirection`, `IkSoftness` (other editors key constraint direction and IK mode; we cover
   both with typed timelines).
