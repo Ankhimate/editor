@@ -270,9 +270,33 @@ pub struct Animation {
     pub looping: bool,
     #[serde(default)]
     pub timelines: Vec<Timeline>,
+    /// Named triggers for the runtime (T-506).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<Event>,
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,
+}
+
+/// A named trigger at a point in a clip (T-506).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Event {
+    pub time: f32,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub int_value: i32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub float_value: f32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub string_value: String,
+}
+
+fn is_zero_i32(v: &i32) -> bool {
+    *v == 0
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// A timeline, tagged by kind with its target named.
