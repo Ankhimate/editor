@@ -24,9 +24,16 @@ fn main() -> eframe::Result {
             .with_transparent(true),
         ..Default::default()
     };
+    // A path on the command line opens that project straight away:
+    //
+    //     cargo run -p ankhimate-editor -- samples/walker.ankh
+    //
+    // Worth the six lines — "did you reopen the file after regenerating it?" is
+    // otherwise an invisible failure that looks exactly like a bug in the rig.
+    let open = std::env::args().nth(1).map(std::path::PathBuf::from);
     eframe::run_native(
         "Ankhimate",
         options,
-        Box::new(|cc| Ok(Box::new(app::AnkhimateApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(app::AnkhimateApp::with_file(cc, open)))),
     )
 }

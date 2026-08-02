@@ -21,6 +21,11 @@ pub struct AnkhimateApp {
 
 impl AnkhimateApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::with_file(cc, None)
+    }
+
+    /// Start up, optionally opening a project immediately.
+    pub fn with_file(cc: &eframe::CreationContext<'_>, open: Option<std::path::PathBuf>) -> Self {
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
         cc.egui_ctx.set_fonts(fonts);
@@ -44,13 +49,29 @@ impl AnkhimateApp {
         let config = crate::config::Config::load();
         let show_startup = !config.skip_startup;
 
-        Self {
+        let mut app = Self {
             theme: default_theme,
             available_themes,
             config,
             show_startup,
             ..Default::default()
+        };
+
+        if let Some(path) = open {
+            match crate::fileops::open_path(&mut app.state, &path) {
+                crate::fileops::FileOutcome::Opened(path) => {
+                    app.status = Some(format!("Opened {}", path.display()));
+                    app.config.touch_recent(&path);
+                    app.current_path = Some(path);
+                    // A file was asked for by name; the startup window would
+                    // only be in the way.
+                    app.show_startup = false;
+                }
+                crate::fileops::FileOutcome::Error(e) => app.status = Some(e),
+                _ => {}
+            }
         }
+        app
     }
 }
 

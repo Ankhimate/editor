@@ -2118,4 +2118,43 @@ mod tests {
         state.dispatch(Box::new(CreateBone::new(bone("a"))));
         assert_eq!(state.history.undo_depth(), 1);
     }
+
+    /// Load a real rig through the *editor's* path and check the constraints
+    /// actually ran. `evaluate` doing the right thing in isolation is not the
+    /// same claim as the editor showing it.
+    #[test]
+    fn the_editor_load_path_solves_constraints() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("samples")
+            .join("skellina.ankh");
+        if !path.exists() {
+            eprintln!("skipping: no local import at {}", path.display());
+            return;
+        }
+        let mut state = AppState::default();
+        let outcome = crate::fileops::open_path(&mut state, &path);
+        assert!(
+            matches!(outcome, crate::fileops::FileOutcome::Opened(_)),
+            "the rig opened"
+        );
+        assert_eq!(state.session.work_mode, WorkMode::Setup, "opens in Setup");
+
+        let by_name = |n: &str| {
+            state
+                .doc
+                .skeleton
+                .bones
+                .iter()
+                .find(|(_, b)| b.name == n)
+                .map(|(id, _)| id)
+        };
+        let shoulder = by_name("Right Shoulder").expect("the rig has an upper arm");
+        let rotation = state.pose.world_decomposed(shoulder).rotation.to_degrees();
+        assert!(
+            rotation.abs() > 5.0,
+            "IK turned the upper arm; it is at {rotation}°, i.e. still in the rest pose"
+        );
+    }
 }
