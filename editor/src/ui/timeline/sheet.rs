@@ -166,7 +166,12 @@ pub fn ui(
                         egui::Rect::from_center_size(center, egui::vec2(DIAMOND_R * 2.4, ROW_H));
                     let resp = ui.interact(
                         hit,
-                        ui.id().with(("tl_key", data.addr.stable_id(), k.index)),
+                        // The row index is part of the id because a document may
+                        // legally hold two timelines for one property — an
+                        // importer that emits X and Y as separate tracks, say.
+                        // Addressing by target alone made those rows share ids,
+                        // and egui reports the clash across the whole panel.
+                        ui.id().with(("tl_key", i, data.addr.stable_id(), k.index)),
                         egui::Sense::click_and_drag(),
                     );
                     if resp.clicked() {
