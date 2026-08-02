@@ -986,7 +986,10 @@ fn apply_fabrik(
         return;
     }
 
-    let solved = solve_fabrik(&joints, &lengths, target_pos);
+    let mut solved = solve_fabrik(&joints, &lengths, target_pos, ik.bend_direction);
+    // Reaching the target is one constraint; which way the knee breaks is
+    // another, and only the second is a matter of taste the rig has to state.
+    crate::constraints::enforce_bend(&mut solved, ik.bend_direction);
 
     // Rotate each bone toward its solved segment, in order, re-deriving world
     // transforms as we go so each bone measures its delta against a parent that
@@ -2752,5 +2755,99 @@ mod tests {
         let tip = pose.world_tip(&skel, lower);
         let miss = (tip - pose.world_position(target)).length();
         assert!(miss < 5.0, "the chain reached its target, {miss} away");
+    }
+    /// Reaching a target is one constraint; which way the knee breaks is
+    /// another. A three-bone chain has infinitely many solutions, and a rig
+    /// authored with every rotation at zero starts perfectly straight — exactly
+    /// on the boundary, where the fold side is decided by floating-point noise.
+    /// `bend_direction` has to settle it, or a leg bends backwards.
+    #[test]
+    fn a_straight_three_bone_chain_bends_the_way_it_was_told() {
+        let build = |bend: f32| {
+            let mut skel = Skeleton::new();
+            // Three 100-unit segments, all pointing +X, nothing rotated.
+            let a = skel.add_bone(bone("a", None));
+            let b = skel.add_bone(Bone {
+                local_transform: Transform {
+                    position: glam::vec2(100.0, 0.0),
+                    ..Transform::default()
+                },
+                ..bone("b", Some(a))
+            });
+            let c = skel.add_bone(Bone {
+                local_transform: Transform {
+                    position: glam::vec2(100.0, 0.0),
+                    ..Transform::default()
+                },
+                ..bone("c", Some(b))
+            });
+            // Well inside the chain's reach, so it must fold to get there.
+            let target = skel.add_bone(Bone {
+                local_transform: Transform {
+                    position: glam::vec2(150.0, 0.0),
+                    ..Transform::default()
+                },
+                ..bone("target", None)
+            });
+            skel.add_constraint(Constraint::Ik(IkConstraint {
+                bones: vec![a, b, c],
+                bend_direction: bend,
+                mix: 1.0,
+                ..IkConstraint::two_bone("chain", target, [a, b])
+            }));
+            let mut pose = Pose::new();
+            evaluate(&skel, &[], &mut pose);
+            // Which side of the root→target axis the middle joints ended up on.
+            pose.world_position(b).y + pose.world_position(c).y
+        };
+
+        let positive = build(1.0);
+        let negative = build(-1.0);
+        assert!(positive > 10.0, "a positive bend folds one way: {positive}");
+        assert!(
+            negative < -10.0,
+            "and a negative bend the other: {negative}"
+        );
+    }
+
+    /// The same rig solved twice must fold the same way. Before the bend was
+    /// honoured this was a coin flip from a straight start.
+    #[test]
+    fn a_bend_is_deterministic_across_runs() {
+        let run = || {
+            let mut skel = Skeleton::new();
+            let a = skel.add_bone(bone("a", None));
+            let b = skel.add_bone(Bone {
+                local_transform: Transform {
+                    position: glam::vec2(80.0, 0.0),
+                    ..Transform::default()
+                },
+                ..bone("b", Some(a))
+            });
+            let c = skel.add_bone(Bone {
+                local_transform: Transform {
+                    position: glam::vec2(80.0, 0.0),
+                    ..Transform::default()
+                },
+                ..bone("c", Some(b))
+            });
+            let target = skel.add_bone(Bone {
+                local_transform: Transform {
+                    position: glam::vec2(120.0, 0.0),
+                    ..Transform::default()
+                },
+                ..bone("target", None)
+            });
+            skel.add_constraint(Constraint::Ik(IkConstraint {
+                bones: vec![a, b, c],
+                bend_direction: 1.0,
+                mix: 1.0,
+                ..IkConstraint::two_bone("chain", target, [a, b])
+            }));
+            let mut pose = Pose::new();
+            evaluate(&skel, &[], &mut pose);
+            (pose.world_position(b), pose.world_position(c))
+        };
+        assert_eq!(run(), run());
     }
 }
