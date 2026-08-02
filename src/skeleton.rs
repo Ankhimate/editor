@@ -104,9 +104,21 @@ impl Skeleton {
     /// fallback to the default skin (PLAN §2.4 — the **only** way renderers should
     /// obtain an attachment).
     pub fn resolve(&self, active: SkinId, slot: SlotId, name: &str) -> Option<&Attachment> {
-        self.skins
-            .get(active)
-            .and_then(|skin| skin.get(slot, name))
+        self.resolve_many(&[active], slot, name)
+    }
+
+    /// Resolve against **several** active skins, first match winning (T-507).
+    ///
+    /// Composition rather than one global "style": a hat skin and an armor skin
+    /// should be wearable together, and a tool that can only have one active
+    /// forces every combination to exist as its own skin. Order is priority, so
+    /// the caller decides which layer wins a conflict, and the default skin is
+    /// always the last fallback — a slot the outfits say nothing about still
+    /// shows its base art rather than vanishing.
+    pub fn resolve_many(&self, active: &[SkinId], slot: SlotId, name: &str) -> Option<&Attachment> {
+        active
+            .iter()
+            .find_map(|id| self.skins.get(*id).and_then(|skin| skin.get(slot, name)))
             .or_else(|| {
                 self.skins
                     .get(self.default_skin)
@@ -116,8 +128,13 @@ impl Skeleton {
 
     /// Resolve whatever the slot currently points at, if anything.
     pub fn resolve_slot(&self, active: SkinId, slot: SlotId) -> Option<&Attachment> {
+        self.resolve_slot_many(&[active], slot)
+    }
+
+    /// [`Self::resolve_slot`] against several active skins (T-507).
+    pub fn resolve_slot_many(&self, active: &[SkinId], slot: SlotId) -> Option<&Attachment> {
         let name = self.slots.get(slot)?.attachment.as_deref()?;
-        self.resolve(active, slot, name)
+        self.resolve_many(active, slot, name)
     }
 
     /// Insert a skin and return its id.
@@ -585,5 +602,100 @@ mod tests {
         skel.remove_constraint(first);
         assert_eq!(skel.constraint_order, vec![second]);
         assert_eq!(skel.ordered_constraints().count(), 1);
+    }
+    /// The acceptance case for T-507: a hat skin and an armor skin worn
+    /// together resolve both, and the first listed wins a conflict.
+    #[test]
+    fn composed_skins_layer_with_the_first_winning() {
+        use crate::attachment::{Attachment, ClippingAttachment};
+
+        let mut skel = Skeleton::new();
+        let bone = skel.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 1.0,
+            local_transform: Transform::default(),
+            inherit: Inherit::default(),
+            color: Bone::default_color(),
+        });
+        let head = skel.add_slot(Slot::new("head".into(), bone));
+        let torso = skel.add_slot(Slot::new("torso".into(), bone));
+        let feet = skel.add_slot(Slot::new("feet".into(), bone));
+
+        let clip = |n: f32| {
+            Attachment::Clipping(ClippingAttachment {
+                vertices: vec![glam::vec2(n, 0.0)],
+                end_slot: None,
+            })
+        };
+        let marker = |a: &Attachment| match a {
+            Attachment::Clipping(c) => c.vertices[0].x,
+            _ => -1.0,
+        };
+
+        // Base art for every slot, plus two outfits that each dress one slot —
+        // and both dress the torso, which is the conflict.
+        let default = skel.default_skin;
+        for (slot, name) in [(head, "head"), (torso, "torso"), (feet, "feet")] {
+            skel.skins[default].set(slot, name.to_string(), clip(0.0));
+        }
+        let hat = skel.add_skin(crate::skin::Skin::new("hat"));
+        skel.skins[hat].set(head, "head".to_string(), clip(1.0));
+        skel.skins[hat].set(torso, "torso".to_string(), clip(1.0));
+        let armor = skel.add_skin(crate::skin::Skin::new("armor"));
+        skel.skins[armor].set(torso, "torso".to_string(), clip(2.0));
+
+        // Hat first: it wins the torso.
+        let stack = [hat, armor];
+        assert_eq!(
+            marker(skel.resolve_many(&stack, head, "head").unwrap()),
+            1.0,
+            "the hat skin dressed the head"
+        );
+        assert_eq!(
+            marker(skel.resolve_many(&stack, torso, "torso").unwrap()),
+            1.0,
+            "first match wins the conflict"
+        );
+        assert_eq!(
+            marker(skel.resolve_many(&stack, feet, "feet").unwrap()),
+            0.0,
+            "a slot no outfit mentions falls back to the default skin"
+        );
+
+        // Reverse the priority and the armor takes the torso instead.
+        let stack = [armor, hat];
+        assert_eq!(
+            marker(skel.resolve_many(&stack, torso, "torso").unwrap()),
+            2.0
+        );
+        assert_eq!(
+            marker(skel.resolve_many(&stack, head, "head").unwrap()),
+            1.0,
+            "the hat still dresses the head; only the conflict changed"
+        );
+    }
+
+    #[test]
+    fn resolving_against_no_skins_still_finds_the_default() {
+        use crate::attachment::{Attachment, ClippingAttachment};
+
+        let mut skel = Skeleton::new();
+        let bone = skel.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 1.0,
+            local_transform: Transform::default(),
+            inherit: Inherit::default(),
+            color: Bone::default_color(),
+        });
+        let slot = skel.add_slot(Slot::new("art".into(), bone));
+        let default = skel.default_skin;
+        skel.skins[default].set(
+            slot,
+            "art".to_string(),
+            Attachment::Clipping(ClippingAttachment::default()),
+        );
+        assert!(skel.resolve_many(&[], slot, "art").is_some());
     }
 }
