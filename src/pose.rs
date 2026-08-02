@@ -117,7 +117,26 @@ impl Pose {
 /// `out` is reused across calls: it is reset on entry, so callers can keep one
 /// `Pose` per viewport and avoid reallocating every frame.
 pub fn evaluate(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut Pose) {
-    evaluate_inner(skel, anims, None, 0.0, out)
+    evaluate_inner(skel, anims, None, None, 0.0, out)
+}
+
+/// [`evaluate`] with local transforms overridden for some bones.
+///
+/// The editor's in-flight drag: a bone being dragged has a local transform that
+/// is not in the document yet, and the pose has to reflect it *before*
+/// constraints run. Overlaying it afterwards — which is what the editor used to
+/// do — means a dragged IK target moves while the chain that should follow it
+/// does not, until the drag ends and a real evaluate catches up.
+///
+/// Overrides sit exactly where an animation's output would: after sampling,
+/// before constraints. That is what makes a preview behave like the real thing.
+pub fn evaluate_posed(
+    skel: &Skeleton,
+    anims: &[(&Animation, f32, f32)],
+    overrides: &SecondaryMap<BoneId, Transform>,
+    out: &mut Pose,
+) {
+    evaluate_inner(skel, anims, Some(overrides), None, 0.0, out)
 }
 
 /// [`evaluate`] with a physics simulation advanced by `dt` (T-503, ADR 0007).
@@ -132,12 +151,25 @@ pub fn evaluate_with(
     dt: f32,
     out: &mut Pose,
 ) {
-    evaluate_inner(skel, anims, Some(physics), dt, out)
+    evaluate_inner(skel, anims, None, Some(physics), dt, out)
+}
+
+/// Everything at once: overrides *and* an advancing simulation.
+pub fn evaluate_posed_with(
+    skel: &Skeleton,
+    anims: &[(&Animation, f32, f32)],
+    overrides: &SecondaryMap<BoneId, Transform>,
+    physics: &mut PhysicsState,
+    dt: f32,
+    out: &mut Pose,
+) {
+    evaluate_inner(skel, anims, Some(overrides), Some(physics), dt, out)
 }
 
 fn evaluate_inner(
     skel: &Skeleton,
     anims: &[(&Animation, f32, f32)],
+    overrides: Option<&SecondaryMap<BoneId, Transform>>,
     physics: Option<&mut PhysicsState>,
     dt: f32,
     out: &mut Pose,
@@ -166,6 +198,17 @@ fn evaluate_inner(
 
     // ── Stage 2: animation ───────────────────────────────────────────────
     apply_animations(skel, anims, out);
+
+    // ── Stage 2b: overrides ──────────────────────────────────────────────
+    // An in-flight editor drag, standing in for a value the document does not
+    // hold yet. Before constraints on purpose (see `evaluate_posed`).
+    if let Some(overrides) = overrides {
+        for (bone, local) in overrides.iter() {
+            if out.locals.contains_key(bone) {
+                out.locals.insert(bone, *local);
+            }
+        }
+    }
 
     // ── Stage 3 & 4: constraints, then world affines ─────────────────────
     // `update_worlds` composes the FK chain; constraints need world state to
@@ -418,16 +461,6 @@ fn apply_draw_order_offsets(order: &mut [SlotId], offsets: &[(SlotId, i32)]) {
     for (dst, (_, slot)) in order.iter_mut().zip(targets) {
         *dst = slot;
     }
-}
-
-/// Recompose every world affine from the pose's current `locals`.
-///
-/// For callers that mutate `Pose.locals` after `evaluate` — the editor overlays
-/// live drag values this way so a drag looks correct without touching the
-/// document (PLAN §3.2, defect D7). Constraints are **not** re-run: the override
-/// is the user's direct intent and should win.
-pub fn recompose_worlds(skel: &Skeleton, out: &mut Pose) {
-    update_worlds(skel, out);
 }
 
 /// Stage 4 — compose world affines for every bone along `update_order`.
@@ -2570,6 +2603,94 @@ mod tests {
         assert!(
             (at - glam::vec2(42.0, 7.0)).length() < 1e-3,
             "a zero-length path drives nothing: {at:?}"
+        );
+    }
+    /// The editor's drag preview must run *through* the constraints, not be
+    /// painted on after them. Dragging an IK target that does not move its chain
+    /// until the mouse is released is the bug this pins.
+    #[test]
+    fn an_override_on_an_ik_target_moves_the_chain_immediately() {
+        let mut skel = Skeleton::new();
+        let thigh = skel.add_bone(Bone {
+            local_transform: Transform {
+                rotation: -80.0_f32.to_radians(),
+                ..Transform::default()
+            },
+            ..bone("thigh", None)
+        });
+        let shin = skel.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(10.0, 0.0),
+                ..Transform::default()
+            },
+            ..bone("shin", Some(thigh))
+        });
+        let target = skel.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(12.0, -14.0),
+                ..Transform::default()
+            },
+            ..bone("target", None)
+        });
+        skel.add_constraint(Constraint::Ik(IkConstraint {
+            mix: 1.0,
+            ..IkConstraint::two_bone("leg", target, [thigh, shin])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        let settled = pose.world_tip(&skel, shin);
+
+        // Drag the target somewhere else, the way a mouse-move does.
+        let mut overrides: SecondaryMap<BoneId, Transform> = SecondaryMap::new();
+        overrides.insert(
+            target,
+            Transform {
+                position: glam::vec2(-12.0, -14.0),
+                ..Transform::default()
+            },
+        );
+        evaluate_posed(&skel, &[], &overrides, &mut pose);
+        let dragged = pose.world_tip(&skel, shin);
+
+        assert!(
+            (settled - dragged).length() > 1.0,
+            "the foot followed the dragged target: {settled:?} -> {dragged:?}"
+        );
+        let reached = (dragged - pose.world_position(target)).length();
+        assert!(reached < 1.0, "and reached it, {reached} away");
+    }
+
+    /// An override on an ordinary bone still moves its children, which is the
+    /// case the old post-pass got right and must not regress.
+    #[test]
+    fn an_override_carries_its_children() {
+        let mut skel = Skeleton::new();
+        let root = bone("root", None);
+        let root = skel.add_bone(root);
+        let child = skel.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(10.0, 0.0),
+                ..Transform::default()
+            },
+            ..bone("child", Some(root))
+        });
+
+        let mut overrides: SecondaryMap<BoneId, Transform> = SecondaryMap::new();
+        overrides.insert(
+            root,
+            Transform {
+                rotation: std::f32::consts::FRAC_PI_2,
+                ..Transform::default()
+            },
+        );
+        let mut pose = Pose::new();
+        evaluate_posed(&skel, &[], &overrides, &mut pose);
+
+        let at = pose.world_position(child);
+        assert!(
+            (at - glam::vec2(0.0, 10.0)).length() < 1e-3,
+            "the child swung with its previewed parent: {at:?}"
         );
     }
 }
