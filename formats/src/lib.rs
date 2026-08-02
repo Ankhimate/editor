@@ -750,4 +750,49 @@ mod tests {
             "it points at the same slot"
         );
     }
+    /// The checked-in sample rig must load, resolve every reference, and pose.
+    ///
+    /// It is the only artefact that exercises bones, slots, skins, draw order,
+    /// keyframes, an IK constraint and events together, so a break here is a
+    /// break in the pipeline rather than in one module's tests.
+    #[test]
+    fn the_sample_rig_loads_and_poses() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("samples")
+            .join("walker.ankh");
+        if !path.exists() {
+            eprintln!("skipping: run `cargo run -p ankhimate-formats --example make_sample`");
+            return;
+        }
+
+        let (loaded, _) = load(&path).unwrap();
+        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
+        assert_eq!(loaded.skeleton.bones.len(), 12);
+        assert_eq!(loaded.skeleton.slots.len(), 10);
+        assert_eq!(loaded.assets.images.len(), 10, "art came back with the rig");
+
+        let anim = loaded.animations.values().next().expect("the walk cycle");
+        assert_eq!(anim.name, "walk");
+        assert_eq!(anim.events.len(), 2, "two footsteps");
+
+        // It has to actually move: the same rig at two times must differ.
+        let mut pose = ankhimate_core::pose::Pose::new();
+        ankhimate_core::pose::evaluate(&loaded.skeleton, &[(anim, 0.0, 1.0)], &mut pose);
+        let head = loaded
+            .skeleton
+            .bones
+            .iter()
+            .find(|(_, b)| b.name == "head")
+            .map(|(id, _)| id)
+            .expect("a head");
+        let start = pose.world_position(head);
+        ankhimate_core::pose::evaluate(&loaded.skeleton, &[(anim, 0.25, 1.0)], &mut pose);
+        let quarter = pose.world_position(head);
+        assert!(
+            (start - quarter).length() > 1.0,
+            "the walk cycle moves the head: {start:?} vs {quarter:?}"
+        );
+    }
 }

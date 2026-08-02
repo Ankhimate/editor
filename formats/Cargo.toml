@@ -16,3 +16,5 @@ thiserror = "2.0"
 
 [dev-dependencies]
 tempfile = "3"
+# The sample generator draws its own art rather than shipping binary assets.
+image = { version = "0.25.10", default-features = false, features = ["png"] }

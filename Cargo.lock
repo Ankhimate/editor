@@ -247,6 +247,7 @@ version = "0.1.0"
 dependencies = [
  "ankhimate-core",
  "glam",
+ "image",
  "serde",
  "serde_json",
  "tempfile",

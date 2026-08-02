@@ -53,6 +53,18 @@ cargo fmt --check               # check formatting
 cargo clippy --workspace -- -D warnings   # lint
 ```
 
+## Try it
+
+A generated sample rig — 12 bones, a walk cycle, an IK constraint and event
+markers — plus a walkthrough of how it was built:
+
+```bash
+cargo run -p ankhimate-formats --example make_sample   # writes samples/walker.ankh
+cargo run -p ankhimate-editor                          # then open it
+```
+
+See [`docs/rigging-walkthrough.md`](docs/rigging-walkthrough.md).
+
 ## Contributing
 
 Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). Work is
@@ -79,4 +91,5 @@ inclusion shall be dual-licensed as above, with no additional terms.
 
 - [`docs/ARCHITECTURE_PLAN.md`](docs/ARCHITECTURE_PLAN.md) — normative architecture & roadmap
 - [`docs/TASKS.md`](docs/TASKS.md) — task breakdown and current status
+- [`docs/rigging-walkthrough.md`](docs/rigging-walkthrough.md) — how a rig is put together
 - [`docs/adr/`](docs/adr/) — architecture decision records
