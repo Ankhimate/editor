@@ -1,3 +1,4 @@
+use ankhimate_core::slot::BlendMode;
 use eframe::egui_wgpu;
 use wgpu::util::DeviceExt;
 
@@ -16,6 +17,8 @@ pub struct MeshVertex {
     pub position: [f32; 2],
     pub uv: [f32; 2],
     pub color: [f32; 4],
+    /// Two-color tint (T-505); `[0,0,0,0]` for slots without one.
+    pub dark: [f32; 4],
 }
 
 /// Per-instance data: 4x4 model matrix + RGBA color.
@@ -48,7 +51,8 @@ pub struct CustomRenderer {
     pub mesh_index_buffer: wgpu::Buffer,
 
     // Sprite (region attachment) pipeline — T-301
-    pub sprite_pipeline: wgpu::RenderPipeline,
+    /// One pipeline per blend mode, indexed by `blend_index` (T-505).
+    pub sprite_pipelines: [wgpu::RenderPipeline; 4],
     pub sprite_vertex_buffer: wgpu::Buffer,
     pub sprite_index_buffer: wgpu::Buffer,
     pub sprite_texture_layout: wgpu::BindGroupLayout,
@@ -325,41 +329,47 @@ impl CustomRenderer {
                 immediate_size: 0,
             });
 
-        let sprite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Sprite Render Pipeline"),
-            layout: Some(&sprite_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &sprite_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<MeshVertex>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x2, // position
-                        1 => Float32x2, // uv
-                        2 => Float32x4  // tint
-                    ],
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &sprite_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
+        // One pipeline per blend mode. Blend state is baked into a pipeline in
+        // wgpu, so the alternative is a pipeline switch per draw either way —
+        // building all four up front just moves the cost off the frame.
+        let sprite_pipelines = BLEND_MODES.map(|mode| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Sprite Render Pipeline"),
+                layout: Some(&sprite_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &sprite_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<MeshVertex>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x2, // position
+                            1 => Float32x2, // uv
+                            2 => Float32x4, // tint
+                            3 => Float32x4  // dark tint
+                        ],
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &sprite_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(blend_state(mode)),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
         });
 
         let sprite_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -388,7 +398,7 @@ impl CustomRenderer {
             mesh_pipeline,
             mesh_vertex_buffer,
             mesh_index_buffer,
-            sprite_pipeline,
+            sprite_pipelines,
             sprite_vertex_buffer,
             sprite_index_buffer,
             sprite_texture_layout,
@@ -492,18 +502,90 @@ pub struct SpriteDraw {
     pub key: u64,
     pub vertices: Vec<MeshVertex>,
     pub indices: Vec<u32>,
+    /// How this slot composites (T-505).
+    pub blend: BlendMode,
 }
 
 impl SpriteDraw {
     /// The common case: a quad, wound as two triangles.
-    pub fn quad(key: u64, vertices: [MeshVertex; 4]) -> Self {
+    pub fn quad(key: u64, vertices: [MeshVertex; 4], blend: BlendMode) -> Self {
         Self {
             key,
             vertices: vertices.to_vec(),
             indices: vec![0, 1, 2, 0, 2, 3],
+            blend,
         }
     }
 }
+
+/// The blend state each slot blend mode composites with (T-505).
+///
+/// Sources are straight-alpha, so every mode multiplies the source by its alpha
+/// rather than assuming premultiplied input.
+fn blend_state(mode: BlendMode) -> wgpu::BlendState {
+    use wgpu::{BlendComponent, BlendFactor, BlendOperation};
+    match mode {
+        BlendMode::Normal => wgpu::BlendState::ALPHA_BLENDING,
+        // Additive: light emitted, not surface shown — flashes, sparks, glows.
+        // Alpha still gates it, or a transparent texel would brighten the frame.
+        BlendMode::Additive => wgpu::BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::SrcAlpha,
+                dst_factor: BlendFactor::One,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent {
+                src_factor: BlendFactor::Zero,
+                dst_factor: BlendFactor::One,
+                operation: BlendOperation::Add,
+            },
+        },
+        // Multiply darkens by what is already there — shadows, stains.
+        BlendMode::Multiply => wgpu::BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::Dst,
+                dst_factor: BlendFactor::OneMinusSrcAlpha,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent {
+                src_factor: BlendFactor::DstAlpha,
+                dst_factor: BlendFactor::OneMinusSrcAlpha,
+                operation: BlendOperation::Add,
+            },
+        },
+        // Screen is the inverse of multiply: it lightens without blowing out.
+        BlendMode::Screen => wgpu::BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::OneMinusSrc,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::OneMinusSrc,
+                operation: BlendOperation::Add,
+            },
+        },
+    }
+}
+
+/// Index of a blend mode's pipeline in [`CustomRenderer::sprite_pipelines`].
+fn blend_index(mode: BlendMode) -> usize {
+    match mode {
+        BlendMode::Normal => 0,
+        BlendMode::Additive => 1,
+        BlendMode::Multiply => 2,
+        BlendMode::Screen => 3,
+    }
+}
+
+/// Every blend mode, in `blend_index` order.
+const BLEND_MODES: [BlendMode; 4] = [
+    BlendMode::Normal,
+    BlendMode::Additive,
+    BlendMode::Multiply,
+    BlendMode::Screen,
+];
 
 pub struct MeshDrawCall {
     pub vertices: Vec<MeshVertex>,
@@ -635,13 +717,17 @@ impl egui_wgpu::CallbackTrait for CustomCallback {
         // top of it. Within the batch, submission order *is* draw order, so the
         // canvas hands them over already sorted by `Pose.draw_order`.
         if !self.sprite_draws.is_empty() {
-            render_pass.set_pipeline(&renderer.sprite_pipeline);
             render_pass.set_bind_group(0, &renderer.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, renderer.sprite_vertex_buffer.slice(..));
             render_pass.set_index_buffer(
                 renderer.sprite_index_buffer.slice(..),
                 wgpu::IndexFormat::Uint32,
             );
+            // Draw order is submission order and must not be reordered to batch
+            // by pipeline: an additive flash drawn out of order composites
+            // against the wrong background. So the pipeline is switched only
+            // when the mode actually changes, which for a normal rig is once.
+            let mut current: Option<usize> = None;
             let mut start = 0u32;
             for draw in &self.sprite_draws {
                 let count = draw.indices.len() as u32;
@@ -651,6 +737,11 @@ impl egui_wgpu::CallbackTrait for CustomCallback {
                 // A texture that failed to decode or arrived this frame after the
                 // upload budget simply does not draw — never a panic.
                 if let Some(bind_group) = renderer.textures.get(&draw.key) {
+                    let index = blend_index(draw.blend);
+                    if current != Some(index) {
+                        render_pass.set_pipeline(&renderer.sprite_pipelines[index]);
+                        current = Some(index);
+                    }
                     render_pass.set_bind_group(1, bind_group, &[]);
                     render_pass.draw_indexed(start..start + count, 0, 0..1);
                 }

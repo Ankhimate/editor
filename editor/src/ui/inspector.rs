@@ -1683,6 +1683,160 @@ fn slot_inspector(ui: &mut egui::Ui, state: &mut AppState, slot_id: ankhimate_co
         DotAction::None => {}
     }
 
+    // ── Presentation (T-505) ──────────────────────────────────────────────
+    // How the slot composites, and whether it draws at all.
+    {
+        use crate::commands::slot_cmds::{SetSlotPresentation, SlotPresentation};
+        use ankhimate_core::slot::BlendMode;
+
+        let setup = state.session.can_edit_structure();
+        let Some(slot) = state.doc.skeleton.slots.get(slot_id) else {
+            return;
+        };
+        let mut presentation = SlotPresentation {
+            blend_mode: slot.blend_mode,
+            dark_color: slot.dark_color,
+        };
+        let original = presentation;
+
+        ui.horizontal(|ui| {
+            ui.label("Blend");
+            egui::ComboBox::from_id_salt(("slot_blend", slot_id))
+                .selected_text(match presentation.blend_mode {
+                    BlendMode::Normal => "Normal",
+                    BlendMode::Additive => "Additive",
+                    BlendMode::Multiply => "Multiply",
+                    BlendMode::Screen => "Screen",
+                })
+                .show_ui(ui, |ui| {
+                    for (mode, label, hint) in [
+                        (BlendMode::Normal, "Normal", "Ordinary alpha compositing"),
+                        (
+                            BlendMode::Additive,
+                            "Additive",
+                            "Light emitted rather than surface shown — flashes, sparks, glows",
+                        ),
+                        (
+                            BlendMode::Multiply,
+                            "Multiply",
+                            "Darkens what is underneath — shadows, stains",
+                        ),
+                        (
+                            BlendMode::Screen,
+                            "Screen",
+                            "Lightens without blowing out — the inverse of multiply",
+                        ),
+                    ] {
+                        if ui
+                            .selectable_label(presentation.blend_mode == mode, label)
+                            .on_hover_text(hint)
+                            .clicked()
+                        {
+                            presentation.blend_mode = mode;
+                        }
+                    }
+                });
+        });
+
+        // Two-color tint. Off by default and shown as a checkbox first, because
+        // an always-visible second colour picker reads as "this slot has one"
+        // when most do not.
+        ui.horizontal(|ui| {
+            let mut enabled = presentation.dark_color.is_some();
+            if ui
+                .add_enabled(setup, egui::Checkbox::new(&mut enabled, "Dark tint"))
+                .on_hover_text(
+                    "Fill what the texture leaves dark with a second colour — one \
+                     sprite reads as both lit and shadowed",
+                )
+                .changed()
+            {
+                presentation.dark_color = enabled.then_some([0.0, 0.0, 0.0, 1.0]);
+            }
+            if let Some(dark) = presentation.dark_color {
+                let mut rgba = egui::Color32::from_rgba_unmultiplied(
+                    (dark[0] * 255.0) as u8,
+                    (dark[1] * 255.0) as u8,
+                    (dark[2] * 255.0) as u8,
+                    (dark[3] * 255.0) as u8,
+                );
+                if ui.color_edit_button_srgba(&mut rgba).changed() {
+                    presentation.dark_color = Some([
+                        rgba.r() as f32 / 255.0,
+                        rgba.g() as f32 / 255.0,
+                        rgba.b() as f32 / 255.0,
+                        rgba.a() as f32 / 255.0,
+                    ]);
+                }
+            }
+        });
+
+        if presentation != original && setup {
+            state.dispatch(Box::new(SetSlotPresentation::new(slot_id, presentation)));
+        }
+    }
+
+    // ── Visibility (T-505) ────────────────────────────────────────────────
+    // A keyable boolean, distinct from alpha 0: a hidden slot is not drawn at
+    // all, and "hidden at frame 10, back at 20" must cut rather than fade.
+    {
+        let visible = state
+            .pose
+            .slot_visible
+            .get(slot_id)
+            .copied()
+            .unwrap_or(true);
+        let addr = TimelineAddr::SlotVisible { slot: slot_id };
+        let keyed = crate::edit_router::key_state(&state.doc, &state.session, &addr);
+        let animating = state.session.is_animating();
+        let mut toggled: Option<bool> = None;
+        let mut dot = DotAction::None;
+
+        ui.horizontal(|ui| {
+            let mut shown = visible;
+            if ui
+                .add_enabled(animating, egui::Checkbox::new(&mut shown, "Visible"))
+                .on_hover_text(if animating {
+                    "Keyable. A hidden slot is not drawn — unlike alpha 0, which is."
+                } else {
+                    "Switch to Animate mode (Tab) to key visibility"
+                })
+                .changed()
+            {
+                toggled = Some(shown);
+            }
+            if animating {
+                dot = key_dot(ui, keyed);
+            }
+        });
+
+        // Toggling in Animate mode *is* the key: there is nowhere else for the
+        // value to live, since a slot's setup state is "visible".
+        if let (Some(shown), Some(anim)) = (
+            toggled.or(match dot {
+                DotAction::Key => Some(visible),
+                _ => None,
+            }),
+            state.session.active_animation,
+        ) {
+            state.dispatch(Box::new(crate::commands::key_cmds::AddKey::new(
+                anim,
+                addr.clone(),
+                state.session.playhead,
+                crate::commands::key_cmds::KeyValue::Visible(shown),
+                ankhimate_core::animation::Interp::Stepped,
+            )));
+        }
+        if let (DotAction::Unkey, Some(anim), crate::edit_router::KeyState::Keyed(index)) =
+            (dot, state.session.active_animation, keyed)
+        {
+            state.dispatch(Box::new(crate::commands::key_cmds::DeleteKeys::new(
+                anim,
+                vec![crate::commands::key_cmds::KeyRef { addr, index }],
+            )));
+        }
+    }
+
     // Attachment dropdown: the active skin's entries for this slot, plus "none".
     let names: Vec<String> = {
         let skin = state.session.active_skin;

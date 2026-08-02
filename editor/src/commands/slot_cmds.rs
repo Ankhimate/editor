@@ -4,7 +4,7 @@ use super::EditCommand;
 use crate::doc::Document;
 use crate::session::WorkMode;
 use ankhimate_core::ids::{BoneId, SlotId};
-use ankhimate_core::slot::Slot;
+use ankhimate_core::slot::{BlendMode, Slot};
 
 /// Create a slot on a bone and append it to the setup draw order.
 pub struct CreateSlot {
@@ -281,6 +281,82 @@ impl EditCommand for SetDrawOrder {
     }
 
     /// Setup draw order; Animate mode writes a `DrawOrder` key instead (T-204).
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Everything about how a slot composites, as one value (T-505).
+#[derive(Clone, Copy, PartialEq)]
+pub struct SlotPresentation {
+    pub blend_mode: BlendMode,
+    pub dark_color: Option<[f32; 4]>,
+}
+
+/// Set a slot's blend mode and two-color tint.
+///
+/// Setup-only: which way a slot composites is rig data, not a pose. The
+/// *animated* half is `SlotColor` and `SlotVisible`, which are timelines.
+pub struct SetSlotPresentation {
+    slot: SlotId,
+    after: SlotPresentation,
+    before: Option<SlotPresentation>,
+}
+
+impl SetSlotPresentation {
+    pub fn new(slot: SlotId, after: SlotPresentation) -> Self {
+        Self {
+            slot,
+            after,
+            before: None,
+        }
+    }
+}
+
+impl EditCommand for SetSlotPresentation {
+    fn apply(&mut self, doc: &mut Document) {
+        let Some(slot) = doc.skeleton.slots.get_mut(self.slot) else {
+            return;
+        };
+        if self.before.is_none() {
+            self.before = Some(SlotPresentation {
+                blend_mode: slot.blend_mode,
+                dark_color: slot.dark_color,
+            });
+        }
+        slot.blend_mode = self.after.blend_mode;
+        slot.dark_color = self.after.dark_color;
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let (Some(before), Some(slot)) =
+            (self.before.take(), doc.skeleton.slots.get_mut(self.slot))
+        {
+            slot.blend_mode = before.blend_mode;
+            slot.dark_color = before.dark_color;
+        }
+    }
+
+    fn merge(&mut self, next: &dyn EditCommand) -> bool {
+        let Some(other) = next.as_any().downcast_ref::<SetSlotPresentation>() else {
+            return false;
+        };
+        if other.slot != self.slot {
+            return false;
+        }
+        // Dragging in the colour picker is one edit.
+        self.after = other.after;
+        true
+    }
+
+    fn label(&self) -> &str {
+        "Set Slot Presentation"
+    }
+
     fn requires_mode(&self) -> Option<WorkMode> {
         Some(WorkMode::Setup)
     }

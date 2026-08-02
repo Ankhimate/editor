@@ -298,6 +298,7 @@ fn key_index_at(timeline: &Timeline, time: f32) -> Option<usize> {
         Timeline::BoneRotate { keys, .. } => find!(keys),
         Timeline::BoneScale { keys, .. } => find!(keys),
         Timeline::BoneShear { keys, .. } => find!(keys),
+        Timeline::SlotVisible { keys, .. } => find!(keys),
         Timeline::SlotColor { keys, .. } => find!(keys),
         Timeline::SlotAttachment { keys, .. } => find!(keys),
         Timeline::DrawOrder { keys } => find!(keys),

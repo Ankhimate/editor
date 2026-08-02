@@ -58,6 +58,10 @@ pub enum TimelineAddr {
     SlotAttachment {
         slot: SlotId,
     },
+    /// Stepped visibility (T-505).
+    SlotVisible {
+        slot: SlotId,
+    },
 }
 
 impl TimelineAddr {
@@ -79,6 +83,7 @@ impl TimelineAddr {
             }
             TimelineAddr::SlotColor { slot } => slot.data().as_ffi() ^ 0xC010_0000_0000_0000,
             TimelineAddr::SlotAttachment { slot } => slot.data().as_ffi() ^ 0xA77A_0000_0000_0000,
+            TimelineAddr::SlotVisible { slot } => slot.data().as_ffi() ^ 0x7157_0000_0000_0000,
         }
     }
 
@@ -123,6 +128,9 @@ impl TimelineAddr {
             (TimelineAddr::SlotAttachment { slot }, Timeline::SlotAttachment { slot: s, .. }) => {
                 slot == s
             }
+            (TimelineAddr::SlotVisible { slot }, Timeline::SlotVisible { slot: s, .. }) => {
+                slot == s
+            }
             _ => false,
         }
     }
@@ -153,6 +161,10 @@ impl TimelineAddr {
                 keys: Vec::new(),
             },
             TimelineAddr::SlotAttachment { slot } => Timeline::SlotAttachment {
+                slot: *slot,
+                keys: Vec::new(),
+            },
+            TimelineAddr::SlotVisible { slot } => Timeline::SlotVisible {
                 slot: *slot,
                 keys: Vec::new(),
             },
@@ -198,6 +210,7 @@ pub enum KeyValue {
     Vec2(glam::Vec2),
     Scalar(f32),
     Color([f32; 4]),
+    Visible(bool),
 }
 
 // ── Shared snapshot machinery ────────────────────────────────────────────────
@@ -304,6 +317,18 @@ impl EditCommand for AddKey {
                     },
                 );
             }
+            (Timeline::SlotVisible { keys, .. }, KeyValue::Visible(v)) => {
+                insert_key(
+                    keys,
+                    Key {
+                        time,
+                        value: v,
+                        // Always stepped: there is no halfway between shown and
+                        // hidden, and interpolating one would fade instead of cut.
+                        interp: ankhimate_core::animation::Interp::Stepped,
+                    },
+                );
+            }
             (Timeline::SlotColor { keys, .. }, KeyValue::Color(v)) => {
                 insert_key(
                     keys,
@@ -373,6 +398,7 @@ fn with_key(timeline: &mut Timeline, index: usize, f: &mut impl FnMut(&mut KeyTi
         Timeline::BoneRotate { keys, .. } => with_key_arm!(keys, index, f),
         Timeline::BoneScale { keys, .. } => with_key_arm!(keys, index, f),
         Timeline::BoneShear { keys, .. } => with_key_arm!(keys, index, f),
+        Timeline::SlotVisible { keys, .. } => with_key_arm!(keys, index, f),
         Timeline::SlotColor { keys, .. } => with_key_arm!(keys, index, f),
         Timeline::SlotAttachment { keys, .. } => with_key_arm!(keys, index, f),
         Timeline::DrawOrder { keys } => with_key_arm!(keys, index, f),
@@ -396,6 +422,7 @@ fn sort_timeline(timeline: &mut Timeline) {
         Timeline::BoneRotate { keys, .. } => sort_arm!(keys),
         Timeline::BoneScale { keys, .. } => sort_arm!(keys),
         Timeline::BoneShear { keys, .. } => sort_arm!(keys),
+        Timeline::SlotVisible { keys, .. } => sort_arm!(keys),
         Timeline::SlotColor { keys, .. } => sort_arm!(keys),
         Timeline::SlotAttachment { keys, .. } => sort_arm!(keys),
         Timeline::DrawOrder { keys } => sort_arm!(keys),
@@ -532,6 +559,7 @@ impl EditCommand for DeleteKeys {
                 Timeline::BoneRotate { keys, .. } => remove_arm!(keys, indices),
                 Timeline::BoneScale { keys, .. } => remove_arm!(keys, indices),
                 Timeline::BoneShear { keys, .. } => remove_arm!(keys, indices),
+                Timeline::SlotVisible { keys, .. } => remove_arm!(keys, indices),
                 Timeline::SlotColor { keys, .. } => remove_arm!(keys, indices),
                 Timeline::SlotAttachment { keys, .. } => remove_arm!(keys, indices),
                 Timeline::DrawOrder { keys } => remove_arm!(keys, indices),
@@ -891,6 +919,7 @@ fn map_key_times(anim: &mut Animation, f: impl Fn(f32) -> f32) {
             Timeline::BoneRotate { keys, .. } => remap!(keys),
             Timeline::BoneScale { keys, .. } => remap!(keys),
             Timeline::BoneShear { keys, .. } => remap!(keys),
+            Timeline::SlotVisible { keys, .. } => remap!(keys),
             Timeline::SlotColor { keys, .. } => remap!(keys),
             Timeline::SlotAttachment { keys, .. } => remap!(keys),
             Timeline::DrawOrder { keys } => remap!(keys),

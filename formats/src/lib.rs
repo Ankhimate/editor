@@ -585,4 +585,57 @@ mod tests {
         assert!((events[0].float_value - 0.8).abs() < 1e-6);
         assert_eq!(events[1].string_value, "right");
     }
+    /// T-505: blend mode and the two-color tint are slot fields the schema
+    /// already had but nothing wrote; visibility keys are new.
+    #[test]
+    fn slot_presentation_and_visibility_survive_a_round_trip() {
+        use ankhimate_core::animation::{Key, Timeline};
+        use ankhimate_core::slot::{BlendMode, Slot};
+
+        let mut skel = sample_skeleton();
+        let bone = skel.bones.keys().next().unwrap();
+        let slot = skel.add_slot(Slot {
+            blend_mode: BlendMode::Additive,
+            dark_color: Some([0.1, 0.2, 0.3, 1.0]),
+            ..Slot::new("flash".into(), bone)
+        });
+
+        let mut anims = SlotMap::with_key();
+        anims.insert(Animation {
+            name: "blink".into(),
+            duration: 1.0,
+            looping: false,
+            events: Vec::new(),
+            timelines: vec![Timeline::SlotVisible {
+                slot,
+                keys: vec![Key::stepped(0.3, false), Key::stepped(0.6, true)],
+            }],
+        });
+
+        let assets = AssetDb::new();
+        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
+        let loaded = from_json(&json).unwrap();
+        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
+
+        let slot = loaded
+            .skeleton
+            .slots
+            .values()
+            .find(|s| s.name == "flash")
+            .expect("the slot came back");
+        assert_eq!(slot.blend_mode, BlendMode::Additive);
+        assert_eq!(slot.dark_color, Some([0.1, 0.2, 0.3, 1.0]));
+
+        let keys = loaded
+            .animations
+            .values()
+            .flat_map(|a| &a.timelines)
+            .find_map(|t| match t {
+                Timeline::SlotVisible { keys, .. } => Some(keys.clone()),
+                _ => None,
+            })
+            .expect("the visibility timeline came back");
+        assert_eq!(keys.len(), 2);
+        assert!(!keys[0].value && keys[1].value);
+    }
 }

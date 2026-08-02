@@ -15,6 +15,34 @@ pub const COLOR_BONE_SELECTED: [f32; 4] = [1.0, 0.65, 0.0, 0.95];
 pub const COLOR_BONE_HOVERED: [f32; 4] = [0.2, 0.95, 0.95, 0.95];
 pub const COLOR_BONE_PREVIEW: [f32; 4] = [0.5, 1.0, 1.0, 0.85]; // Ghost preview
 
+/// A bone's group colour, inherited from the nearest ancestor that set one
+/// (T-505).
+///
+/// Inheritance rather than per-bone assignment: a group is a *limb*, and
+/// colouring one means colouring the shoulder and having the arm follow.
+/// A bone that has been given its own colour keeps it and passes that down.
+pub fn group_color(
+    skeleton: &ankhimate_core::skeleton::Skeleton,
+    bone: ankhimate_core::ids::BoneId,
+) -> [f32; 4] {
+    let default = ankhimate_core::skeleton::Bone::default_color();
+    let mut current = Some(bone);
+    // Bounded by the hierarchy depth; a cycle is impossible by construction
+    // (`update_order` is topologically sorted), but the counter makes that
+    // assumption cheap to hold rather than load-bearing.
+    for _ in 0..64 {
+        let Some(id) = current else { break };
+        let Some(b) = skeleton.bones.get(id) else {
+            break;
+        };
+        if b.color != default {
+            return b.color;
+        }
+        current = b.parent;
+    }
+    default
+}
+
 pub fn bone_gizmo_vertices(
     origin: glam::Vec2,
     angle: f32,
@@ -137,6 +165,12 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
         .skeleton
         .resolve_slot(state.session.active_skin, slot_id)?;
 
+    // Hidden slots draw nothing at all (T-505) — distinct from alpha 0, which
+    // still costs a draw call and still blends.
+    if state.pose.slot_visible.get(slot_id) == Some(&false) {
+        return None;
+    }
+
     let bone_world = state.pose.worlds.get(slot.bone)?;
     let color = state
         .pose
@@ -144,6 +178,15 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
         .get(slot_id)
         .copied()
         .unwrap_or(slot.color);
+    // `dark.a` is the amount, so an absent two-color tint is all zeroes and the
+    // shader's second term vanishes without a branch.
+    let dark = state
+        .pose
+        .slot_dark_colors
+        .get(slot_id)
+        .copied()
+        .or(slot.dark_color)
+        .unwrap_or([0.0; 4]);
 
     let region = match attachment {
         Attachment::Region(region) => region,
@@ -182,6 +225,7 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
                         position: [world.x, world.y],
                         uv: [uv.x, uv.y],
                         color,
+                        dark,
                     }
                 })
                 .collect();
@@ -190,6 +234,7 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
                 key,
                 vertices,
                 indices,
+                blend: slot.blend_mode,
             });
         }
     };
@@ -212,8 +257,9 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
         position: [corners[i].x, corners[i].y],
         uv: uvs[i],
         color,
+        dark,
     });
-    Some(SpriteDraw::quad(key, vertices))
+    Some(SpriteDraw::quad(key, vertices, slot.blend_mode))
 }
 
 // ── Shear gizmo geometry ─────────────────────────────────────────────────────
@@ -520,10 +566,20 @@ pub fn render_bones(
                 egui::Color32::from_rgb(150, 255, 255),
             )
         } else {
+            // Group colour (T-505): the bone's own, inherited from the nearest
+            // ancestor that set one. Selection and hover still win — knowing
+            // what is selected matters more than knowing which group it is in.
+            let [r, g, b, a] = group_color(&state.doc.skeleton, bone_id);
+            let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8;
             (
-                egui::Color32::from_rgba_unmultiplied(0, 150, 150, 80),
-                egui::Color32::from_rgb(0, 100, 100),
-                egui::Color32::from_rgb(0, 200, 200),
+                egui::Color32::from_rgba_unmultiplied(to_u8(r), to_u8(g), to_u8(b), to_u8(a * 0.4)),
+                egui::Color32::from_rgba_unmultiplied(
+                    to_u8(r * 0.7),
+                    to_u8(g * 0.7),
+                    to_u8(b * 0.7),
+                    255,
+                ),
+                egui::Color32::from_rgba_unmultiplied(to_u8(r), to_u8(g), to_u8(b), 255),
             )
         };
 
@@ -1123,6 +1179,8 @@ pub fn render_bones(
                         position: [world_pos.x, world_pos.y],
                         uv: [uv.x, uv.y],
                         color,
+                        // The weight heat map is flat colour, not artwork.
+                        dark: [0.0; 4],
                     });
                 }
 
@@ -1241,6 +1299,7 @@ pub fn render_bones(
                 // Colour is per-slot here, so the first vertex's is every
                 // vertex's; a clipped triangle inherits it unchanged.
                 let color = draw.vertices.first().map(|v| v.color).unwrap_or([1.0; 4]);
+                let dark = draw.vertices.first().map(|v| v.dark).unwrap_or([0.0; 4]);
                 let (clipped, indices) =
                     ankhimate_core::clipping::clip_triangles(&subject, &draw.indices, polygon);
                 if indices.is_empty() {
@@ -1254,6 +1313,7 @@ pub fn render_bones(
                         position: [v.position.x, v.position.y],
                         uv: [v.uv.x, v.uv.y],
                         color,
+                        dark,
                     })
                     .collect();
                 draw.indices = indices;

@@ -191,6 +191,10 @@ pub enum Timeline {
         bone: BoneId,
         keys: Vec<Key<glam::Vec2>>,
     },
+    /// Whether the slot draws at all (T-505). Stepped: a half-visible slot is
+    /// what `SlotColor`'s alpha is for, and interpolating a boolean would make
+    /// "hidden at frame 10, back at 20" fade instead of cut.
+    SlotVisible { slot: SlotId, keys: Vec<Key<bool>> },
     /// Absolute RGBA, replacing the slot's setup color.
     SlotColor {
         slot: SlotId,
@@ -254,6 +258,7 @@ impl Timeline {
             Timeline::BoneRotate { keys, .. } => last!(keys),
             Timeline::BoneScale { keys, .. } => last!(keys),
             Timeline::BoneShear { keys, .. } => last!(keys),
+            Timeline::SlotVisible { keys, .. } => last!(keys),
             Timeline::SlotColor { keys, .. } => last!(keys),
             Timeline::SlotAttachment { keys, .. } => last!(keys),
             Timeline::DrawOrder { keys } => last!(keys),
@@ -271,6 +276,7 @@ impl Timeline {
             Timeline::BoneRotate { keys, .. } => keys.is_empty(),
             Timeline::BoneScale { keys, .. } => keys.is_empty(),
             Timeline::BoneShear { keys, .. } => keys.is_empty(),
+            Timeline::SlotVisible { keys, .. } => keys.is_empty(),
             Timeline::SlotColor { keys, .. } => keys.is_empty(),
             Timeline::SlotAttachment { keys, .. } => keys.is_empty(),
             Timeline::DrawOrder { keys } => keys.is_empty(),

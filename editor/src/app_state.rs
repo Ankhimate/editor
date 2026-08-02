@@ -33,6 +33,7 @@ fn key_times(timeline: &ankhimate_core::animation::Timeline) -> Vec<f32> {
         T::BoneRotate { keys, .. } => times!(keys),
         T::BoneScale { keys, .. } => times!(keys),
         T::BoneShear { keys, .. } => times!(keys),
+        T::SlotVisible { keys, .. } => times!(keys),
         T::SlotColor { keys, .. } => times!(keys),
         T::SlotAttachment { keys, .. } => times!(keys),
         T::DrawOrder { keys } => times!(keys),

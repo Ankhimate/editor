@@ -655,7 +655,7 @@ same dt sequence produce identical output; export at 30 fps and playback at 30 f
 extends bone length only up to the configured limit; flipping bend direction mid-animation produces
 a stepped, flip-free result.
 
-### T-505 ∥ Slot & bone presentation depth
+### ✅ T-505 ∥ Slot & bone presentation depth
 **Deps:** T-301, T-207 · **Refs:** PLAN §2.3, §2.7
 - Slot `blend_mode` (Normal / Additive / Multiply / Screen) honored by the renderer and exporters;
   `dark_color` (two-color tinting) plumbed through schema → pose → renderer → runtime.

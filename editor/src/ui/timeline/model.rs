@@ -286,6 +286,10 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 },
             )
         }
+        Timeline::SlotVisible { slot, keys } => (
+            GroupKey::Slot(*slot),
+            read_only_row("visible", keys.iter().map(|k| (k.time, k.interp))),
+        ),
         Timeline::SlotColor { slot, keys } => {
             let infos = keys
                 .iter()

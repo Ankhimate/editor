@@ -325,6 +325,11 @@ pub enum Timeline {
         slot: String,
         keys: Vec<ColorKey>,
     },
+    /// Stepped visibility (T-505).
+    SlotVisible {
+        slot: String,
+        keys: Vec<VisibleKey>,
+    },
     SlotAttachment {
         slot: String,
         keys: Vec<AttachmentKey>,
@@ -397,6 +402,12 @@ pub struct ColorKey {
     pub value: [f32; 4],
     #[serde(default, flatten)]
     pub interp: Interp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct VisibleKey {
+    pub time: f32,
+    pub value: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
