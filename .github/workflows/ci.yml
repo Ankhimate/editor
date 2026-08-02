@@ -80,6 +80,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The action runs `cargo deny` itself, so `command` is the subcommand only.
+      # Passing "check licenses" as `arguments` appends it after the subcommand,
+      # where cargo-deny reads it as a list of checks and rejects "check".
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          arguments: --workspace check licenses
+          command: check licenses
