@@ -387,4 +387,84 @@ mod tests {
             "range preserved"
         );
     }
+    /// T-501: a transform constraint and its mix timeline must survive a save.
+    /// The constraint schema was IK-shaped, so this is the round trip most
+    /// likely to quietly drop half a constraint.
+    #[test]
+    fn transform_constraints_survive_a_round_trip() {
+        use ankhimate_core::animation::{Interp, Key, Timeline};
+        use ankhimate_core::constraints::{Constraint, TransformConstraint};
+
+        let mut skel = sample_skeleton();
+        let mut ids = skel.bones.keys();
+        let target = ids.next().unwrap();
+        let driven = ids.next().unwrap();
+
+        let cid = skel.add_constraint(Constraint::Transform(TransformConstraint {
+            offsets: Transform {
+                position: glam::vec2(3.0, -4.0),
+                rotation: 15.0_f32.to_radians(),
+                scale: glam::vec2(1.5, 0.5),
+                shear: glam::vec2(5.0_f32.to_radians(), 0.0),
+            },
+            mix_rotate: 0.75,
+            mix_translate: 0.25,
+            mix_scale: 0.5,
+            mix_shear: 0.1,
+            local: true,
+            relative: true,
+            ..TransformConstraint::rotation_only("look", target, vec![driven])
+        }));
+
+        let mut anims = SlotMap::with_key();
+        let anim: AnimationId = anims.insert(Animation {
+            name: "fade".into(),
+            duration: 1.0,
+            looping: false,
+            events: Vec::new(),
+            timelines: vec![Timeline::TransformConstraintMix {
+                constraint: cid,
+                keys: vec![Key {
+                    time: 0.5,
+                    value: [1.0, 0.0, 0.0, 0.0],
+                    interp: Interp::Linear,
+                }],
+            }],
+        });
+        let _ = anim;
+
+        let assets = AssetDb::new();
+        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
+        let loaded = from_json(&json).unwrap();
+        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
+
+        let Some(Constraint::Transform(tc)) = loaded.skeleton.constraints.values().next() else {
+            panic!("the constraint came back as a transform constraint");
+        };
+        assert_eq!(tc.name, "look");
+        assert!((tc.mix_rotate - 0.75).abs() < 1e-6);
+        assert!((tc.mix_translate - 0.25).abs() < 1e-6);
+        assert!((tc.mix_scale - 0.5).abs() < 1e-6);
+        assert!((tc.mix_shear - 0.1).abs() < 1e-6);
+        assert!(tc.local && tc.relative);
+        // Degrees on disk, radians in memory (ADR 0002) — the conversion has to
+        // survive both directions.
+        assert!(
+            (tc.offsets.rotation - 15.0_f32.to_radians()).abs() < 1e-5,
+            "offset rotation: {}",
+            tc.offsets.rotation.to_degrees()
+        );
+        assert!((tc.offsets.position - glam::vec2(3.0, -4.0)).length() < 1e-5);
+        assert!((tc.offsets.scale - glam::vec2(1.5, 0.5)).length() < 1e-5);
+
+        let mix_keys = loaded
+            .animations
+            .values()
+            .flat_map(|a| &a.timelines)
+            .find_map(|t| match t {
+                Timeline::TransformConstraintMix { keys, .. } => Some(keys.len()),
+                _ => None,
+            });
+        assert_eq!(mix_keys, Some(1), "the mix timeline came back");
+    }
 }
