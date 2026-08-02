@@ -77,7 +77,7 @@ impl<T> Key<T> {
     }
 }
 
-/// A named trigger for runtimes. Post-v1; carried so files round-trip.
+/// A named trigger for runtimes: footsteps, hit frames, sound cues (T-506).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventKey {
     pub time: f32,
@@ -88,6 +88,85 @@ pub struct EventKey {
     pub float_value: f32,
     #[serde(default)]
     pub string_value: String,
+}
+
+/// Events fired by advancing a clip from `from` to `to` (T-506).
+///
+/// This is the whole contract a runtime needs: "I advanced the playhead by `dt`,
+/// what fired?" — and it is fiddlier than it looks, which is why it lives in
+/// `core` next to `evaluate` rather than in each runtime.
+///
+/// # The window is half-open
+///
+/// `(from, to]`. An event exactly at `from` has already fired on the previous
+/// step; one exactly at `to` fires now. Closing both ends double-fires every
+/// event on a frame boundary, and closing neither drops events that land exactly
+/// on one — which, at 60fps with times authored in whole frames, is most of them.
+///
+/// # Looping and overshoot
+///
+/// When `looping`, a step that crosses the end wraps: the window becomes
+/// `(from, duration]` plus `(0, to']`. A `dt` larger than the whole clip fires
+/// every event once per full lap, in time order, so a frame hitch cannot silently
+/// swallow a footstep. That bound is the reason this returns owned copies rather
+/// than borrowing: a lap's worth of events may repeat.
+///
+/// Events are returned in the order they fire, which for multiple laps means the
+/// clip's order repeated — a runtime that plays sounds in sequence needs that,
+/// and sorting by time alone would interleave laps.
+pub fn events_in_window(anim: &Animation, from: f32, to: f32, looping: bool) -> Vec<EventKey> {
+    if anim.events.is_empty() || anim.duration <= 0.0 {
+        return Vec::new();
+    }
+    // Events are authored in any order; firing order is time order.
+    let mut sorted: Vec<&EventKey> = anim.events.iter().collect();
+    sorted.sort_by(|a, b| a.time.total_cmp(&b.time));
+
+    let collect = |out: &mut Vec<EventKey>, lo: f32, hi: f32| {
+        for e in &sorted {
+            if e.time > lo && e.time <= hi {
+                out.push((*e).clone());
+            }
+        }
+    };
+
+    let mut fired = Vec::new();
+    if !looping {
+        collect(&mut fired, from, to);
+        return fired;
+    }
+
+    let duration = anim.duration;
+    let advance = to - from;
+    if advance <= 0.0 {
+        // A backwards or stationary step fires nothing. Scrubbing a timeline
+        // backwards should not replay a footstep.
+        return fired;
+    }
+
+    // Finish the current lap.
+    let start = from.rem_euclid(duration);
+    let mut remaining = advance;
+    let to_end = duration - start;
+    if remaining < to_end {
+        collect(&mut fired, start, start + remaining);
+        return fired;
+    }
+    collect(&mut fired, start, duration);
+    remaining -= to_end;
+
+    // Whole laps in between: every event, once each.
+    let laps = (remaining / duration).floor() as usize;
+    for _ in 0..laps {
+        collect(&mut fired, 0.0, duration);
+    }
+    remaining -= laps as f32 * duration;
+
+    // The partial lap that lands on `to`. `0.0` is exclusive here for the same
+    // reason the window is half-open: an event at time 0 fired as part of the
+    // wrap above.
+    collect(&mut fired, 0.0, remaining);
+    fired
 }
 
 /// One animated property track.
@@ -751,5 +830,120 @@ mod tests {
             keys: vec![Key::stepped(0.0, Vec::new())],
         };
         assert!(!filled.is_empty());
+    }
+
+    // ── Events (T-506) ───────────────────────────────────────────────────
+
+    fn clip_with_events(times: &[f32], duration: f32) -> Animation {
+        Animation {
+            name: "walk".into(),
+            duration,
+            looping: true,
+            timelines: Vec::new(),
+            events: times
+                .iter()
+                .enumerate()
+                .map(|(i, t)| EventKey {
+                    time: *t,
+                    name: format!("step{i}"),
+                    int_value: 0,
+                    float_value: 0.0,
+                    string_value: String::new(),
+                })
+                .collect(),
+        }
+    }
+
+    fn names(fired: &[EventKey]) -> Vec<&str> {
+        fired.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    #[test]
+    fn an_event_fires_once_in_the_step_that_crosses_it() {
+        let anim = clip_with_events(&[0.5], 1.0);
+        assert_eq!(names(&events_in_window(&anim, 0.4, 0.6, true)), ["step0"]);
+        // The next step must not fire it again.
+        assert!(events_in_window(&anim, 0.6, 0.8, true).is_empty());
+    }
+
+    /// The half-open window is the whole reason this is not a one-liner: an
+    /// event landing exactly on a frame boundary must fire once, not twice and
+    /// not never.
+    #[test]
+    fn an_event_on_a_frame_boundary_fires_exactly_once() {
+        let anim = clip_with_events(&[0.5], 1.0);
+        let first = events_in_window(&anim, 0.25, 0.5, true);
+        let second = events_in_window(&anim, 0.5, 0.75, true);
+        assert_eq!(
+            names(&first),
+            ["step0"],
+            "fires in the step that reaches it"
+        );
+        assert!(second.is_empty(), "and not again in the next step");
+    }
+
+    /// The acceptance case: a footstep fires exactly once per loop, including
+    /// when the step crosses the loop boundary.
+    #[test]
+    fn a_looping_clip_fires_each_event_once_per_lap() {
+        let anim = clip_with_events(&[0.2], 1.0);
+        // Walk the clip in 0.1 steps for three laps.
+        let mut count = 0;
+        let mut t = 0.0;
+        for _ in 0..30 {
+            count += events_in_window(&anim, t, t + 0.1, true).len();
+            t += 0.1;
+        }
+        assert_eq!(count, 3, "one footstep per lap over three laps");
+    }
+
+    /// A frame hitch must not swallow events: a `dt` longer than the clip fires
+    /// every event once per lap it covers.
+    #[test]
+    fn an_overshooting_step_fires_every_lap_it_crossed() {
+        let anim = clip_with_events(&[0.2, 0.7], 1.0);
+        // 2.5 seconds of a 1-second clip, starting at 0.
+        let fired = events_in_window(&anim, 0.0, 2.5, true);
+        assert_eq!(
+            names(&fired),
+            ["step0", "step1", "step0", "step1", "step0"],
+            "two full laps plus the 0.5 remainder, in firing order"
+        );
+    }
+
+    #[test]
+    fn a_non_looping_clip_does_not_wrap() {
+        let anim = Animation {
+            looping: false,
+            ..clip_with_events(&[0.2], 1.0)
+        };
+        assert_eq!(names(&events_in_window(&anim, 0.0, 0.5, false)), ["step0"]);
+        // Past the end there is nothing more to fire.
+        assert!(events_in_window(&anim, 1.0, 3.0, false).is_empty());
+    }
+
+    /// Scrubbing a timeline backwards should not replay sounds.
+    #[test]
+    fn a_backwards_step_fires_nothing() {
+        let anim = clip_with_events(&[0.5], 1.0);
+        assert!(events_in_window(&anim, 0.8, 0.2, true).is_empty());
+    }
+
+    #[test]
+    fn events_fire_in_time_order_however_they_were_authored() {
+        let mut anim = clip_with_events(&[0.8, 0.2, 0.5], 1.0);
+        // Authored out of order on purpose.
+        anim.events.sort_by(|a, b| b.time.total_cmp(&a.time));
+        let fired = events_in_window(&anim, 0.0, 1.0, true);
+        let times: Vec<f32> = fired.iter().map(|e| e.time).collect();
+        assert_eq!(times, vec![0.2, 0.5, 0.8]);
+    }
+
+    #[test]
+    fn a_clip_with_no_events_or_no_duration_fires_nothing() {
+        let empty = clip_with_events(&[], 1.0);
+        assert!(events_in_window(&empty, 0.0, 5.0, true).is_empty());
+        let zero = clip_with_events(&[0.5], 0.0);
+        assert!(events_in_window(&zero, 0.0, 5.0, true).is_empty());
     }
 }
