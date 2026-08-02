@@ -13,6 +13,7 @@ pub mod clipping;
 pub mod constraints;
 pub mod ids;
 pub mod math;
+pub mod physics;
 pub mod pose;
 pub mod skeleton;
 pub mod skin;

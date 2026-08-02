@@ -156,12 +156,70 @@ impl TransformConstraint {
     }
 }
 
+/// Sway, bounce and jiggle for a bone that should follow its parent loosely
+/// (T-503): hair, tails, cloth, chains, antennae.
+///
+/// Unlike every other constraint this one is **stateful** — where the bone lands
+/// depends on where it was last frame — so the simulation lives in a
+/// caller-owned [`crate::physics::PhysicsState`] rather than in the document or
+/// in `evaluate`. ADR 0007 has the reasoning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhysicsConstraint {
+    pub name: String,
+    /// The bone that sways.
+    pub bone: BoneId,
+    /// How much the bone resists following its parent, `0`..`1`. Higher lags
+    /// more, which is what reads as weight.
+    pub inertia: f32,
+    /// How hard it is pulled back toward its rest pose.
+    pub strength: f32,
+    /// How quickly motion bleeds off, `0`..`1`. At `0` it never settles.
+    pub damping: f32,
+    /// Scales the whole response; heavier bones move less for the same push.
+    pub mass: f32,
+    /// Constant world-space push, for a breeze.
+    pub wind: Vec2,
+    /// Constant world-space pull. Negative Y is down in a Y-up world.
+    pub gravity: Vec2,
+    /// `0` (constraint off) to `1` (fully simulated).
+    pub mix: f32,
+    /// Which channels the simulation drives.
+    #[serde(default = "yes")]
+    pub rotate: bool,
+    #[serde(default)]
+    pub translate: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl PhysicsConstraint {
+    /// A sway with sensible defaults: rotation only, settles in about a second.
+    pub fn sway(name: impl Into<String>, bone: BoneId) -> Self {
+        Self {
+            name: name.into(),
+            bone,
+            inertia: 0.5,
+            strength: 40.0,
+            damping: 0.5,
+            mass: 1.0,
+            wind: Vec2::ZERO,
+            gravity: Vec2::ZERO,
+            mix: 1.0,
+            rotate: true,
+            translate: false,
+        }
+    }
+}
+
 /// One constraint of any kind. Post-v1 variants (path, physics) slot in here
 /// without touching the application order or the `Pose` contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Constraint {
     Ik(IkConstraint),
     Transform(TransformConstraint),
+    Physics(PhysicsConstraint),
 }
 
 impl Constraint {
@@ -169,6 +227,7 @@ impl Constraint {
         match self {
             Constraint::Ik(ik) => &ik.name,
             Constraint::Transform(tc) => &tc.name,
+            Constraint::Physics(p) => &p.name,
         }
     }
 
@@ -177,6 +236,10 @@ impl Constraint {
         match self {
             Constraint::Ik(ik) => &ik.bones,
             Constraint::Transform(tc) => &tc.bones,
+            // One bone, but the signature is a slice: borrowing a field as a
+            // one-element slice needs the field to *be* one, so it is stored as
+            // an array.
+            Constraint::Physics(p) => std::slice::from_ref(&p.bone),
         }
     }
 
@@ -185,6 +248,7 @@ impl Constraint {
         match self {
             Constraint::Ik(ik) => ik.mix <= 0.0 || ik.bones.is_empty(),
             Constraint::Transform(tc) => !tc.has_effect(),
+            Constraint::Physics(p) => p.mix <= 0.0 || (!p.rotate && !p.translate),
         }
     }
 }

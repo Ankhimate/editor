@@ -20,6 +20,7 @@ use crate::constraints::{
 };
 use crate::ids::{BoneId, ConstraintId, SlotId};
 use crate::math::Transform;
+use crate::physics::PhysicsState;
 use crate::skeleton::Skeleton;
 use crate::transforms::{Affine2, wrap_angle};
 use slotmap::SecondaryMap;
@@ -116,6 +117,31 @@ impl Pose {
 /// `out` is reused across calls: it is reset on entry, so callers can keep one
 /// `Pose` per viewport and avoid reallocating every frame.
 pub fn evaluate(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut Pose) {
+    evaluate_inner(skel, anims, None, 0.0, out)
+}
+
+/// [`evaluate`] with a physics simulation advanced by `dt` (T-503, ADR 0007).
+///
+/// The state is caller-owned: the editor keeps one per viewport, an exporter one
+/// per render at the export fps, a runtime one per instance. `evaluate` itself
+/// stays pure, so everything that is not physics remains reproducible.
+pub fn evaluate_with(
+    skel: &Skeleton,
+    anims: &[(&Animation, f32, f32)],
+    physics: &mut PhysicsState,
+    dt: f32,
+    out: &mut Pose,
+) {
+    evaluate_inner(skel, anims, Some(physics), dt, out)
+}
+
+fn evaluate_inner(
+    skel: &Skeleton,
+    anims: &[(&Animation, f32, f32)],
+    physics: Option<&mut PhysicsState>,
+    dt: f32,
+    out: &mut Pose,
+) {
     out.reset();
 
     // ── Stage 1: setup pose ──────────────────────────────────────────────
@@ -145,7 +171,7 @@ pub fn evaluate(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut Pos
     // `update_worlds` composes the FK chain; constraints need world state to
     // solve against, so they run inside it per chain (see T-104).
     update_worlds(skel, out);
-    apply_constraints(skel, out);
+    apply_constraints(skel, out, physics, dt);
 }
 
 /// Stage 2 — apply animation timelines into the `Pose`.
@@ -262,7 +288,7 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                                     Constraint::Ik(ik) => Some(ik.mix),
                                     // An `IkMix` key pointed at a non-IK
                                     // constraint: nothing to blend from.
-                                    Constraint::Transform(_) => None,
+                                    Constraint::Transform(_) | Constraint::Physics(_) => None,
                                 })
                             })
                             .unwrap_or(0.0);
@@ -286,7 +312,7 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                             .or_else(|| {
                                 skel.constraints.get(*constraint).and_then(|c| match c {
                                     Constraint::Ik(ik) => Some(ik.softness),
-                                    Constraint::Transform(_) => None,
+                                    Constraint::Transform(_) | Constraint::Physics(_) => None,
                                 })
                             })
                             .unwrap_or(0.0);
@@ -312,7 +338,7 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                                         tc.mix_scale,
                                         tc.mix_shear,
                                     ]),
-                                    Constraint::Ik(_) => None,
+                                    Constraint::Ik(_) | Constraint::Physics(_) => None,
                                 })
                             })
                             .unwrap_or([0.0; 4]);
@@ -422,7 +448,12 @@ fn update_world_of(skel: &Skeleton, out: &mut Pose, id: BoneId) {
 
 /// Stage 3 — apply constraints in `constraint_order`, re-running FK for each
 /// affected subtree so later constraints see the earlier ones' results.
-fn apply_constraints(skel: &Skeleton, out: &mut Pose) {
+fn apply_constraints(
+    skel: &Skeleton,
+    out: &mut Pose,
+    mut physics: Option<&mut PhysicsState>,
+    dt: f32,
+) {
     let ordered: Vec<(ConstraintId, &Constraint)> = skel.ordered_constraints().collect();
     for (id, constraint) in ordered {
         match constraint {
@@ -462,6 +493,16 @@ fn apply_constraints(skel: &Skeleton, out: &mut Pose) {
                     continue;
                 }
                 apply_transform_constraint(skel, out, tc, mixes);
+            }
+            Constraint::Physics(p) => {
+                // Without a `PhysicsState` the constraint applies its rest
+                // result — which is "nothing" (ADR 0007). A thumbnail, a diff
+                // and a unit test all want the settled pose, not a frozen frame
+                // of a simulation nobody advanced.
+                let Some(physics) = physics.as_deref_mut() else {
+                    continue;
+                };
+                apply_physics(skel, out, id, p, physics, dt);
             }
         }
     }
@@ -567,6 +608,78 @@ fn apply_transform_constraint(
         update_world_of(skel, out, bone);
         update_subtree(skel, out, bone);
     }
+}
+
+/// Advance and apply one physics constraint (T-503).
+///
+/// The bone is simulated as a spring hanging off its parent: the parent's motion
+/// since the last frame is the displacement that disturbs it, and the spring
+/// pulls it back to rest. The result is written as a **local** offset, like every
+/// other constraint, so children follow and the mix means something.
+fn apply_physics(
+    skel: &Skeleton,
+    out: &mut Pose,
+    id: ConstraintId,
+    constraint: &crate::constraints::PhysicsConstraint,
+    physics: &mut PhysicsState,
+    dt: f32,
+) {
+    let bone = constraint.bone;
+    if skel.bones.get(bone).is_none() {
+        return;
+    }
+
+    // What disturbs the bone is its parent moving, measured in the parent's own
+    // frame — a rig walking to the right should swing its hair the same way
+    // whichever direction the world axes point.
+    let parent_world = skel
+        .bones
+        .get(bone)
+        .and_then(|b| b.parent)
+        .map(|p| out.world(p))
+        .unwrap_or(Affine2::IDENTITY);
+    let anchor = parent_world.transform_point(glam::Vec2::ZERO);
+    let last = physics.last_anchor(id, bone).unwrap_or(anchor);
+    let world_delta = anchor - last;
+    physics.set_anchor(id, bone, anchor);
+
+    // Wind and gravity are world-space; rotate them into the parent's frame so
+    // the same breeze pushes a sideways-hanging tail sideways.
+    let into_local = |v: glam::Vec2| {
+        parent_world
+            .invert()
+            .map(|inv| inv.transform_vector(v))
+            .unwrap_or(v)
+    };
+    let push = into_local(constraint.wind + constraint.gravity);
+    let displacement = into_local(world_delta);
+
+    let (rotation, position) = physics.advance(
+        id,
+        bone,
+        dt,
+        displacement,
+        push,
+        constraint.inertia,
+        constraint.strength,
+        constraint.damping,
+        constraint.mass,
+    );
+
+    let mix = constraint.mix.clamp(0.0, 1.0);
+    if mix <= 0.0 {
+        return;
+    }
+    if let Some(local) = out.locals.get_mut(bone) {
+        if constraint.rotate {
+            local.rotation = wrap_angle(local.rotation + rotation * mix);
+        }
+        if constraint.translate {
+            local.position += position * mix;
+        }
+    }
+    update_world_of(skel, out, bone);
+    update_subtree(skel, out, bone);
 }
 
 /// Rotate a world-space direction into a bone's parent space.
