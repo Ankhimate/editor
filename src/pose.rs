@@ -897,16 +897,22 @@ fn apply_ik(skel: &Skeleton, out: &mut Pose, ik: &IkConstraint, mix: f32) {
         2 => {
             let (parent, child) = (ik.bones[0], ik.bones[1]);
             let root_pos = out.world_position(parent);
-            let l1 = out.world_length(skel, parent);
+            // The first segment spans root → child *joint*, which is only the
+            // parent's own length when the two are directly connected. A chain
+            // that skips a bone in between makes those differ, and using the
+            // bone length there leaves the chain permanently short.
+            let l1 = (out.world_position(child) - root_pos).length();
             let l2 = out.world_length(skel, child);
 
             let (p_angle, c_angle) =
                 solve_two_bone_ik(root_pos, target_pos, l1, l2, ik.bend_direction);
 
             blend_bone_rotation(skel, out, parent, p_angle, mix);
-            // The child's world rotation changed with its parent, so re-derive it
-            // before measuring the child's own delta.
-            update_world_of(skel, out, child);
+            // The child moved with its parent, so re-derive before measuring its
+            // own delta — and re-derive the whole subtree, not just the child:
+            // a chain that skips a bone has an un-updated bone *between* the
+            // two, and the child's world is composed through it.
+            update_subtree(skel, out, parent);
             blend_bone_rotation(skel, out, child, c_angle, mix);
 
             // Descendants of the chain root follow the whole solved chain.
@@ -965,10 +971,14 @@ fn apply_fabrik(
     let mut joints: Vec<glam::Vec2> = ik.bones.iter().map(|b| out.world_position(*b)).collect();
     joints.push(out.world_tip(skel, *ik.bones.last().expect("non-empty chain")));
 
-    let lengths: Vec<f32> = ik
-        .bones
-        .iter()
-        .map(|b| out.world_length(skel, *b))
+    // Segment lengths are the distances *between successive joints*, not each
+    // bone's own length. A chain may skip bones — a rig can constrain
+    // shoulder → forearm → hand while a shoulder bone sits between the first
+    // two — and then a bone's length is not the gap the solver has to span.
+    // Measuring the gaps handles both cases and needs no extra data.
+    let lengths: Vec<f32> = joints
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).length())
         .collect();
     if lengths.iter().any(|l| *l <= 1e-6) {
         // A zero-length bone has no direction to solve for, and normalizing its
@@ -986,7 +996,9 @@ fn apply_fabrik(
         let Some(angle) = solve_aim(from, to) else {
             continue;
         };
-        update_world_of(skel, out, bone);
+        // Everything the previous rotation moved, including bones the chain
+        // skips over, before this one measures its delta.
+        update_subtree(skel, out, ik.bones[0]);
         blend_bone_rotation(skel, out, bone, angle, mix);
     }
     update_subtree(skel, out, ik.bones[0]);
@@ -2692,5 +2704,53 @@ mod tests {
             (at - glam::vec2(0.0, 10.0)).length() < 1e-3,
             "the child swung with its previewed parent: {at:?}"
         );
+    }
+    /// A chain may skip bones: a rig can constrain shoulder → forearm → hand
+    /// with a shoulder bone sitting between the first two. The solver has to
+    /// span the *gap* between joints, not each bone's own length, or the chain
+    /// is permanently short and snaps straight instead of reaching.
+    #[test]
+    fn an_ik_chain_that_skips_a_bone_still_reaches() {
+        let mut skel = Skeleton::new();
+        // Every bone is 10 long, but `lower`'s joint sits 200 from `upper` —
+        // two 100-unit hops through a bone the chain does not list.
+        let upper = skel.add_bone(bone("upper", None));
+        let skipped = skel.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(100.0, 0.0),
+                ..Transform::default()
+            },
+            ..bone("skipped", Some(upper))
+        });
+        let lower = skel.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(100.0, 0.0),
+                ..Transform::default()
+            },
+            ..bone("lower", Some(skipped))
+        });
+        let target = skel.add_bone(Bone {
+            local_transform: Transform {
+                // ~198 away: inside the chain's 210 reach and outside the 190 it
+                // cannot fold below.
+                position: glam::vec2(140.0, 140.0),
+                ..Transform::default()
+            },
+            ..bone("target", None)
+        });
+        skel.add_constraint(Constraint::Ik(IkConstraint {
+            mix: 1.0,
+            ..IkConstraint::two_bone("arm", target, [upper, lower])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        // The chain spans 200 (upper→lower joint) + 10 (lower's own length), so
+        // the target is reachable — but only if the first segment is measured as
+        // that gap rather than as `upper.length`, which is 10.
+        let tip = pose.world_tip(&skel, lower);
+        let miss = (tip - pose.world_position(target)).length();
+        assert!(miss < 5.0, "the chain reached its target, {miss} away");
     }
 }
