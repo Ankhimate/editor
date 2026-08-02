@@ -22,7 +22,11 @@ use crate::ids::BoneId;
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
-/// An inverse-kinematics constraint over a 1- or 2-bone chain.
+fn default_stretch_limit() -> f32 {
+    1.1
+}
+
+/// An inverse-kinematics constraint over a chain of any length.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IkConstraint {
     pub name: String,
@@ -35,16 +39,19 @@ pub struct IkConstraint {
     /// `0.0` (pure FK) to `1.0` (pure IK).
     pub mix: f32,
     /// Distance over which the chain eases off as it approaches full extension,
-    /// to avoid the sudden "snap straight" at the reach limit.
-    ///
-    /// Serialized so files round-trip; **not yet implemented** in the solver.
+    /// so it does not snap straight the instant the target leaves its range.
+    /// World units; `0` disables it (T-504).
     #[serde(default)]
     pub softness: f32,
-    /// Allow the chain to scale beyond its natural length to reach the target.
-    ///
-    /// Serialized so files round-trip; **not yet implemented** in the solver.
+    /// Allow the chain to lengthen to reach a target beyond its natural reach.
     #[serde(default)]
     pub stretch: bool,
+    /// Most a stretching chain may grow, as a factor of its natural length.
+    ///
+    /// Uncapped stretch turns an out-of-range target into a rubber band, so
+    /// this defaults to a tenth rather than to infinity (T-504).
+    #[serde(default = "default_stretch_limit")]
+    pub stretch_limit: f32,
 }
 
 impl IkConstraint {
@@ -58,6 +65,7 @@ impl IkConstraint {
             mix: 1.0,
             softness: 0.0,
             stretch: false,
+            stretch_limit: default_stretch_limit(),
         }
     }
 
@@ -71,6 +79,7 @@ impl IkConstraint {
             mix: 1.0,
             softness: 0.0,
             stretch: false,
+            stretch_limit: default_stretch_limit(),
         }
     }
 }
@@ -178,6 +187,115 @@ impl Constraint {
             Constraint::Transform(tc) => !tc.has_effect(),
         }
     }
+}
+
+/// How far a chain may be pulled toward a target before `softness` stops easing.
+///
+/// Softness eases the *last* stretch of reach so a chain does not snap straight
+/// the instant the target leaves its range. Expressed as a distance in world
+/// units, subtracted from the effective reach and eased back in.
+pub fn soften_target(root_pos: Vec2, target_pos: Vec2, reach: f32, softness: f32) -> Vec2 {
+    if softness <= 0.0 {
+        return target_pos;
+    }
+    let diff = target_pos - root_pos;
+    let distance = diff.length();
+    // Only the approach to full extension is softened; a target comfortably
+    // inside the chain's range is reached exactly.
+    let soft_start = (reach - softness).max(0.0);
+    if distance <= soft_start || distance <= 1e-6 {
+        return target_pos;
+    }
+    // Beyond `soft_start` the remaining distance is compressed asymptotically
+    // toward `reach`: an exponential approach, so the chain never quite locks
+    // out and the derivative stays continuous at the handover.
+    let over = distance - soft_start;
+    let remaining = (reach - soft_start).max(1e-6);
+    let eased = remaining * (1.0 - (-over / remaining).exp());
+    root_pos + diff / distance * (soft_start + eased)
+}
+
+/// How far a chain must stretch to reach a target beyond its natural length.
+///
+/// Returns a factor to scale bone lengths by — `1.0` when the target is within
+/// reach. Capped at `limit` (e.g. `1.1` for "10% longer at most"), because an
+/// uncapped stretch turns an out-of-range target into a rubber band.
+pub fn stretch_factor(root_pos: Vec2, target_pos: Vec2, reach: f32, limit: f32) -> f32 {
+    if reach <= 1e-6 {
+        return 1.0;
+    }
+    let distance = (target_pos - root_pos).length();
+    if distance <= reach {
+        return 1.0;
+    }
+    (distance / reach).min(limit.max(1.0))
+}
+
+/// Iterations FABRIK may run before giving up on a chain.
+///
+/// FABRIK converges quickly — a 3-bone chain is usually within tolerance in
+/// under five passes — and the loop also exits early once it is close enough.
+/// The cap only bounds the pathological case (a target the chain cannot reach
+/// while its root is pinned), where extra passes buy nothing.
+pub const FABRIK_ITERATIONS: usize = 12;
+/// How close to the target counts as solved, in world units.
+pub const FABRIK_TOLERANCE: f32 = 0.01;
+
+/// Solve an N-bone chain with FABRIK (Forward And Backward Reaching Inverse
+/// Kinematics).
+///
+/// `joints` are the chain's joint positions, root first, with one more entry
+/// than there are bones — the last is the end effector. `lengths[i]` is the
+/// distance from `joints[i]` to `joints[i + 1]`.
+///
+/// Returns the solved joint positions. The root is pinned: a chain whose base
+/// wanders is not a skeleton.
+///
+/// # Why FABRIK and not CCD or Jacobian
+///
+/// FABRIK is positional rather than angular: each pass just moves points along
+/// lines, so there are no trigonometric singularities, no matrix inversion, and
+/// no gimbal-adjacent failure at full extension — the cases where a CCD chain
+/// visibly judders. It is also deterministic and allocation-free here, which
+/// `evaluate`'s contract requires (PLAN §2.6).
+pub fn solve_fabrik(joints: &[Vec2], lengths: &[f32], target: Vec2) -> Vec<Vec2> {
+    let mut points = joints.to_vec();
+    if points.len() < 2 || lengths.len() + 1 != points.len() {
+        return points;
+    }
+    let root = points[0];
+    let total: f32 = lengths.iter().sum();
+
+    // Out of reach: there is one answer and it is exact — point straight at the
+    // target. Iterating would only approach it from below.
+    if (target - root).length() >= total {
+        let direction = (target - root).normalize_or_zero();
+        for i in 1..points.len() {
+            points[i] = points[i - 1] + direction * lengths[i - 1];
+        }
+        return points;
+    }
+
+    for _ in 0..FABRIK_ITERATIONS {
+        if (points[points.len() - 1] - target).length() <= FABRIK_TOLERANCE {
+            break;
+        }
+        // Backward: pull the end effector onto the target, then walk to the root
+        // keeping every bone its own length.
+        let last = points.len() - 1;
+        points[last] = target;
+        for i in (0..last).rev() {
+            let direction = (points[i] - points[i + 1]).normalize_or_zero();
+            points[i] = points[i + 1] + direction * lengths[i];
+        }
+        // Forward: put the root back where it belongs and walk out again.
+        points[0] = root;
+        for i in 1..points.len() {
+            let direction = (points[i] - points[i - 1]).normalize_or_zero();
+            points[i] = points[i - 1] + direction * lengths[i - 1];
+        }
+    }
+    points
 }
 
 /// Aim a single bone at a target.
