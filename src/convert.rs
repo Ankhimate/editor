@@ -260,6 +260,8 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 physics: None,
                 forces: None,
                 channels: None,
+                slot: None,
+                path: None,
                 extra: Default::default(),
             },
             Constraint::Transform(tc) => schema::Constraint {
@@ -289,6 +291,8 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 physics: None,
                 forces: None,
                 channels: None,
+                slot: None,
+                path: None,
                 extra: Default::default(),
             },
             Constraint::Physics(p) => schema::Constraint {
@@ -311,6 +315,30 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 physics: Some([p.inertia, p.strength, p.damping, p.mass]),
                 forces: Some([p.wind.x, p.wind.y, p.gravity.x, p.gravity.y]),
                 channels: Some([p.rotate, p.translate]),
+                slot: None,
+                path: None,
+                extra: Default::default(),
+            },
+            Constraint::Path(p) => schema::Constraint {
+                name: p.name.clone(),
+                kind: "path".to_string(),
+                // A path constraint has no target bone; its source is a slot.
+                target: String::new(),
+                bones: p.bones.iter().copied().map(bone_name).collect(),
+                bend_direction: 1.0,
+                mix: 1.0,
+                softness: 0.0,
+                stretch: false,
+                stretch_limit: 1.1,
+                mixes: None,
+                offsets: None,
+                local: false,
+                relative: false,
+                physics: None,
+                forces: None,
+                channels: None,
+                slot: Some(slot_name(p.slot)),
+                path: Some([p.position, p.spacing, p.mix_rotate, p.mix_translate]),
                 extra: Default::default(),
             },
         })
@@ -403,6 +431,12 @@ fn attachment_to_schema(skeleton: &Skeleton, attachment: &att::Attachment) -> sc
         att::Attachment::Clipping(c) => schema::Attachment::Clipping(schema::Clipping {
             vertices: flatten_vec2(&c.vertices),
             end_slot: c.end_slot.clone(),
+            extra: Default::default(),
+        }),
+        att::Attachment::Path(p) => schema::Attachment::Path(schema::Path {
+            vertices: flatten_vec2(&p.vertices),
+            closed: p.closed,
+            constant_speed: p.constant_speed,
             extra: Default::default(),
         }),
         att::Attachment::Mesh(m) => schema::Attachment::Mesh(schema::Mesh {
@@ -698,9 +732,15 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
     // Constraints.
     let mut constraint_ids: HashMap<String, ConstraintId> = HashMap::new();
     for c in &project.constraints {
-        let Some(&target) = bone_ids.get(&c.target) else {
-            report.dangling("constraint target", &c.target);
-            continue;
+        // A path constraint's source is a slot, not a bone, so it is the one
+        // kind with no target to resolve.
+        let target = match bone_ids.get(&c.target) {
+            Some(&id) => id,
+            None if c.kind == "path" => Default::default(),
+            None => {
+                report.dangling("constraint target", &c.target);
+                continue;
+            }
         };
         let mut chain = Vec::with_capacity(c.bones.len());
         let mut chain_ok = true;
@@ -758,6 +798,27 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
                     mix: c.mix,
                     rotate,
                     translate,
+                })
+            }
+            "path" => {
+                let Some(slot_name) = c.slot.as_deref() else {
+                    report.dangling("path constraint slot", &c.name);
+                    continue;
+                };
+                let Some(&slot) = slot_ids.get(slot_name) else {
+                    report.dangling("path constraint slot", slot_name);
+                    continue;
+                };
+                let [position, spacing, mix_rotate, mix_translate] =
+                    c.path.unwrap_or([0.0, 1.0, 1.0, 1.0]);
+                Constraint::Path(ankhimate_core::constraints::PathConstraint {
+                    name: c.name.clone(),
+                    slot,
+                    bones: chain,
+                    position,
+                    spacing,
+                    mix_rotate,
+                    mix_translate,
                 })
             }
             "ik" => Constraint::Ik(IkConstraint {
@@ -852,6 +913,11 @@ fn attachment_from_schema(
         schema::Attachment::Clipping(c) => att::Attachment::Clipping(att::ClippingAttachment {
             vertices: unflatten_vec2(&c.vertices),
             end_slot: c.end_slot.clone(),
+        }),
+        schema::Attachment::Path(p) => att::Attachment::Path(att::PathAttachment {
+            vertices: unflatten_vec2(&p.vertices),
+            closed: p.closed,
+            constant_speed: p.constant_speed,
         }),
         schema::Attachment::Mesh(m) => att::Attachment::Mesh(att::MeshAttachment {
             texture: m.texture.clone(),
