@@ -350,9 +350,11 @@ fn main() {
         0.0,
         0.0,
     );
-    skel.add_constraint(Constraint::Ik(IkConstraint {
+    // Live, so dragging the target in Setup bends the leg immediately — an IK
+    // rig that does nothing until you find a slider is not a demonstration.
+    let leg_ik = skel.add_constraint(Constraint::Ik(IkConstraint {
         bones: vec![thigh_l, shin_l],
-        mix: 0.0, // Off by default: turn it up in the inspector to see it take over.
+        mix: 1.0,
         ..IkConstraint::two_bone("leg_ik_l", foot_target, [thigh_l, shin_l])
     }));
 
@@ -416,7 +418,45 @@ fn main() {
             },
             rotate(torso, &[(0.0, -3.0), (0.5, 3.0), (1.0, -3.0)]),
             rotate(head, &[(0.0, 3.0), (0.5, -3.0), (1.0, 3.0)]),
+            // The walk is hand-keyed FK, so the constraint stands down for it.
+            // Keying the mix rather than authoring it off is the point: the same
+            // rig does IK when posed and FK when played.
+            Timeline::IkMix {
+                constraint: leg_ik,
+                keys: vec![Key {
+                    time: 0.0,
+                    value: 0.0,
+                    interp: Interp::Stepped,
+                }],
+            },
         ],
+    });
+
+    // A second clip that *is* driven by IK: the foot target traces a step and
+    // the leg works out its own angles. Compare the two dopesheets — this one
+    // keys one bone where the walk keys four.
+    animations.insert(Animation {
+        name: "leg_ik".into(),
+        duration: 1.0,
+        looping: true,
+        events: Vec::new(),
+        timelines: vec![Timeline::BoneTranslate {
+            bone: foot_target,
+            keys: [
+                (0.0, glam::vec2(0.0, 0.0)),
+                (0.25, glam::vec2(45.0, 35.0)),
+                (0.5, glam::vec2(80.0, 0.0)),
+                (0.75, glam::vec2(40.0, -6.0)),
+                (1.0, glam::vec2(0.0, 0.0)),
+            ]
+            .iter()
+            .map(|(time, offset)| Key {
+                time: *time,
+                value: *offset,
+                interp: Interp::Linear,
+            })
+            .collect(),
+        }],
     });
 
     // ── Write it ─────────────────────────────────────────────────────────
@@ -440,9 +480,10 @@ fn main() {
 
     println!("wrote {}", path.display());
     println!(
-        "  {} bones, {} slots, {} images, 1 animation",
+        "  {} bones, {} slots, {} images, {} animations",
         skel.bones.len(),
         skel.slots.len(),
-        assets.images.len()
+        assets.images.len(),
+        animations.len()
     );
 }
