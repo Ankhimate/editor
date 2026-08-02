@@ -469,6 +469,16 @@ fn timeline_to_schema(
                 })
                 .collect(),
         },
+        anim::Timeline::SlotVisible { slot, keys } => schema::Timeline::SlotVisible {
+            slot: slot_name(*slot),
+            keys: keys
+                .iter()
+                .map(|k| schema::VisibleKey {
+                    time: k.time,
+                    value: k.value,
+                })
+                .collect(),
+        },
         anim::Timeline::SlotAttachment { slot, keys } => schema::Timeline::SlotAttachment {
             slot: slot_name(*slot),
             keys: keys
@@ -908,6 +918,19 @@ fn timeline_from_schema(
                     time: k.time,
                     value: k.value,
                     interp: interp_from_schema(k.interp),
+                })
+                .collect(),
+        },
+        schema::Timeline::SlotVisible { slot, keys } => anim::Timeline::SlotVisible {
+            slot: slot!(slot),
+            keys: keys
+                .iter()
+                .map(|k| anim::Key {
+                    time: k.time,
+                    value: k.value,
+                    // Stepped by construction; the schema does not carry a curve
+                    // for a boolean because there is no curve to carry.
+                    interp: anim::Interp::Stepped,
                 })
                 .collect(),
         },
