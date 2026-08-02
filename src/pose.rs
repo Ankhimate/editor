@@ -33,6 +33,11 @@ pub struct Pose {
     /// World affine per bone, composed along `update_order`.
     pub worlds: SecondaryMap<BoneId, Affine2>,
     pub slot_colors: SecondaryMap<SlotId, [f32; 4]>,
+    /// Two-color tint per slot, when the slot has one (T-505).
+    pub slot_dark_colors: SecondaryMap<SlotId, [f32; 4]>,
+    /// Whether each slot draws. Absent means visible — the common case, so it
+    /// costs nothing on a rig that never hides anything.
+    pub slot_visible: SecondaryMap<SlotId, bool>,
     pub slot_attachments: SecondaryMap<SlotId, Option<String>>,
     /// Draw order after animation offsets are applied.
     pub draw_order: Vec<SlotId>,
@@ -88,6 +93,8 @@ impl Pose {
         self.locals.clear();
         self.worlds.clear();
         self.slot_colors.clear();
+        self.slot_dark_colors.clear();
+        self.slot_visible.clear();
         self.slot_attachments.clear();
         self.draw_order.clear();
         self.deforms.clear();
@@ -117,6 +124,9 @@ pub fn evaluate(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut Pos
     }
     for (id, slot) in skel.slots.iter() {
         out.slot_colors.insert(id, slot.color);
+        if let Some(dark) = slot.dark_color {
+            out.slot_dark_colors.insert(id, dark);
+        }
         out.slot_attachments.insert(id, slot.attachment.clone());
     }
     out.draw_order.extend_from_slice(&skel.draw_order);
@@ -150,6 +160,7 @@ pub fn evaluate(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut Pos
 fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut Pose) {
     // Winner-takes-all bookkeeping for the non-blendable timelines.
     let mut attachment_winner: SecondaryMap<SlotId, f32> = SecondaryMap::new();
+    let mut visible_winner: SecondaryMap<SlotId, f32> = SecondaryMap::new();
     let mut draw_order_winner: Option<f32> = None;
 
     for &(anim, time, alpha) in anims {
@@ -199,6 +210,16 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                         // core math is radians (ADR 0002).
                         local.shear +=
                             glam::vec2(offset.x.to_radians(), offset.y.to_radians()) * alpha;
+                    }
+                }
+                Timeline::SlotVisible { slot, keys } => {
+                    // Stepped and winner-takes-all, like `SlotAttachment`: an
+                    // average of "shown" and "hidden" is not a state.
+                    if let Some(visible) = animation::sample_stepped(keys, time, &mut hint)
+                        && visible_winner.get(*slot).is_none_or(|best| alpha >= *best)
+                    {
+                        visible_winner.insert(*slot, alpha);
+                        out.slot_visible.insert(*slot, visible);
                     }
                 }
                 Timeline::SlotColor { slot, keys } => {
@@ -2071,5 +2092,121 @@ mod tests {
             let p = pose.world_position(b);
             assert!(p.x.is_finite() && p.y.is_finite(), "NaN at {b:?}: {p:?}");
         }
+    }
+    // ── Slot presentation (T-505) ────────────────────────────────────────
+
+    /// The acceptance case: a visibility key hides a slot at one frame and
+    /// shows it at another, with nothing in between — no interpolation.
+    #[test]
+    fn a_visibility_key_cuts_rather_than_fades() {
+        use crate::slot::Slot;
+
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let slot = skel.add_slot(Slot::new("art".into(), root));
+
+        let anim = Animation {
+            name: "blink".into(),
+            duration: 1.0,
+            looping: false,
+            events: Vec::new(),
+            timelines: vec![Timeline::SlotVisible {
+                slot,
+                keys: vec![
+                    Key::stepped(0.0, true),
+                    Key::stepped(0.3, false),
+                    Key::stepped(0.6, true),
+                ],
+            }],
+        };
+
+        let mut pose = Pose::new();
+        for (time, expected) in [
+            (0.0, true),
+            (0.29, true),
+            (0.3, false),
+            (0.45, false),
+            (0.59, false),
+            (0.6, true),
+            (1.0, true),
+        ] {
+            evaluate(&skel, &[(&anim, time, 1.0)], &mut pose);
+            assert_eq!(
+                pose.slot_visible.get(slot).copied(),
+                Some(expected),
+                "at t={time}"
+            );
+        }
+    }
+
+    /// Visibility is winner-takes-all across a crossfade: an average of "shown"
+    /// and "hidden" is not a state.
+    #[test]
+    fn visibility_does_not_blend_across_animations() {
+        use crate::slot::Slot;
+
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let slot = skel.add_slot(Slot::new("art".into(), root));
+
+        let shown = Animation {
+            name: "shown".into(),
+            duration: 1.0,
+            looping: false,
+            events: Vec::new(),
+            timelines: vec![Timeline::SlotVisible {
+                slot,
+                keys: vec![Key::stepped(0.0, true)],
+            }],
+        };
+        let hidden = Animation {
+            name: "hidden".into(),
+            timelines: vec![Timeline::SlotVisible {
+                slot,
+                keys: vec![Key::stepped(0.0, false)],
+            }],
+            ..shown.clone()
+        };
+
+        let mut pose = Pose::new();
+        // The higher alpha wins, whichever order they are listed in.
+        evaluate(&skel, &[(&shown, 0.0, 0.3), (&hidden, 0.0, 0.7)], &mut pose);
+        assert_eq!(pose.slot_visible.get(slot).copied(), Some(false));
+        evaluate(&skel, &[(&hidden, 0.0, 0.7), (&shown, 0.0, 0.9)], &mut pose);
+        assert_eq!(pose.slot_visible.get(slot).copied(), Some(true));
+    }
+
+    /// A slot with no visibility timeline is visible, and costs nothing.
+    #[test]
+    fn slots_are_visible_unless_a_key_says_otherwise() {
+        use crate::slot::Slot;
+
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let slot = skel.add_slot(Slot::new("art".into(), root));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        assert_eq!(pose.slot_visible.get(slot), None, "absent means visible");
+    }
+
+    /// The two-color tint reaches the pose from the setup slot.
+    #[test]
+    fn a_slots_dark_color_lands_in_the_pose() {
+        use crate::slot::Slot;
+
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let slot = skel.add_slot(Slot {
+            dark_color: Some([0.2, 0.0, 0.4, 1.0]),
+            ..Slot::new("art".into(), root)
+        });
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        assert_eq!(
+            pose.slot_dark_colors.get(slot).copied(),
+            Some([0.2, 0.0, 0.4, 1.0])
+        );
     }
 }
