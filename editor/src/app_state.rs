@@ -1,4 +1,4 @@
-﻿//! The editor's top-level state: document + session + history + derived pose.
+//! The editor's top-level state: document + session + history + derived pose.
 //!
 //! This is the document/session/derived split from PLAN §3.2. `AppState` itself
 //! owns no data — it is the seam that holds the four pieces together and the one
@@ -784,30 +784,28 @@ impl AppState {
         // playback, or when the rigger has asked to simulate while tuning
         // values in Setup (T-503). A still frame evaluates to the rest pose, so
         // scrubbing the timeline is reproducible.
+        // In-flight drags go in as overrides rather than being painted on
+        // afterwards, so constraints see them: dragging an IK target has to move
+        // the chain *during* the drag, not on release.
         let dt = session.physics_dt.take().unwrap_or(0.0);
-        if dt > 0.0 {
-            ankhimate_core::pose::evaluate_with(&doc.skeleton, &animations, physics, dt, pose);
-        } else {
-            ankhimate_core::pose::evaluate(&doc.skeleton, &animations, pose);
-        }
-
-        if self.session.has_previews() {
-            self.apply_previews();
-        }
-    }
-
-    /// Overlay `Session::preview_locals` onto the evaluated pose and re-run the
-    /// world pass for the affected bones and their descendants.
-    fn apply_previews(&mut self) {
-        for (bone, local) in self.session.preview_locals.iter() {
-            if self.pose.locals.contains_key(bone) {
-                self.pose.locals.insert(bone, *local);
+        let overrides = &session.preview_locals;
+        match (dt > 0.0, overrides.is_empty()) {
+            (true, true) => {
+                ankhimate_core::pose::evaluate_with(&doc.skeleton, &animations, physics, dt, pose)
+            }
+            (true, false) => ankhimate_core::pose::evaluate_posed_with(
+                &doc.skeleton,
+                &animations,
+                overrides,
+                physics,
+                dt,
+                pose,
+            ),
+            (false, true) => ankhimate_core::pose::evaluate(&doc.skeleton, &animations, pose),
+            (false, false) => {
+                ankhimate_core::pose::evaluate_posed(&doc.skeleton, &animations, overrides, pose)
             }
         }
-        // Cheapest correct thing: recompose every world affine along the
-        // topological order. A 500-bone rig is T-706's benchmark target; if this
-        // shows up there, narrow it to the previewed subtrees.
-        ankhimate_core::pose::recompose_worlds(&self.doc.skeleton, &mut self.pose);
     }
 }
 
