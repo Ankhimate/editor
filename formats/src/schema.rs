@@ -236,6 +236,9 @@ pub struct Constraint {
     pub softness: f32,
     #[serde(default)]
     pub stretch: bool,
+    /// Most a stretching chain may grow, as a factor of its natural length.
+    #[serde(default = "stretch_limit_default")]
+    pub stretch_limit: f32,
 
     // ── Transform constraints (T-501) ────────────────────────────────────
     // Defaulted and skipped when empty, so an IK constraint's JSON is
@@ -306,6 +309,16 @@ pub enum Timeline {
         keys: Vec<DrawOrderKey>,
     },
     IkMix {
+        constraint: String,
+        keys: Vec<ScalarKey>,
+    },
+    /// `+1` / `-1`, stepped (T-504).
+    IkBendDirection {
+        constraint: String,
+        keys: Vec<ScalarKey>,
+    },
+    /// World units (T-504).
+    IkSoftness {
         constraint: String,
         keys: Vec<ScalarKey>,
     },
@@ -382,6 +395,10 @@ pub struct DeformKey {
     pub offsets: Vec<f32>,
     #[serde(default, flatten)]
     pub interp: Interp,
+}
+
+fn stretch_limit_default() -> f32 {
+    1.1
 }
 
 fn one() -> f32 {

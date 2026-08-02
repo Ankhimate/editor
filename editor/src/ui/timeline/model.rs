@@ -341,6 +341,14 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
             GroupKey::Global,
             read_only_row("ik mix", keys.iter().map(|k| (k.time, k.interp))),
         ),
+        Timeline::IkBendDirection { keys, .. } => (
+            GroupKey::Global,
+            read_only_row("ik bend", keys.iter().map(|k| (k.time, k.interp))),
+        ),
+        Timeline::IkSoftness { keys, .. } => (
+            GroupKey::Global,
+            read_only_row("ik softness", keys.iter().map(|k| (k.time, k.interp))),
+        ),
         Timeline::TransformConstraintMix { keys, .. } => (
             GroupKey::Global,
             read_only_row("constraint mix", keys.iter().map(|k| (k.time, k.interp))),

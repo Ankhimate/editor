@@ -130,6 +130,20 @@ pub enum Timeline {
         constraint: ConstraintId,
         keys: Vec<Key<f32>>,
     },
+    /// Bend direction for an IK constraint: `+1` or `-1`, stepped (T-504).
+    ///
+    /// Stepped by construction — a bend direction interpolated through zero
+    /// would pass through "no preference" and let the chain flip either way,
+    /// which is exactly the artifact this timeline exists to control.
+    IkBendDirection {
+        constraint: ConstraintId,
+        keys: Vec<Key<f32>>,
+    },
+    /// Softness for an IK constraint, in world units (T-504).
+    IkSoftness {
+        constraint: ConstraintId,
+        keys: Vec<Key<f32>>,
+    },
     /// Absolute per-channel mixes for a transform constraint (T-501), in the
     /// order `[rotate, translate, scale, shear]`.
     ///
@@ -165,6 +179,8 @@ impl Timeline {
             Timeline::SlotAttachment { keys, .. } => last!(keys),
             Timeline::DrawOrder { keys } => last!(keys),
             Timeline::IkMix { keys, .. } => last!(keys),
+            Timeline::IkBendDirection { keys, .. } => last!(keys),
+            Timeline::IkSoftness { keys, .. } => last!(keys),
             Timeline::TransformConstraintMix { keys, .. } => last!(keys),
             Timeline::Deform { keys, .. } => last!(keys),
         }
@@ -180,6 +196,8 @@ impl Timeline {
             Timeline::SlotAttachment { keys, .. } => keys.is_empty(),
             Timeline::DrawOrder { keys } => keys.is_empty(),
             Timeline::IkMix { keys, .. } => keys.is_empty(),
+            Timeline::IkBendDirection { keys, .. } => keys.is_empty(),
+            Timeline::IkSoftness { keys, .. } => keys.is_empty(),
             Timeline::TransformConstraintMix { keys, .. } => keys.is_empty(),
             Timeline::Deform { keys, .. } => keys.is_empty(),
         }

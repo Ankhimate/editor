@@ -14,7 +14,10 @@
 //! [`Skeleton::update_order`](crate::skeleton::Skeleton::update_order).
 
 use crate::animation::{self, Animation, Timeline};
-use crate::constraints::{Constraint, IkConstraint, solve_aim, solve_two_bone_ik};
+use crate::constraints::{
+    Constraint, IkConstraint, soften_target, solve_aim, solve_fabrik, solve_two_bone_ik,
+    stretch_factor,
+};
 use crate::ids::{BoneId, ConstraintId, SlotId};
 use crate::math::Transform;
 use crate::skeleton::Skeleton;
@@ -40,6 +43,9 @@ pub struct Pose {
     /// Animated transform-constraint mixes, `[rotate, translate, scale, shear]`
     /// (T-501). Absent means "use the constraint's own values".
     pub transform_mix: SecondaryMap<ConstraintId, [f32; 4]>,
+    /// Animated IK bend direction and softness overrides (T-504).
+    pub ik_bend_direction: SecondaryMap<ConstraintId, f32>,
+    pub ik_softness: SecondaryMap<ConstraintId, f32>,
 }
 
 impl Pose {
@@ -87,6 +93,8 @@ impl Pose {
         self.deforms.clear();
         self.ik_mix.clear();
         self.transform_mix.clear();
+        self.ik_bend_direction.clear();
+        self.ik_softness.clear();
     }
 }
 
@@ -241,6 +249,30 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                             .insert(*constraint, current + (mix - current) * alpha);
                     }
                 }
+                Timeline::IkBendDirection { constraint, keys } => {
+                    // Stepped: a direction interpolated through zero would let
+                    // the chain flip either way mid-blend.
+                    if let Some(dir) = animation::sample_stepped(keys, time, &mut hint) {
+                        out.ik_bend_direction.insert(*constraint, dir.signum());
+                    }
+                }
+                Timeline::IkSoftness { constraint, keys } => {
+                    if let Some(softness) = animation::sample(keys, time, &mut hint) {
+                        let current = out
+                            .ik_softness
+                            .get(*constraint)
+                            .copied()
+                            .or_else(|| {
+                                skel.constraints.get(*constraint).and_then(|c| match c {
+                                    Constraint::Ik(ik) => Some(ik.softness),
+                                    Constraint::Transform(_) => None,
+                                })
+                            })
+                            .unwrap_or(0.0);
+                        out.ik_softness
+                            .insert(*constraint, current + (softness - current) * alpha);
+                    }
+                }
                 Timeline::TransformConstraintMix { constraint, keys } => {
                     if let Some(mixes) = animation::sample(keys, time, &mut hint) {
                         // Same crossfade shape as `IkMix`: blend from whatever
@@ -379,6 +411,21 @@ fn apply_constraints(skel: &Skeleton, out: &mut Pose) {
                 if mix <= 0.0 || ik.bones.is_empty() {
                     continue;
                 }
+                // Animated bend direction and softness override the authored
+                // values, the same way `IkMix` overrides `mix` (T-504).
+                let bend = out.ik_bend_direction.get(id).copied();
+                let softness = out.ik_softness.get(id).copied();
+                let effective;
+                let ik = if bend.is_some() || softness.is_some() {
+                    effective = IkConstraint {
+                        bend_direction: bend.unwrap_or(ik.bend_direction),
+                        softness: softness.unwrap_or(ik.softness),
+                        ..ik.clone()
+                    };
+                    &effective
+                } else {
+                    ik
+                };
                 apply_ik(skel, out, ik, mix);
             }
             Constraint::Transform(tc) => {
@@ -559,7 +606,28 @@ fn apply_ik(skel: &Skeleton, out: &mut Pose, ik: &IkConstraint, mix: f32) {
         return;
     }
 
-    let target_pos = out.world_position(ik.target);
+    let raw_target = out.world_position(ik.target);
+    let root_pos = out.world_position(ik.bones[0]);
+    // Natural reach: the chain fully extended, measured in world units so a
+    // scaled bone counts for what it actually spans.
+    let reach: f32 = ik
+        .bones
+        .iter()
+        .map(|b| out.world_length(skel, *b))
+        .sum::<f32>();
+
+    // Softness eases the approach to full extension (T-504); stretch lets the
+    // chain grow past it. They compose: soften first so the eased target is
+    // what stretch measures against, or a soft chain would still snap.
+    let target_pos = soften_target(root_pos, raw_target, reach, ik.softness);
+    let stretch = if ik.stretch {
+        stretch_factor(root_pos, target_pos, reach, ik.stretch_limit)
+    } else {
+        1.0
+    };
+    if stretch > 1.0 {
+        apply_stretch(skel, out, ik, stretch, mix);
+    }
 
     match ik.bones.len() {
         // Aim: point a single bone's X axis at the target.
@@ -571,7 +639,8 @@ fn apply_ik(skel: &Skeleton, out: &mut Pose, ik: &IkConstraint, mix: f32) {
                 update_subtree(skel, out, bone);
             }
         }
-        // Two-bone IK.
+        // Two-bone IK: an exact solution, so it is worth keeping rather than
+        // letting FABRIK iterate toward what trigonometry already knows.
         2 => {
             let (parent, child) = (ik.bones[0], ik.bones[1]);
             let root_pos = out.world_position(parent);
@@ -590,10 +659,84 @@ fn apply_ik(skel: &Skeleton, out: &mut Pose, ik: &IkConstraint, mix: f32) {
             // Descendants of the chain root follow the whole solved chain.
             update_subtree(skel, out, parent);
         }
-        // Longer chains (FABRIK et al.) are post-v1; ignore rather than
-        // half-solve and produce a silently wrong pose.
-        _ => {}
+        // Three or more: FABRIK (T-504).
+        _ => apply_fabrik(skel, out, ik, target_pos, mix),
     }
+}
+
+/// Scale the chain's bones so it can reach past its natural length (T-504).
+///
+/// Writes `local.scale.x` — the axis a bone's length runs along — so the stretch
+/// inherits down the chain the way every other transform does, and so a stretched
+/// chain's attachments stretch with it rather than detaching.
+fn apply_stretch(skel: &Skeleton, out: &mut Pose, ik: &IkConstraint, factor: f32, mix: f32) {
+    // Mixed like everything else: a half-mixed IK should be half-stretched, or
+    // fading a constraint out would leave the bones long.
+    let scaled = 1.0 + (factor - 1.0) * mix;
+    for &bone in &ik.bones {
+        // Scale is inherited, so a child whose parent is also in the chain has
+        // *already* been stretched by that parent. Scaling it again compounds:
+        // a two-bone chain at 1.5 came out 1.875 times its length, because the
+        // child got 1.5 from its parent and 1.5 of its own.
+        let inherits_from_chain = skel
+            .bones
+            .get(bone)
+            .and_then(|b| b.parent.map(|p| (p, b.inherit.scale)))
+            .is_some_and(|(parent, inherits)| inherits && ik.bones.contains(&parent));
+        if inherits_from_chain {
+            continue;
+        }
+        if let Some(local) = out.locals.get_mut(bone) {
+            local.scale.x *= scaled;
+        }
+        update_world_of(skel, out, bone);
+    }
+    update_subtree(skel, out, ik.bones[0]);
+}
+
+/// Solve a chain of three or more bones with FABRIK, then convert the solved
+/// joint positions back into bone rotations (T-504).
+///
+/// FABRIK works in positions; a skeleton stores angles. The conversion is the
+/// interesting half: each bone is rotated to point at the next solved joint,
+/// blended shortest-arc through the same local-delta path as every other
+/// constraint (defect D3), so children follow and a partial mix is meaningful.
+fn apply_fabrik(
+    skel: &Skeleton,
+    out: &mut Pose,
+    ik: &IkConstraint,
+    target_pos: glam::Vec2,
+    mix: f32,
+) {
+    // Joint positions: each bone's origin, plus the tip of the last one.
+    let mut joints: Vec<glam::Vec2> = ik.bones.iter().map(|b| out.world_position(*b)).collect();
+    joints.push(out.world_tip(skel, *ik.bones.last().expect("non-empty chain")));
+
+    let lengths: Vec<f32> = ik
+        .bones
+        .iter()
+        .map(|b| out.world_length(skel, *b))
+        .collect();
+    if lengths.iter().any(|l| *l <= 1e-6) {
+        // A zero-length bone has no direction to solve for, and normalizing its
+        // segment would produce NaN that spreads through the whole chain.
+        return;
+    }
+
+    let solved = solve_fabrik(&joints, &lengths, target_pos);
+
+    // Rotate each bone toward its solved segment, in order, re-deriving world
+    // transforms as we go so each bone measures its delta against a parent that
+    // has already moved.
+    for (i, &bone) in ik.bones.iter().enumerate() {
+        let (from, to) = (solved[i], solved[i + 1]);
+        let Some(angle) = solve_aim(from, to) else {
+            continue;
+        };
+        update_world_of(skel, out, bone);
+        blend_bone_rotation(skel, out, bone, angle, mix);
+    }
+    update_subtree(skel, out, ik.bones[0]);
 }
 
 #[cfg(test)]
@@ -1683,5 +1826,250 @@ mod tests {
             (world - glam::vec2(50.0, 0.0)).length() < 1e-2,
             "driven should sit on the target, got {world:?}"
         );
+    }
+    // ── IK completeness (T-504) ──────────────────────────────────────────
+
+    /// A chain of `n` bones, each 10 long, laid end to end along +X, plus a
+    /// free target bone. Returns the chain and the target.
+    fn ik_chain(n: usize) -> (Skeleton, Vec<BoneId>, BoneId) {
+        let mut skel = Skeleton::new();
+        let mut chain = Vec::new();
+        let mut parent = None;
+        for i in 0..n {
+            let id = skel.add_bone(Bone {
+                local_transform: Transform {
+                    // The first bone sits at the origin; each next one starts at
+                    // its parent's tip.
+                    position: if i == 0 {
+                        glam::Vec2::ZERO
+                    } else {
+                        glam::vec2(10.0, 0.0)
+                    },
+                    ..Transform::default()
+                },
+                ..bone(&format!("b{i}"), parent)
+            });
+            chain.push(id);
+            parent = Some(id);
+        }
+        let target = skel.add_bone(bone("target", None));
+        (skel, chain, target)
+    }
+
+    /// The acceptance case: a 3-bone chain reaches a reachable target within
+    /// tolerance, which two-bone trigonometry cannot do at all.
+    #[test]
+    fn a_three_bone_chain_reaches_its_target() {
+        let (mut skel, chain, target) = ik_chain(3);
+        // Well inside the 30-unit reach, and off-axis so every bone has to move.
+        skel.bones[target].local_transform.position = glam::vec2(12.0, 14.0);
+        skel.add_constraint(Constraint::Ik(IkConstraint {
+            bones: chain.clone(),
+            ..IkConstraint::aim("reach", target, chain[0])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        let tip = pose.world_tip(&skel, *chain.last().unwrap());
+        let goal = pose.world_position(target);
+        assert!(
+            (tip - goal).length() <= crate::constraints::FABRIK_TOLERANCE * 4.0,
+            "tip {tip:?} did not reach {goal:?}"
+        );
+    }
+
+    /// Bone lengths are invariants of the rig: FABRIK may move joints, but a
+    /// solved chain that changed length has torn the skeleton apart.
+    #[test]
+    fn fabrik_preserves_bone_lengths() {
+        let (mut skel, chain, target) = ik_chain(4);
+        skel.bones[target].local_transform.position = glam::vec2(-5.0, 18.0);
+        skel.add_constraint(Constraint::Ik(IkConstraint {
+            bones: chain.clone(),
+            ..IkConstraint::aim("reach", target, chain[0])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        for &b in &chain {
+            let length = pose.world_length(&skel, b);
+            assert!(
+                (length - 10.0).abs() < 1e-2,
+                "bone stretched to {length} without `stretch` set"
+            );
+        }
+    }
+
+    /// Out of reach, a chain should point straight at the target rather than
+    /// curling: every joint on the line from root to target.
+    #[test]
+    fn an_unreachable_target_extends_the_chain_straight() {
+        let (mut skel, chain, target) = ik_chain(3);
+        skel.bones[target].local_transform.position = glam::vec2(0.0, 100.0);
+        skel.add_constraint(Constraint::Ik(IkConstraint {
+            bones: chain.clone(),
+            ..IkConstraint::aim("reach", target, chain[0])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        // Straight up: every bone's world rotation is 90°.
+        for &b in &chain {
+            let angle = pose.world_decomposed(b).rotation.to_degrees();
+            assert!(
+                (angle - 90.0).abs() < 1.0,
+                "bone points at {angle}°, expected 90°"
+            );
+        }
+    }
+
+    /// Stretch lets a chain reach past its natural length — but only up to the
+    /// configured limit, or an out-of-range target becomes a rubber band.
+    #[test]
+    fn stretch_extends_the_chain_only_up_to_its_limit() {
+        let (mut skel, chain, target) = ik_chain(2);
+        // 40 units away with a 20-unit reach: it cannot get there even at the
+        // limit, so the limit is what is being measured.
+        skel.bones[target].local_transform.position = glam::vec2(40.0, 0.0);
+        skel.add_constraint(Constraint::Ik(IkConstraint {
+            stretch: true,
+            stretch_limit: 1.5,
+            bones: chain.clone(),
+            ..IkConstraint::aim("reach", target, chain[0])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        let reach: f32 = chain.iter().map(|b| pose.world_length(&skel, *b)).sum();
+        assert!(
+            (reach - 30.0).abs() < 0.1,
+            "20 units of bone at the 1.5 limit is 30, got {reach}"
+        );
+    }
+
+    #[test]
+    fn stretch_does_nothing_when_the_target_is_in_reach() {
+        let (mut skel, chain, target) = ik_chain(2);
+        skel.bones[target].local_transform.position = glam::vec2(12.0, 0.0);
+        skel.add_constraint(Constraint::Ik(IkConstraint {
+            stretch: true,
+            bones: chain.clone(),
+            ..IkConstraint::aim("reach", target, chain[0])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        let reach: f32 = chain.iter().map(|b| pose.world_length(&skel, *b)).sum();
+        assert!(
+            (reach - 20.0).abs() < 0.01,
+            "a reachable target needs no stretch, got {reach}"
+        );
+    }
+
+    /// Softness trades exactness near full extension for a chain that does not
+    /// visibly snap. Inside the soft zone the tip should fall *short* of a
+    /// target it would otherwise hit exactly.
+    #[test]
+    fn softness_eases_the_approach_to_full_extension() {
+        let solve = |softness: f32| {
+            let (mut skel, chain, target) = ik_chain(2);
+            // 19 of a possible 20: just inside reach, inside a 5-unit soft zone.
+            skel.bones[target].local_transform.position = glam::vec2(19.0, 0.0);
+            skel.add_constraint(Constraint::Ik(IkConstraint {
+                softness,
+                bones: chain.clone(),
+                ..IkConstraint::aim("reach", target, chain[0])
+            }));
+            let mut pose = Pose::new();
+            evaluate(&skel, &[], &mut pose);
+            let tip = pose.world_tip(&skel, chain[1]);
+            (tip - pose.world_position(target)).length()
+        };
+
+        let hard = solve(0.0);
+        let soft = solve(5.0);
+        assert!(hard < 0.1, "without softness the chain reaches: {hard}");
+        assert!(
+            soft > hard + 0.1,
+            "softness should hold the chain back: hard {hard}, soft {soft}"
+        );
+    }
+
+    /// Bend direction is stepped so a chain never interpolates through "no
+    /// preference", which is where a flip becomes possible.
+    #[test]
+    fn an_animated_bend_direction_is_stepped_and_flip_free() {
+        let (mut skel, chain, target) = ik_chain(2);
+        skel.bones[target].local_transform.position = glam::vec2(14.0, 0.0);
+        let cid = skel.add_constraint(Constraint::Ik(IkConstraint {
+            bones: chain.clone(),
+            ..IkConstraint::aim("reach", target, chain[0])
+        }));
+
+        let anim = Animation {
+            name: "flip".into(),
+            duration: 1.0,
+            looping: false,
+            events: Vec::new(),
+            timelines: vec![Timeline::IkBendDirection {
+                constraint: cid,
+                keys: vec![
+                    Key {
+                        time: 0.0,
+                        value: 1.0,
+                        interp: crate::animation::Interp::Linear,
+                    },
+                    Key {
+                        time: 1.0,
+                        value: -1.0,
+                        interp: crate::animation::Interp::Linear,
+                    },
+                ],
+            }],
+        };
+
+        let mut pose = Pose::new();
+        // The elbow's sign is the bend; it must never sit near zero, which is
+        // what a linearly interpolated direction would produce mid-clip.
+        let mut signs = Vec::new();
+        for step in 0..=10 {
+            let t = step as f32 / 10.0;
+            evaluate(&skel, &[(&anim, t, 1.0)], &mut pose);
+            let elbow_y = pose.world_position(chain[1]).y;
+            assert!(
+                elbow_y.abs() > 0.5 || t == 0.0,
+                "the elbow flattened at t={t} (y={elbow_y}) — the direction interpolated"
+            );
+            signs.push(elbow_y.signum());
+        }
+        assert!(
+            signs.first() != signs.last(),
+            "the bend direction key had no effect"
+        );
+    }
+
+    /// A zero-length bone has no direction to solve for; normalizing its
+    /// segment would spread NaN through the chain.
+    #[test]
+    fn a_zero_length_bone_is_refused_rather_than_producing_nan() {
+        let (mut skel, chain, target) = ik_chain(3);
+        skel.bones[chain[1]].length = 0.0;
+        skel.bones[target].local_transform.position = glam::vec2(5.0, 5.0);
+        skel.add_constraint(Constraint::Ik(IkConstraint {
+            bones: chain.clone(),
+            ..IkConstraint::aim("reach", target, chain[0])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        for &b in &chain {
+            let p = pose.world_position(b);
+            assert!(p.x.is_finite() && p.y.is_finite(), "NaN at {b:?}: {p:?}");
+        }
     }
 }

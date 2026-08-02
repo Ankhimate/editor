@@ -37,6 +37,8 @@ fn key_times(timeline: &ankhimate_core::animation::Timeline) -> Vec<f32> {
         T::SlotAttachment { keys, .. } => times!(keys),
         T::DrawOrder { keys } => times!(keys),
         T::IkMix { keys, .. } => times!(keys),
+        T::IkBendDirection { keys, .. } => times!(keys),
+        T::IkSoftness { keys, .. } => times!(keys),
         T::TransformConstraintMix { keys, .. } => times!(keys),
         T::Deform { keys, .. } => times!(keys),
     }

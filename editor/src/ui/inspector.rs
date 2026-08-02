@@ -276,6 +276,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
 
     // ── Constraints (T-501) ──────────────────────────────────────────────
     constraint_inspector(ui, state, bone_id);
+    ik_inspector(ui, state, bone_id);
 
     // ── Slot section (T-205) ─────────────────────────────────────────────
     // Below the transform: it describes what the bone *shows*, which is the
@@ -477,6 +478,208 @@ fn constraint_inspector(
     if let Some(id) = remove {
         state.dispatch(Box::new(RemoveConstraint::new(id)));
     }
+}
+
+/// IK constraints reaching for, or driving, the selected bone (T-504).
+///
+/// Sits under the transform-constraint list and reads the same way: the
+/// constraints that explain why this bone moves on its own.
+fn ik_inspector(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_core::ids::BoneId) {
+    use crate::commands::constraint_cmds::{CreateIkTarget, IkProps, RemoveConstraint, SetIkProps};
+    use ankhimate_core::constraints::Constraint;
+
+    let setup = state.session.can_edit_structure();
+
+    let driving: Vec<(ankhimate_core::ids::ConstraintId, String, IkProps)> = state
+        .doc
+        .skeleton
+        .constraint_order
+        .iter()
+        .filter_map(|id| {
+            let Some(Constraint::Ik(ik)) = state.doc.skeleton.constraints.get(*id) else {
+                return None;
+            };
+            ik.bones
+                .contains(&bone_id)
+                .then(|| (*id, ik.name.clone(), IkProps::from_constraint(ik)))
+        })
+        .collect();
+
+    let bones: Vec<(ankhimate_core::ids::BoneId, String)> = state
+        .doc
+        .skeleton
+        .bones
+        .iter()
+        .filter(|(id, _)| *id != bone_id)
+        .map(|(id, b)| (id, b.name.clone()))
+        .collect();
+
+    let mut edit: Option<(ankhimate_core::ids::ConstraintId, IkProps)> = None;
+    let mut remove: Option<ankhimate_core::ids::ConstraintId> = None;
+
+    for (id, name, props) in &driving {
+        let mut next = props.clone();
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{} (IK, {} bones)", name, props.bones.len()))
+                    .size(11.0)
+                    .strong(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(setup, egui::Button::new("✕").small())
+                    .on_hover_text("Delete this constraint (the target bone stays)")
+                    .clicked()
+                {
+                    remove = Some(*id);
+                }
+            });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Target").size(10.5));
+            let current = bones
+                .iter()
+                .find(|(b, _)| *b == next.target)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_else(|| "<missing>".to_string());
+            egui::ComboBox::from_id_salt(("ik_target", id))
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for (candidate, label) in &bones {
+                        if ui
+                            .selectable_label(*candidate == next.target, label)
+                            .clicked()
+                        {
+                            next.target = *candidate;
+                        }
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [64.0, 18.0],
+                egui::Label::new(egui::RichText::new("Mix").size(10.5)),
+            );
+            ui.add_enabled(
+                setup,
+                egui::Slider::new(&mut next.mix, 0.0..=1.0).max_decimals(2),
+            )
+            .on_hover_text("0 is pure FK, 1 is pure IK");
+        });
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [64.0, 18.0],
+                egui::Label::new(egui::RichText::new("Softness").size(10.5)),
+            );
+            ui.add_enabled(
+                setup,
+                egui::DragValue::new(&mut next.softness)
+                    .speed(0.2)
+                    .range(0.0..=1000.0),
+            )
+            .on_hover_text(
+                "Ease the last stretch of reach, in world units, so the chain does \
+                 not snap straight as the target leaves its range",
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.add_enabled(setup, egui::Checkbox::new(&mut next.stretch, "Stretch"))
+                .on_hover_text("Let the chain lengthen to reach a target beyond its natural reach");
+            if next.stretch {
+                ui.add_enabled(
+                    setup,
+                    egui::DragValue::new(&mut next.stretch_limit)
+                        .speed(0.01)
+                        .range(1.0..=3.0),
+                )
+                .on_hover_text("Most it may grow, as a factor of its natural length");
+            }
+            let mut flipped = next.bend_direction < 0.0;
+            if ui
+                .add_enabled(setup, egui::Checkbox::new(&mut flipped, "Flip bend"))
+                .on_hover_text("Which way the chain's elbow points")
+                .changed()
+            {
+                next.bend_direction = if flipped { -1.0 } else { 1.0 };
+            }
+        });
+
+        if next != *props {
+            edit = Some((*id, next));
+        }
+    }
+
+    // ── Create from a selection ──────────────────────────────────────────
+    // The chain is the selected bones in hierarchy order, so "select shoulder,
+    // elbow, wrist → create IK" is the whole flow. One selected bone makes an
+    // aim constraint, which is the other thing people want this for.
+    let chain = selected_chain(state);
+    ui.add_space(6.0);
+    let can_create = setup && !chain.is_empty();
+    let label = match chain.len() {
+        0 | 1 => "Create IK target".to_string(),
+        n => format!("Create IK target ({n}-bone chain)"),
+    };
+    if ui
+        .add_enabled(can_create, egui::Button::new(label).small())
+        .on_hover_text(
+            "Make a target bone at the chain's tip and an IK constraint that \
+             reaches for it.\nSelect several bones (shift-click in the Hierarchy) \
+             to build a longer chain.",
+        )
+        .clicked()
+        && let Some(&tip) = chain.last()
+    {
+        // The target starts exactly at the tip so switching the constraint on
+        // does not move the rig.
+        let position = state.pose.world_tip(&state.doc.skeleton, tip);
+        let name = format!("ik {}", state.doc.skeleton.constraints.len() + 1);
+        state.dispatch(Box::new(CreateIkTarget::new(chain, name, position)));
+    }
+
+    if let Some((id, props)) = edit {
+        state.dispatch(Box::new(SetIkProps::new(id, props)));
+    }
+    if let Some(id) = remove {
+        state.dispatch(Box::new(RemoveConstraint::new(id)));
+    }
+}
+
+/// The selected bones as an IK chain: root first, and only while they form an
+/// unbroken parent→child line.
+///
+/// A "chain" of unrelated bones is not solvable — FABRIK walks parent to child —
+/// so a disjoint selection yields nothing rather than a constraint that would
+/// evaluate to nonsense.
+fn selected_chain(state: &AppState) -> Vec<ankhimate_core::ids::BoneId> {
+    let selection = state.session.selected_bones.clone();
+    if selection.is_empty() {
+        return Vec::new();
+    }
+    if selection.len() == 1 {
+        return selection;
+    }
+    // Order by depth, then check each is the previous one's child.
+    let depth = |mut b: ankhimate_core::ids::BoneId| {
+        let mut n = 0;
+        while let Some(parent) = state.doc.skeleton.bones.get(b).and_then(|x| x.parent) {
+            n += 1;
+            b = parent;
+        }
+        n
+    };
+    let mut ordered = selection;
+    ordered.sort_by_key(|b| depth(*b));
+    for pair in ordered.windows(2) {
+        let child_parent = state.doc.skeleton.bones.get(pair[1]).and_then(|b| b.parent);
+        if child_parent != Some(pair[0]) {
+            return Vec::new();
+        }
+    }
+    ordered
 }
 
 /// The selected vertex's bone influences, as numbers (T-403).

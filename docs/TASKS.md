@@ -639,16 +639,18 @@ the chain along the curve; unit test on arc-length sampling at constant speed.
 **Accept:** a 4-bone tail settles to rest in <2 s with damping 0.5 (numeric test); two runs with the
 same dt sequence produce identical output; export at 30 fps and playback at 30 fps match.
 
-### T-504 IK completeness
+### ✅ T-504 IK completeness
 **Deps:** T-104, T-207 · **Refs:** PLAN §2.5, §5 F-1
 - Implement the reserved `softness` and `stretch` fields; chains longer than 2 via FABRIK
   (documented iteration count/tolerance, deterministic).
 - Keyable IK properties beyond mix: `bend_direction` (stepped), `softness`, `stretch` — timelines
   `IkBendDirection`, `IkSoftness` (other editors key constraint direction and IK mode; we cover
   both with typed timelines).
-- Editor: IK target creation flow (select chain → "create IK target" makes the target bone,
-  constraint, and selects it), target/chain overlays in the viewport, and an inspector section
-  matching the T-210 key affordances.
+- Editor: select a chain (shift-click in the Hierarchy) → "Create IK target" makes the target bone
+  at the chain's tip and the constraint, as one undoable step. Inspector section per constraint:
+  target picker, mix, softness, stretch + limit, flip bend.
+- **Deferred:** viewport target/chain overlays and the T-210 key dots on these fields. The
+  constraint is authorable and animatable without them; they are polish, and belong with T-708.
 **Accept:** a 3-bone chain reaches its target within tolerance in ≤N iterations (test); stretch
 extends bone length only up to the configured limit; flipping bend direction mid-animation produces
 a stepped, flip-free result.

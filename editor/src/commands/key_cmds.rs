@@ -377,6 +377,8 @@ fn with_key(timeline: &mut Timeline, index: usize, f: &mut impl FnMut(&mut KeyTi
         Timeline::SlotAttachment { keys, .. } => with_key_arm!(keys, index, f),
         Timeline::DrawOrder { keys } => with_key_arm!(keys, index, f),
         Timeline::IkMix { keys, .. } => with_key_arm!(keys, index, f),
+        Timeline::IkBendDirection { keys, .. } => with_key_arm!(keys, index, f),
+        Timeline::IkSoftness { keys, .. } => with_key_arm!(keys, index, f),
         Timeline::TransformConstraintMix { keys, .. } => with_key_arm!(keys, index, f),
         Timeline::Deform { keys, .. } => with_key_arm!(keys, index, f),
     }
@@ -398,6 +400,8 @@ fn sort_timeline(timeline: &mut Timeline) {
         Timeline::SlotAttachment { keys, .. } => sort_arm!(keys),
         Timeline::DrawOrder { keys } => sort_arm!(keys),
         Timeline::IkMix { keys, .. } => sort_arm!(keys),
+        Timeline::IkBendDirection { keys, .. } => sort_arm!(keys),
+        Timeline::IkSoftness { keys, .. } => sort_arm!(keys),
         Timeline::TransformConstraintMix { keys, .. } => sort_arm!(keys),
         Timeline::Deform { keys, .. } => sort_arm!(keys),
     }
@@ -532,6 +536,8 @@ impl EditCommand for DeleteKeys {
                 Timeline::SlotAttachment { keys, .. } => remove_arm!(keys, indices),
                 Timeline::DrawOrder { keys } => remove_arm!(keys, indices),
                 Timeline::IkMix { keys, .. } => remove_arm!(keys, indices),
+                Timeline::IkBendDirection { keys, .. } => remove_arm!(keys, indices),
+                Timeline::IkSoftness { keys, .. } => remove_arm!(keys, indices),
                 Timeline::TransformConstraintMix { keys, .. } => remove_arm!(keys, indices),
                 Timeline::Deform { keys, .. } => remove_arm!(keys, indices),
             }
@@ -889,6 +895,8 @@ fn map_key_times(anim: &mut Animation, f: impl Fn(f32) -> f32) {
             Timeline::SlotAttachment { keys, .. } => remap!(keys),
             Timeline::DrawOrder { keys } => remap!(keys),
             Timeline::IkMix { keys, .. } => remap!(keys),
+            Timeline::IkBendDirection { keys, .. } => remap!(keys),
+            Timeline::IkSoftness { keys, .. } => remap!(keys),
             Timeline::TransformConstraintMix { keys, .. } => remap!(keys),
             Timeline::Deform { keys, .. } => remap!(keys),
         }

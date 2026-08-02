@@ -252,6 +252,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 mix: ik.mix,
                 softness: ik.softness,
                 stretch: ik.stretch,
+                stretch_limit: ik.stretch_limit,
                 mixes: None,
                 offsets: None,
                 local: false,
@@ -267,6 +268,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 mix: 1.0,
                 softness: 0.0,
                 stretch: false,
+                stretch_limit: 1.1,
                 mixes: Some([tc.mix_rotate, tc.mix_translate, tc.mix_scale, tc.mix_shear]),
                 // Angles are degrees at the document boundary (ADR 0002), the
                 // same as every rotation key.
@@ -483,6 +485,14 @@ fn timeline_to_schema(
             constraint: constraint_name(*constraint),
             keys: scalar_keys(keys),
         },
+        anim::Timeline::IkBendDirection { constraint, keys } => schema::Timeline::IkBendDirection {
+            constraint: constraint_name(*constraint),
+            keys: scalar_keys(keys),
+        },
+        anim::Timeline::IkSoftness { constraint, keys } => schema::Timeline::IkSoftness {
+            constraint: constraint_name(*constraint),
+            keys: scalar_keys(keys),
+        },
         anim::Timeline::TransformConstraintMix { constraint, keys } => {
             schema::Timeline::TransformConstraintMix {
                 constraint: constraint_name(*constraint),
@@ -691,6 +701,7 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
                 mix: c.mix,
                 softness: c.softness,
                 stretch: c.stretch,
+                stretch_limit: c.stretch_limit,
             }),
             other => {
                 report.dangling("constraint type", other);
@@ -913,6 +924,26 @@ fn timeline_from_schema(
                 }
             };
             anim::Timeline::IkMix {
+                constraint: id,
+                keys: scalar_keys(keys),
+            }
+        }
+        schema::Timeline::IkBendDirection { constraint, keys } => {
+            let Some(&id) = constraint_ids.get(constraint) else {
+                report.dangling("timeline constraint", constraint);
+                return None;
+            };
+            anim::Timeline::IkBendDirection {
+                constraint: id,
+                keys: scalar_keys(keys),
+            }
+        }
+        schema::Timeline::IkSoftness { constraint, keys } => {
+            let Some(&id) = constraint_ids.get(constraint) else {
+                report.dangling("timeline constraint", constraint);
+                return None;
+            };
+            anim::Timeline::IkSoftness {
                 constraint: id,
                 keys: scalar_keys(keys),
             }
