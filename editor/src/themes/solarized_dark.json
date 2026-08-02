@@ -1,0 +1,15 @@
+{
+  "name": "Solarized Dark",
+  "primary": "#2aa198",
+  "on_primary": "#002b36",
+  "panel_fill": "#002b36",
+  "window_fill": "#073642",
+  "faint_bg_color": "#586e75",
+  "extreme_bg_color": "#00212b",
+  "grid_color_even": "#002b3650",
+  "grid_color_odd": "#07364250",
+  "origin_color": "#2aa19864",
+  "mesh_edge": "#2aa198b4",
+  "mesh_vertex": "#586e75",
+  "mesh_vertex_selected": "#b58900"
+}

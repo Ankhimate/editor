@@ -1,0 +1,38 @@
+# ── Rust ─────────────────────────────────────────────────────────────────────
+/target/
+target_cli/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock IS committed: this workspace produces a binary (the editor), and a
+# locked dependency set is what makes a build reproducible for everyone.
+
+# ── Editor / OS noise ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# ── Local tooling ────────────────────────────────────────────────────────────
+.claude/
+.env
+.env.local
+
+# ── Build & profiling artefacts ──────────────────────────────────────────────
+*.profraw
+perf.data*
+flamegraph.svg
+/dist/
+
+# ── Scratch output ───────────────────────────────────────────────────────────
+# Exported renders and test rigs written while trying things out. Real sample
+# projects live in samples/ and are committed.
+/out/
+/scratch/
+*.mp4
+*.webm

@@ -1,0 +1,15 @@
+{
+  "name": "Catppuccin Macchiato",
+  "primary": "#8aadf4",
+  "on_primary": "#24273a",
+  "panel_fill": "#24273a",
+  "window_fill": "#303446",
+  "faint_bg_color": "#363a4f",
+  "extreme_bg_color": "#181926",
+  "grid_color_even": "#24273a50",
+  "grid_color_odd": "#30344650",
+  "origin_color": "#8aadf464",
+  "mesh_edge": "#8aadf4b4",
+  "mesh_vertex": "#6e738d",
+  "mesh_vertex_selected": "#f5a97f"
+}

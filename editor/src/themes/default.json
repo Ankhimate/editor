@@ -1,0 +1,15 @@
+{
+  "name": "Default (Zinc Dark)",
+  "primary": "#faf79f",
+  "on_primary": "#18181b",
+  "panel_fill": "#18181b",
+  "window_fill": "#27272a",
+  "faint_bg_color": "#3f3f46",
+  "extreme_bg_color": "#09090b",
+  "grid_color_even": "#14191e50",
+  "grid_color_odd": "#1e232d50",
+  "origin_color": "#648cc864",
+  "mesh_edge": "#faf79fb4",
+  "mesh_vertex": "#a1a1aa",
+  "mesh_vertex_selected": "#faf79f"
+}

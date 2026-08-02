@@ -1,0 +1,1197 @@
+use crate::app_state::AppState;
+use crate::renderer::{
+    BoneInstance, CustomCallback, MeshDrawCall, MeshVertex, SpriteDraw, SpriteUpload,
+};
+use ankhimate_core::attachment::{Attachment, RegionAttachment};
+use ankhimate_core::ids::SlotId;
+use eframe::egui;
+
+pub const BONE_WIDTH_RATIO: f32 = 0.015;
+
+// ── Colors ──────────────────────────────────────────────────────────────
+
+pub const COLOR_BONE_NORMAL: [f32; 4] = [0.0, 0.78, 0.78, 0.90];
+pub const COLOR_BONE_SELECTED: [f32; 4] = [1.0, 0.65, 0.0, 0.95];
+pub const COLOR_BONE_HOVERED: [f32; 4] = [0.2, 0.95, 0.95, 0.95];
+pub const COLOR_BONE_PREVIEW: [f32; 4] = [0.5, 1.0, 1.0, 0.85]; // Ghost preview
+
+pub fn bone_gizmo_vertices(
+    origin: glam::Vec2,
+    angle: f32,
+    length: f32,
+    zoom: f32,
+) -> [glam::Vec2; 4] {
+    let dir = glam::Vec2::new(angle.cos(), angle.sin());
+    let perp = glam::Vec2::new(-dir.y, dir.x);
+
+    let screen_length = length * zoom;
+    // Visual width tapers with length but is clamped so tiny/huge bones stay legible.
+    let screen_width = (screen_length * 0.15).clamp(4.0, 14.0);
+    let screen_waist = (screen_length * 0.12).min(screen_width); // how far along the bone the "shoulders" sit
+
+    let world_width = screen_width / zoom;
+    let world_waist = screen_waist / zoom;
+
+    let tip = origin + dir * length;
+    let waist = origin + dir * world_waist;
+    let left = waist + perp * (world_width * 0.5);
+    let right = waist - perp * (world_width * 0.5);
+
+    // Draw order matters for a convex-looking kite: origin -> left -> tip -> right
+    [origin, left, tip, right]
+}
+
+// ── Textured attachments (T-301) ─────────────────────────────────────────────
+
+/// Decode any asset the GPU cache does not hold yet.
+///
+/// Textures are keyed by a **content hash**, not by `AssetId`: slotmap keys are
+/// reused after a document is closed, so an id-keyed cache would happily draw
+/// the previous project's arm on this project's leg. Hashing also means two
+/// copies of the same image share one upload.
+///
+/// Called before rendering because it needs `&mut` (to memoize the hash), while
+/// the render pass reads an immutable state.
+pub fn prepare_textures(state: &mut AppState) -> Vec<SpriteUpload> {
+    use std::hash::{Hash, Hasher};
+
+    let mut uploads = Vec::new();
+    let ids: Vec<_> = state.doc.assets.images.keys().collect();
+
+    for id in ids {
+        if state.session.texture_keys.contains_key(id) {
+            continue;
+        }
+        let Some(asset) = state.doc.assets.get(id) else {
+            continue;
+        };
+        if asset.bytes.is_empty() {
+            continue;
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        asset.bytes.hash(&mut hasher);
+        asset.width.hash(&mut hasher);
+        asset.height.hash(&mut hasher);
+        let key = hasher.finish();
+        state.session.texture_keys.insert(id, key);
+
+        if state.session.uploaded_textures.contains(&key) {
+            continue;
+        }
+
+        match image::load_from_memory(&asset.bytes) {
+            Ok(img) => {
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                uploads.push(SpriteUpload {
+                    key,
+                    width: w,
+                    height: h,
+                    rgba: rgba.into_raw(),
+                });
+                state.session.uploaded_textures.insert(key);
+            }
+            Err(e) => {
+                // A file we cannot decode is a user-visible problem, not a crash:
+                // the attachment simply does not draw.
+                state
+                    .session
+                    .set_status(format!("Could not decode '{}': {e}", asset.name));
+            }
+        }
+    }
+    uploads
+}
+
+/// The four world-space corners of a region attachment, in TL, BL, BR, TR order.
+///
+/// Pivot-aware placement lives in core (`RegionAttachment::local_corners`) so
+/// the viewport, the exporter and the runtime cannot disagree about where an
+/// image sits.
+fn region_corners(
+    region: &RegionAttachment,
+    bone_world: &ankhimate_core::transforms::Affine2,
+) -> [glam::Vec2; 4] {
+    region
+        .local_corners()
+        .map(|corner| bone_world.transform_point(corner))
+}
+
+/// The animated deform offsets for a slot's attachment, if the clip has any.
+fn mesh_deform<'a>(
+    state: &'a AppState,
+    slot: SlotId,
+    attachment: &Option<String>,
+) -> Option<&'a Vec<glam::Vec2>> {
+    let name = attachment.as_ref()?;
+    state.pose.deforms.get(&(slot, name.clone()))
+}
+
+/// Build the textured draw for a slot — a quad for a region, a triangle list for
+/// a mesh — or `None` if anything it needs is missing.
+fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
+    let slot = state.doc.skeleton.slots.get(slot_id)?;
+    let attachment = state
+        .doc
+        .skeleton
+        .resolve_slot(state.session.active_skin, slot_id)?;
+
+    let bone_world = state.pose.worlds.get(slot.bone)?;
+    let color = state
+        .pose
+        .slot_colors
+        .get(slot_id)
+        .copied()
+        .unwrap_or(slot.color);
+
+    let region = match attachment {
+        Attachment::Region(region) => region,
+        // A clip is geometry, not artwork: it masks other slots rather than
+        // drawing itself (T-405).
+        Attachment::Clipping(_) => return None,
+        // A mesh draws its own triangles. Vertices are in the bone's local
+        // space, so the bone affine is all that is needed — weight skinning
+        // (T-403) and deform offsets (T-404) slot in here later.
+        Attachment::Mesh(mesh) => {
+            let asset_id = state.doc.assets.by_name(&mesh.texture)?;
+            let key = *state.session.texture_keys.get(asset_id)?;
+            if mesh.triangles.is_empty() {
+                return None;
+            }
+            // A weighted vertex follows its bones (T-403); an unweighted one
+            // rides its slot's bone rigidly. Both paths land in the same buffer.
+            let skinned = !mesh.weights.is_empty() && !mesh.inverse_bind_matrices.is_empty();
+            // Deform offsets are applied to the setup vertex *before* skinning
+            // (T-404): the shape is authored in local space, then the bones move
+            // it. Skinning first would rotate the offsets with the bone.
+            let deform = mesh_deform(state, slot_id, &slot.attachment);
+            let vertices = mesh
+                .setup_vertices
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let offset = deform.and_then(|d| d.get(i).copied()).unwrap_or_default();
+                    let world = if skinned {
+                        mesh.skin_vertex_with_ffd(i, offset, &state.pose)
+                    } else {
+                        bone_world.transform_point(*v + offset)
+                    };
+                    let uv = mesh.uvs.get(i).copied().unwrap_or(glam::Vec2::ZERO);
+                    MeshVertex {
+                        position: [world.x, world.y],
+                        uv: [uv.x, uv.y],
+                        color,
+                    }
+                })
+                .collect();
+            let indices = mesh.triangles.iter().flat_map(|t| *t).collect();
+            return Some(SpriteDraw {
+                key,
+                vertices,
+                indices,
+            });
+        }
+    };
+
+    let asset_id = state.doc.assets.by_name(&region.texture)?;
+    let key = *state.session.texture_keys.get(asset_id)?;
+    let corners = region_corners(region, bone_world);
+
+    // Texture space runs downward, world space upward, so the top-left corner
+    // takes the *minimum* v.
+    let uv = &region.uv_rect;
+    let uvs = [
+        [uv.x, uv.y],
+        [uv.x, uv.y + uv.h],
+        [uv.x + uv.w, uv.y + uv.h],
+        [uv.x + uv.w, uv.y],
+    ];
+
+    let vertices = std::array::from_fn(|i| MeshVertex {
+        position: [corners[i].x, corners[i].y],
+        uv: uvs[i],
+        color,
+    });
+    Some(SpriteDraw::quad(key, vertices))
+}
+
+// ── Shear gizmo geometry ─────────────────────────────────────────────────────
+
+/// Screen distance from the bone origin to a shear handle.
+pub const SHEAR_HANDLE_LEN: f32 = 42.0;
+/// Click/hover radius of a shear handle dot.
+pub const SHEAR_HANDLE_RADIUS: f32 = 7.0;
+
+/// The shear gizmo's on-screen frame: origin plus the *actual* (sheared) screen
+/// directions of the bone's X and Y axes.
+///
+/// Taken from the world affine's columns rather than from `decompose`, because
+/// decompose canonicalizes `shear.x` into `rotation` — the handles must sit on
+/// the axes the artwork is actually drawn along, or dragging them fights what
+/// the user sees.
+///
+/// Shared with the hit-test in `tools::select` so the dot you click is the dot
+/// you see; two copies of this maths would drift apart in a week.
+pub struct ShearFrame {
+    /// Origin in canvas-local screen space (relative to the viewport rect).
+    pub origin: glam::Vec2,
+    pub dir_x: glam::Vec2,
+    pub dir_y: glam::Vec2,
+    /// Where the axes would point with `shear = 0` — the wedge each sector is
+    /// measured from, so the fill shows *how much* shear is applied.
+    pub base_x: glam::Vec2,
+    pub base_y: glam::Vec2,
+}
+
+impl ShearFrame {
+    pub fn for_bone(
+        state: &AppState,
+        bone: ankhimate_core::ids::BoneId,
+        viewport_size: glam::Vec2,
+    ) -> Option<Self> {
+        let world = state.pose.worlds.get(bone)?;
+        let origin_world = state.pose.world_position(bone);
+        let origin = state
+            .session
+            .camera
+            .world_to_screen(origin_world, viewport_size);
+
+        // Project a unit step along each axis, then normalize in screen space:
+        // this survives camera zoom and any parent scale.
+        let axis_screen = |axis: glam::Vec2| {
+            let tip = state
+                .session
+                .camera
+                .world_to_screen(origin_world + axis.normalize_or_zero(), viewport_size);
+            (tip - origin).normalize_or_zero()
+        };
+
+        // The same bone with shear removed, to measure the sectors against.
+        // Rebuilt from the parent's world affine rather than from `decompose`,
+        // which would have folded shear.x into rotation already.
+        let unsheared = {
+            let bone_data = state.doc.skeleton.bones.get(bone)?;
+            let parent_world = bone_data
+                .parent
+                .and_then(|p| state.pose.worlds.get(p).copied())
+                .unwrap_or(ankhimate_core::transforms::Affine2::IDENTITY);
+            let mut local = state
+                .pose
+                .locals
+                .get(bone)
+                .copied()
+                .unwrap_or(bone_data.local_transform);
+            local.shear = glam::Vec2::ZERO;
+            parent_world.mul(&ankhimate_core::transforms::Affine2::compose(&local))
+        };
+
+        Some(Self {
+            origin,
+            dir_x: axis_screen(glam::vec2(world.a, world.b)),
+            dir_y: axis_screen(glam::vec2(world.c, world.d)),
+            base_x: axis_screen(glam::vec2(unsheared.a, unsheared.b)),
+            base_y: axis_screen(glam::vec2(unsheared.c, unsheared.d)),
+        })
+    }
+
+    /// The four handle positions: X positive/negative, then Y positive/negative.
+    pub fn handles(&self) -> [(glam::Vec2, crate::session::GizmoInteraction); 4] {
+        use crate::session::GizmoInteraction as G;
+        [
+            (self.origin + self.dir_x * SHEAR_HANDLE_LEN, G::ShearX),
+            (self.origin - self.dir_x * SHEAR_HANDLE_LEN, G::ShearX),
+            (self.origin + self.dir_y * SHEAR_HANDLE_LEN, G::ShearY),
+            (self.origin - self.dir_y * SHEAR_HANDLE_LEN, G::ShearY),
+        ]
+    }
+
+    /// Which handle (if any) is under a canvas-local screen point.
+    pub fn hit(&self, point: glam::Vec2) -> crate::session::GizmoInteraction {
+        use crate::session::GizmoInteraction as G;
+        // Grab radius is generous relative to the drawn dot — a 5px target is
+        // unusable on a trackpad.
+        let grab = SHEAR_HANDLE_RADIUS + 4.0;
+        for (pos, kind) in self.handles() {
+            if (point - pos).length() <= grab {
+                return kind;
+            }
+        }
+        G::None
+    }
+}
+
+/// Fill the sector swept going from `from` to `to` around `center`.
+///
+/// Drawn as a triangle fan so it stays correct past 90°: egui's convex-polygon
+/// fill would misrender a reflex wedge, and shear angles routinely exceed 180°.
+fn filled_wedge(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    from: glam::Vec2,
+    to: glam::Vec2,
+    radius: f32,
+    color: egui::Color32,
+) {
+    let start = from.y.atan2(from.x);
+    // Shortest signed sweep between the two directions.
+    let sweep = {
+        let raw = to.y.atan2(to.x) - start;
+        ankhimate_core::transforms::wrap_angle(raw)
+    };
+    if sweep.abs() < 0.01 {
+        return;
+    }
+
+    // ~4° per triangle: smooth enough at gizmo size, cheap at any angle.
+    let steps = ((sweep.abs() / 0.07).ceil() as usize).clamp(1, 96);
+    let step = sweep / steps as f32;
+    let point_at = |angle: f32| center + egui::vec2(angle.cos(), angle.sin()) * radius;
+
+    for i in 0..steps {
+        let a0 = start + step * i as f32;
+        let a1 = start + step * (i + 1) as f32;
+        painter.add(egui::Shape::convex_polygon(
+            vec![center, point_at(a0), point_at(a1)],
+            color,
+            egui::Stroke::NONE,
+        ));
+    }
+}
+
+/// The shear gizmo: a red X-axis bar and a green Y-axis bar with grab dots at
+/// both ends, over sector fills that show how far each axis has been swung.
+///
+/// Dragging a red dot swings the X axis (`shear.x`), a green dot the Y axis
+/// (`shear.y`) — so the handle that moves is the axis that changes, which is the
+/// whole reason the two colours exist.
+fn draw_shear_gizmo(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    state: &AppState,
+    bone: ankhimate_core::ids::BoneId,
+    viewport_size: glam::Vec2,
+) {
+    use crate::session::GizmoInteraction as G;
+
+    let Some(frame) = ShearFrame::for_bone(state, bone, viewport_size) else {
+        return;
+    };
+    let to_pos = |v: glam::Vec2| egui::pos2(rect.min.x + v.x, rect.min.y + v.y);
+
+    let active =
+        |kind: G| state.session.hovered_gizmo == kind || state.session.dragging_gizmo == kind;
+    let red = if active(G::ShearX) {
+        egui::Color32::from_rgb(255, 120, 120)
+    } else {
+        egui::Color32::from_rgb(225, 45, 45)
+    };
+    let green = if active(G::ShearY) {
+        egui::Color32::from_rgb(140, 255, 140)
+    } else {
+        egui::Color32::from_rgb(45, 205, 45)
+    };
+
+    let origin = to_pos(frame.origin);
+    let dir_x = egui::vec2(frame.dir_x.x, frame.dir_x.y);
+    let dir_y = egui::vec2(frame.dir_y.x, frame.dir_y.y);
+
+    // Sectors, not discs: each wedge sweeps from where its axis would sit with
+    // no shear to where it sits now, so the fill *is* the shear amount. Two full
+    // circles would just be a muddy overlap that says nothing.
+    let disc = SHEAR_HANDLE_LEN * 0.55;
+    painter.circle_stroke(
+        origin,
+        disc,
+        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(28)),
+    );
+    // Each sector is drawn on both halves — a bowtie, not a single slice. The
+    // axis bar runs through the origin in both directions, so the swept angle is
+    // just as true on the far side; filling only one half reads as lopsided
+    // against a symmetric handle.
+    for (base, dir, color) in [
+        (frame.base_x, frame.dir_x, red),
+        (frame.base_y, frame.dir_y, green),
+    ] {
+        let fill = color.gamma_multiply(0.35);
+        filled_wedge(painter, origin, base, dir, disc, fill);
+        filled_wedge(painter, origin, -base, -dir, disc, fill);
+    }
+
+    // Reference axes: where each axis would sit with no shear. Spine draws these
+    // alongside the live ones, and without them the gizmo is ambiguous — you can
+    // see where an axis *is* but not how far it has been swung, which is the
+    // whole point of the tool.
+    for (base, color) in [(frame.base_x, red), (frame.base_y, green)] {
+        let dir = egui::vec2(base.x, base.y);
+        let end = origin + dir * SHEAR_HANDLE_LEN;
+        painter.line_segment(
+            [origin, end],
+            egui::Stroke::new(1.5, color.gamma_multiply(0.55)),
+        );
+        painter.circle_stroke(end, 3.0, egui::Stroke::new(1.5, color.gamma_multiply(0.55)));
+    }
+
+    // Axis bars, each with a dark 1px offset copy so they stay legible over
+    // light artwork.
+    for (dir, color) in [(dir_x, red), (dir_y, green)] {
+        let a = origin - dir * SHEAR_HANDLE_LEN;
+        let b = origin + dir * SHEAR_HANDLE_LEN;
+        let shadow = egui::vec2(1.0, 1.0);
+        painter.line_segment(
+            [a + shadow, b + shadow],
+            egui::Stroke::new(3.0, egui::Color32::from_black_alpha(140)),
+        );
+        painter.line_segment([a, b], egui::Stroke::new(2.5, color));
+    }
+
+    // Grab dots at all four ends.
+    for (pos, kind) in frame.handles() {
+        let p = to_pos(pos);
+        let color = match kind {
+            G::ShearX => red,
+            _ => green,
+        };
+        painter.circle_filled(
+            p + egui::vec2(1.0, 1.0),
+            SHEAR_HANDLE_RADIUS,
+            egui::Color32::from_black_alpha(140),
+        );
+        painter.circle_filled(p, SHEAR_HANDLE_RADIUS, color);
+        if active(kind) {
+            painter.circle_stroke(
+                p,
+                SHEAR_HANDLE_RADIUS + 2.0,
+                egui::Stroke::new(1.5, egui::Color32::WHITE),
+            );
+        }
+    }
+
+    // Origin pin, matching the other tools' centre marker.
+    painter.circle_filled(origin, 5.0, egui::Color32::from_rgb(20, 20, 20));
+    painter.circle_stroke(
+        origin,
+        4.0,
+        egui::Stroke::new(2.0, egui::Color32::from_rgb(200, 200, 200)),
+    );
+}
+
+pub fn render_bones(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    state: &AppState,
+    theme: &crate::theme::Theme,
+    sprite_uploads: Vec<SpriteUpload>,
+) {
+    // The wgpu callback carrying the artwork is only assembled at the *end* of
+    // this function, but egui paints a layer in submission order — so gizmos
+    // drawn beforehand would end up buried under the art.
+    //
+    // The fix is to reserve the callback's slot now and fill it in last, rather
+    // than to promote the gizmos to a foreground layer: a foreground layer beats
+    // every window too, so the handles floated on top of open dialogs.
+    let canvas_painter = ui.painter_at(rect);
+    let artwork_slot = canvas_painter.add(egui::Shape::Noop);
+    let painter = canvas_painter.clone();
+    let viewport_size = glam::Vec2::new(rect.width(), rect.height());
+
+    let mut bone_instances = Vec::new();
+    let mut mesh_draws = Vec::new();
+
+    for (bone_id, bone) in state.doc.skeleton.bones.iter() {
+        let is_selected = state.session.is_bone_selected(bone_id);
+        let is_hovered = state.session.hovered_bone == Some(bone_id);
+
+        let world = state.pose.world_decomposed(bone_id);
+        let origin = state.pose.world_position(bone_id);
+        let angle = world.rotation;
+
+        // Colors
+        let (fill_color, stroke_color, joint_color) = if is_selected {
+            (
+                egui::Color32::from_rgba_unmultiplied(255, 165, 0, 150),
+                egui::Color32::from_rgb(255, 200, 0),
+                egui::Color32::from_rgb(255, 255, 0),
+            )
+        } else if is_hovered {
+            (
+                egui::Color32::from_rgba_unmultiplied(50, 220, 220, 150),
+                egui::Color32::from_rgb(100, 255, 255),
+                egui::Color32::from_rgb(150, 255, 255),
+            )
+        } else {
+            (
+                egui::Color32::from_rgba_unmultiplied(0, 150, 150, 80),
+                egui::Color32::from_rgb(0, 100, 100),
+                egui::Color32::from_rgb(0, 200, 200),
+            )
+        };
+
+        let is_ik_target = state.doc.skeleton.constraints.values().any(|c| match c {
+            ankhimate_core::constraints::Constraint::Ik(ik) => ik.target == bone_id,
+        });
+
+        // We still draw the IK target gizmo with egui, but we'll collect bone instance data for wgpu.
+        if !is_ik_target {
+            let model_matrix = glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::new(bone.length * world.scale.x, world.scale.y * 15.0, 1.0),
+                glam::Quat::from_rotation_z(world.rotation),
+                glam::Vec3::new(origin.x, origin.y, 0.0),
+            );
+
+            bone_instances.push(BoneInstance {
+                model_matrix: model_matrix.to_cols_array_2d(),
+                color: [
+                    fill_color.r() as f32 / 255.0,
+                    fill_color.g() as f32 / 255.0,
+                    fill_color.b() as f32 / 255.0,
+                    fill_color.a() as f32 / 255.0,
+                ],
+            });
+        } else {
+            let screen_radius = 8.0;
+            let world_radius = screen_radius / state.session.camera.zoom;
+            let world_vertices = [
+                origin + glam::Vec2::new(0.0, world_radius),
+                origin + glam::Vec2::new(world_radius, 0.0),
+                origin + glam::Vec2::new(0.0, -world_radius),
+                origin + glam::Vec2::new(-world_radius, 0.0),
+            ];
+
+            let points: Vec<egui::Pos2> = world_vertices
+                .iter()
+                .map(|v| {
+                    let screen = state.session.camera.world_to_screen(*v, viewport_size);
+                    egui::pos2(rect.min.x + screen.x, rect.min.y + screen.y)
+                })
+                .collect();
+
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                fill_color,
+                egui::Stroke::new(1.0, stroke_color),
+            ));
+        }
+
+        // Draw joint circle on top
+        if !is_ik_target {
+            let center = state.session.camera.world_to_screen(origin, viewport_size);
+            let point = egui::pos2(rect.min.x + center.x, rect.min.y + center.y);
+            painter.circle_filled(point, 4.0, joint_color);
+            painter.circle_stroke(point, 4.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+        } else {
+            let world_vertices =
+                bone_gizmo_vertices(origin, angle, bone.length, state.session.camera.zoom);
+
+            let v0 = state
+                .session
+                .camera
+                .world_to_screen(world_vertices[0], viewport_size);
+            let v1 = state
+                .session
+                .camera
+                .world_to_screen(world_vertices[1], viewport_size);
+            let v2 = state
+                .session
+                .camera
+                .world_to_screen(world_vertices[2], viewport_size);
+            let v3 = state
+                .session
+                .camera
+                .world_to_screen(world_vertices[3], viewport_size);
+
+            let points = vec![
+                egui::pos2(rect.min.x + v0.x, rect.min.y + v0.y),
+                egui::pos2(rect.min.x + v1.x, rect.min.y + v1.y),
+                egui::pos2(rect.min.x + v2.x, rect.min.y + v2.y),
+                egui::pos2(rect.min.x + v3.x, rect.min.y + v3.y),
+            ];
+
+            painter.add(egui::Shape::convex_polygon(
+                points.clone(),
+                fill_color,
+                egui::Stroke::new(1.0, stroke_color),
+            ));
+
+            painter.circle_filled(points[0], 4.0, joint_color);
+            painter.circle_stroke(points[0], 4.0, egui::Stroke::new(1.0, stroke_color));
+        }
+    }
+
+    // Preview bone (while dragging to create)
+    if let Some((start, end)) = state.session.preview_bone {
+        let delta = end - start;
+        let length = delta.length().max(0.01);
+        let angle = f32::atan2(delta.y, delta.x);
+
+        let world_vertices = bone_gizmo_vertices(start, angle, length, state.session.camera.zoom);
+
+        let points: Vec<egui::Pos2> = world_vertices
+            .iter()
+            .map(|v| {
+                let screen = state.session.camera.world_to_screen(*v, viewport_size);
+                egui::pos2(rect.min.x + screen.x, rect.min.y + screen.y)
+            })
+            .collect();
+
+        painter.add(egui::Shape::convex_polygon(
+            points.clone(),
+            egui::Color32::from_rgba_unmultiplied(128, 255, 255, 80),
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(128, 255, 255)),
+        ));
+        painter.circle_filled(points[0], 4.0, egui::Color32::from_rgb(128, 255, 255));
+    }
+
+    // Pivot marker for the selected slot's artwork: the point it turns and
+    // scales around. Invisible geometry is unauthorable — without this the
+    // pivot is a pair of numbers with no relation to what is on screen.
+    if let Some(slot_id) = state.session.active_slot()
+        && let Some(slot) = state.doc.skeleton.slots.get(slot_id)
+        && let Some(ankhimate_core::attachment::Attachment::Region(region)) = state
+            .doc
+            .skeleton
+            .resolve_slot(state.session.active_skin, slot_id)
+        && let Some(bone_world) = state.pose.worlds.get(slot.bone)
+    {
+        let pivot_screen = state.session.camera.world_to_screen(
+            bone_world.transform_point(region.local_offset),
+            viewport_size,
+        );
+        let p = egui::pos2(rect.min.x + pivot_screen.x, rect.min.y + pivot_screen.y);
+        // Bigger and brighter once it is a live handle, so "this is draggable
+        // now" needs no explanation.
+        let active = state.session.editing_attachment();
+        let arm = if active { 11.0 } else { 6.0 };
+        let color = if active {
+            egui::Color32::from_rgb(255, 225, 140)
+        } else {
+            egui::Color32::from_rgb(255, 205, 90)
+        };
+        for (a, b) in [
+            (egui::vec2(-arm, 0.0), egui::vec2(arm, 0.0)),
+            (egui::vec2(0.0, -arm), egui::vec2(0.0, arm)),
+        ] {
+            painter.line_segment(
+                [p + a, p + b],
+                egui::Stroke::new(1.5, egui::Color32::from_black_alpha(150)),
+            );
+        }
+        for (a, b) in [
+            (egui::vec2(-arm, 0.0), egui::vec2(arm, 0.0)),
+            (egui::vec2(0.0, -arm), egui::vec2(0.0, arm)),
+        ] {
+            painter.line_segment([p + a, p + b], egui::Stroke::new(1.0, color));
+        }
+        painter.circle_stroke(
+            p,
+            if active { 5.0 } else { 3.0 },
+            egui::Stroke::new(1.0, color),
+        );
+        if active {
+            // The quad outline, so it is obvious which art the handle drives.
+            let corners = region.local_corners().map(|c| {
+                let s = state
+                    .session
+                    .camera
+                    .world_to_screen(bone_world.transform_point(c), viewport_size);
+                egui::pos2(rect.min.x + s.x, rect.min.y + s.y)
+            });
+            for i in 0..4 {
+                painter.line_segment(
+                    [corners[i], corners[(i + 1) % 4]],
+                    egui::Stroke::new(1.0, color.gamma_multiply(0.7)),
+                );
+            }
+        }
+    }
+
+    // Weight heat map (T-403): how strongly the selected bone holds each vertex
+    // of the selected mesh. Weights are invisible without it, and "paint until
+    // it looks right" needs something to look at.
+    if state.session.tool == crate::session::Tool::WeightPaint
+        && let Some(slot_id) = state.session.active_slot()
+        && let Some(bone) = state.session.active_bone()
+        && let Some(slot) = state.doc.skeleton.slots.get(slot_id)
+        && let Some(Attachment::Mesh(mesh)) = state
+            .doc
+            .skeleton
+            .resolve_slot(state.session.active_skin, slot_id)
+        && let Some(bone_world) = state.pose.worlds.get(slot.bone)
+    {
+        let skinned = !mesh.weights.is_empty() && !mesh.inverse_bind_matrices.is_empty();
+        for (index, vertex) in mesh.setup_vertices.iter().enumerate() {
+            let world = if skinned {
+                mesh.skin_vertex_with_ffd(index, glam::Vec2::ZERO, &state.pose)
+            } else {
+                bone_world.transform_point(*vertex)
+            };
+            let screen = state.session.camera.world_to_screen(world, viewport_size);
+            let p = egui::pos2(rect.min.x + screen.x, rect.min.y + screen.y);
+
+            let weight = mesh
+                .weights
+                .get(index)
+                .and_then(|w| w.iter().find(|w| w.bone == bone))
+                .map(|w| w.weight)
+                .unwrap_or(0.0);
+            // Blue (unbound) through to red (fully bound) — the convention every
+            // rigging tool uses, so it needs no legend.
+            let color = egui::Color32::from_rgb(
+                (weight * 255.0) as u8,
+                (60.0 * (1.0 - (weight - 0.5).abs() * 2.0).max(0.0)) as u8,
+                ((1.0 - weight) * 255.0) as u8,
+            );
+            painter.circle_filled(p, 4.0, egui::Color32::from_black_alpha(120));
+            painter.circle_filled(p, 3.0, color);
+        }
+    }
+
+    // Mesh edit overlay (T-401): wireframe plus grab handles. Without it the
+    // vertices are invisible and the mode is unusable.
+    if let Some(target) = crate::ui::canvas::tools::mesh_edit::target(state) {
+        let positions = crate::ui::canvas::tools::mesh_edit::vertex_screen_positions(
+            &target,
+            state,
+            viewport_size,
+        );
+        let to_pos = |v: glam::Vec2| egui::pos2(rect.min.x + v.x, rect.min.y + v.y);
+        // Every colour here comes from the theme: the overlay sits directly on
+        // the artwork, so a fixed palette fights whatever the user picked.
+        let wire = theme.mesh_edge();
+
+        for tri in &target.mesh.triangles {
+            for k in 0..3 {
+                let (Some(&a), Some(&b)) = (
+                    positions.get(tri[k] as usize),
+                    positions.get(tri[(k + 1) % 3] as usize),
+                ) else {
+                    continue;
+                };
+                painter.line_segment([to_pos(a), to_pos(b)], egui::Stroke::new(1.0, wire));
+            }
+        }
+
+        // Box-select in progress.
+        if let Some(start) = state.session.vertex_box_start
+            && let Some(cursor) = ui.ctx().pointer_latest_pos()
+        {
+            let a = to_pos(start);
+            let b = egui::pos2(cursor.x, cursor.y);
+            let band = egui::Rect::from_two_pos(a, b);
+            painter.rect_filled(band, 0.0, wire.gamma_multiply(0.15));
+            painter.rect_stroke(
+                band,
+                0.0,
+                egui::Stroke::new(1.0, wire),
+                egui::StrokeKind::Inside,
+            );
+        }
+
+        // Whichever vertex a click would take, so the handle lights up before
+        // the grab rather than after it.
+        let hovered = ui.ctx().pointer_latest_pos().and_then(|cursor| {
+            let local = glam::Vec2::new(cursor.x - rect.min.x, cursor.y - rect.min.y);
+            positions
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (i, (*p - local).length()))
+                .filter(|(_, d)| *d <= crate::ui::canvas::tools::mesh_edit::VERTEX_HIT)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+        });
+
+        for (index, position) in positions.iter().enumerate() {
+            let selected = state.session.selected_vertices.contains(&index);
+            let p = to_pos(*position);
+            // Size, not a light halo, carries the state — a ring of pale pixels
+            // around every dot reads as haze over the art in a dense mesh.
+            let (radius, color) = match (selected, hovered == Some(index)) {
+                (true, _) => (5.0, theme.mesh_vertex_selected()),
+                (false, true) => (4.5, theme.mesh_vertex_hovered()),
+                (false, false) => (3.0, theme.mesh_vertex()),
+            };
+            painter.circle_filled(p, radius, color);
+        }
+    }
+
+    // Draw Transform Gizmos for the selected bone
+    if let Some(selected_id) = state.session.active_bone()
+        && state.doc.skeleton.bones.contains_key(selected_id)
+    {
+        let selected_world = state.pose.world_decomposed(selected_id);
+        if state.session.active_transform_tool == crate::session::TransformTool::Translate {
+            let origin_world = state.pose.world_position(selected_id);
+            let origin_screen = state
+                .session
+                .camera
+                .world_to_screen(origin_world, viewport_size);
+            let origin_pos = egui::pos2(rect.min.x + origin_screen.x, rect.min.y + origin_screen.y);
+
+            let angle = selected_world.rotation;
+            let dir_x_world = glam::Vec2::new(angle.cos(), angle.sin());
+            let dir_y_world = glam::Vec2::new(-angle.sin(), angle.cos());
+
+            let x_p1_world = origin_world + dir_x_world;
+            let x_p1_screen = state
+                .session
+                .camera
+                .world_to_screen(x_p1_world, viewport_size);
+            let screen_dir_x = (x_p1_screen - origin_screen).normalize_or_zero();
+            let dir_x = egui::vec2(screen_dir_x.x, screen_dir_x.y);
+
+            let y_p1_world = origin_world + dir_y_world;
+            let y_p1_screen = state
+                .session
+                .camera
+                .world_to_screen(y_p1_world, viewport_size);
+            let screen_dir_y = (y_p1_screen - origin_screen).normalize_or_zero();
+            let dir_y = egui::vec2(screen_dir_y.x, screen_dir_y.y);
+
+            painter.line_segment(
+                [origin_pos - dir_x * 12.0, origin_pos + dir_x * 12.0],
+                egui::Stroke::new(3.0, egui::Color32::from_rgb(0, 255, 255)),
+            );
+            painter.line_segment(
+                [origin_pos - dir_y * 12.0, origin_pos + dir_y * 12.0],
+                egui::Stroke::new(3.0, egui::Color32::from_rgb(0, 255, 255)),
+            );
+
+            let draw_arrow_gizmo =
+                |painter: &egui::Painter, dir: egui::Vec2, col: egui::Color32| {
+                    let length = 50.0;
+                    let tip = origin_pos + dir * length;
+                    let right = egui::vec2(-dir.y, dir.x);
+                    let base_right = tip - dir * 15.0 + right * 7.0;
+                    let inner_base = tip - dir * 10.0;
+                    let base_left = tip - dir * 15.0 - right * 7.0;
+
+                    let draw_shape = |offset: egui::Vec2, c: egui::Color32| {
+                        painter.line_segment(
+                            [origin_pos + offset, inner_base + offset],
+                            egui::Stroke::new(3.0, c),
+                        );
+                        painter.add(egui::Shape::convex_polygon(
+                            vec![tip + offset, base_right + offset, inner_base + offset],
+                            c,
+                            egui::Stroke::NONE,
+                        ));
+                        painter.add(egui::Shape::convex_polygon(
+                            vec![tip + offset, inner_base + offset, base_left + offset],
+                            c,
+                            egui::Stroke::NONE,
+                        ));
+                    };
+
+                    draw_shape(egui::vec2(1.0, 1.0), egui::Color32::from_black_alpha(150));
+                    draw_shape(egui::vec2(0.0, 0.0), col);
+                };
+
+            let x_active = state.session.hovered_gizmo
+                == crate::session::GizmoInteraction::TranslateX
+                || state.session.dragging_gizmo == crate::session::GizmoInteraction::TranslateX;
+            let x_color = if x_active {
+                egui::Color32::from_rgb(255, 100, 100)
+            } else {
+                egui::Color32::RED
+            };
+            draw_arrow_gizmo(&painter, dir_x, x_color);
+
+            let y_active = state.session.hovered_gizmo
+                == crate::session::GizmoInteraction::TranslateY
+                || state.session.dragging_gizmo == crate::session::GizmoInteraction::TranslateY;
+            let y_color = if y_active {
+                egui::Color32::from_rgb(100, 255, 100)
+            } else {
+                egui::Color32::GREEN
+            };
+            draw_arrow_gizmo(&painter, dir_y, y_color);
+
+            let center_active = state.session.hovered_gizmo
+                == crate::session::GizmoInteraction::TranslateFree
+                || state.session.dragging_gizmo == crate::session::GizmoInteraction::TranslateFree;
+            painter.circle_filled(origin_pos, 8.0, egui::Color32::from_rgb(20, 20, 20));
+            let ring_col = if center_active {
+                egui::Color32::from_rgb(255, 255, 255)
+            } else {
+                egui::Color32::from_rgb(200, 255, 255)
+            };
+            painter.circle_stroke(origin_pos, 6.0, egui::Stroke::new(3.0, ring_col));
+        } else if state.session.active_transform_tool == crate::session::TransformTool::Rotate {
+            let origin_world = state.pose.world_position(selected_id);
+            let origin_screen = state
+                .session
+                .camera
+                .world_to_screen(origin_world, viewport_size);
+            let origin_pos = egui::pos2(rect.min.x + origin_screen.x, rect.min.y + origin_screen.y);
+
+            let angle = selected_world.rotation;
+            let dir_x_world = glam::Vec2::new(angle.cos(), angle.sin());
+            let dir_y_world = glam::Vec2::new(-angle.sin(), angle.cos());
+
+            let x_p1_world = origin_world + dir_x_world;
+            let x_p1_screen = state
+                .session
+                .camera
+                .world_to_screen(x_p1_world, viewport_size);
+            let screen_dir_x = (x_p1_screen - origin_screen).normalize_or_zero();
+            let dir_x = egui::vec2(screen_dir_x.x, screen_dir_x.y);
+
+            let y_p1_world = origin_world + dir_y_world;
+            let y_p1_screen = state
+                .session
+                .camera
+                .world_to_screen(y_p1_world, viewport_size);
+            let screen_dir_y = (y_p1_screen - origin_screen).normalize_or_zero();
+            let dir_y = egui::vec2(screen_dir_y.x, screen_dir_y.y);
+
+            painter.line_segment(
+                [origin_pos - dir_x * 40.0, origin_pos + dir_x * 40.0],
+                egui::Stroke::new(3.0, egui::Color32::from_rgb(0, 255, 255)),
+            );
+            painter.line_segment(
+                [origin_pos - dir_y * 40.0, origin_pos + dir_y * 40.0],
+                egui::Stroke::new(3.0, egui::Color32::from_rgb(0, 255, 255)),
+            );
+
+            let is_hovered =
+                state.session.hovered_gizmo == crate::session::GizmoInteraction::Rotate;
+            let is_dragging =
+                state.session.dragging_gizmo == crate::session::GizmoInteraction::Rotate;
+            let red_color = if is_hovered || is_dragging {
+                egui::Color32::from_rgb(255, 100, 100)
+            } else {
+                egui::Color32::RED
+            };
+
+            painter.circle_stroke(
+                origin_pos + egui::vec2(1.0, 1.0),
+                30.0,
+                egui::Stroke::new(4.0, egui::Color32::from_black_alpha(150)),
+            );
+            painter.circle_stroke(origin_pos, 30.0, egui::Stroke::new(4.0, red_color));
+
+            let diamond_center = origin_pos + dir_x * 30.0;
+            let right = egui::vec2(-dir_x.y, dir_x.x);
+            let p1 = diamond_center + dir_x * 6.0;
+            let p2 = diamond_center + right * 4.0;
+            let p3 = diamond_center - dir_x * 6.0;
+            let p4 = diamond_center - right * 4.0;
+
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    p1 + egui::vec2(1.0, 1.0),
+                    p2 + egui::vec2(1.0, 1.0),
+                    p3 + egui::vec2(1.0, 1.0),
+                    p4 + egui::vec2(1.0, 1.0),
+                ],
+                egui::Color32::from_black_alpha(150),
+                egui::Stroke::NONE,
+            ));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p1, p2, p3, p4],
+                red_color,
+                egui::Stroke::NONE,
+            ));
+
+            let center_active = state.session.hovered_gizmo
+                == crate::session::GizmoInteraction::TranslateFree
+                || state.session.dragging_gizmo == crate::session::GizmoInteraction::TranslateFree;
+            painter.circle_filled(origin_pos, 8.0, egui::Color32::from_rgb(20, 20, 20));
+            let ring_col = if center_active {
+                egui::Color32::from_rgb(255, 255, 255)
+            } else {
+                egui::Color32::from_rgb(200, 255, 255)
+            };
+            painter.circle_stroke(origin_pos, 6.0, egui::Stroke::new(3.0, ring_col));
+        } else if state.session.active_transform_tool == crate::session::TransformTool::Shear {
+            draw_shear_gizmo(&painter, rect, state, selected_id, viewport_size);
+        }
+    }
+
+    // Generate wgpu Mesh Data.
+    //
+    // This pass paints the mesh's triangles as flat colour — it exists for the
+    // weight heat map and nothing else, so it is gated on the weight tool. Left
+    // ungated it laid a 60%-opaque white sheet over the artwork any time a mesh
+    // was selected, which is not a surface anyone asked to see.
+    let weight_painting = state.session.tool == crate::session::Tool::WeightPaint;
+    for &slot_id in &state.doc.skeleton.draw_order {
+        if let Some(slot) = state.doc.skeleton.slots.get(slot_id) {
+            // Attachments are always obtained via skin resolution (ADR 0003) —
+            // never read off the slot directly.
+            if let Some(ankhimate_core::attachment::Attachment::Mesh(mesh)) = state
+                .doc
+                .skeleton
+                .resolve_slot(state.session.active_skin, slot_id)
+                .filter(|_| weight_painting)
+            {
+                let mut wgpu_vertices = Vec::new();
+                let bone_world = match state.pose.worlds.get(slot.bone) {
+                    Some(&w) => w,
+                    None => continue,
+                };
+
+                for (i, setup_pos) in mesh.setup_vertices.iter().enumerate() {
+                    let world_pos = bone_world.transform_point(*setup_pos);
+
+                    let uv = mesh.uvs.get(i).copied().unwrap_or(glam::Vec2::ZERO);
+
+                    let mut color = [0.8, 0.8, 0.8, 0.6];
+                    if state.session.tool == crate::session::Tool::WeightPaint {
+                        if let Some(selected_bone) = state.session.active_bone() {
+                            let weight = mesh
+                                .weights
+                                .get(i)
+                                .and_then(|vw_list| {
+                                    vw_list
+                                        .iter()
+                                        .find(|vw| vw.bone == selected_bone)
+                                        .map(|vw| vw.weight)
+                                })
+                                .unwrap_or(0.0);
+
+                            // Heatmap: Blue (0) -> Red (1)
+                            color = [weight, 0.0, 1.0 - weight, 0.8];
+                        } else {
+                            color = [0.4, 0.4, 0.4, 0.6];
+                        }
+                    }
+
+                    wgpu_vertices.push(MeshVertex {
+                        position: [world_pos.x, world_pos.y],
+                        uv: [uv.x, uv.y],
+                        color,
+                    });
+                }
+
+                let mut indices = Vec::new();
+                for tri in &mesh.triangles {
+                    indices.push(tri[0]);
+                    indices.push(tri[1]);
+                    indices.push(tri[2]);
+                }
+
+                mesh_draws.push(MeshDrawCall {
+                    vertices: wgpu_vertices,
+                    indices,
+                });
+
+                // Draw vertices as small dots if selected (Gizmo - keep in egui)
+                if state.session.tool == crate::session::Tool::WeightPaint
+                    && (state.session.active_slot() == Some(slot_id))
+                {
+                    for setup_pos in &mesh.setup_vertices {
+                        let world_pos = bone_world.transform_point(*setup_pos);
+                        let screen_pos = state
+                            .session
+                            .camera
+                            .world_to_screen(world_pos, viewport_size);
+                        let p = egui::pos2(rect.min.x + screen_pos.x, rect.min.y + screen_pos.y);
+                        painter.circle_filled(p, 3.0, egui::Color32::WHITE);
+                    }
+                }
+            } else if state.doc.skeleton.bones.contains_key(slot.bone)
+                && sprite_for_slot(state, slot_id).is_none()
+            {
+                // Only slots with nothing to show get the placeholder dot; a
+                // textured attachment is its own affordance (T-301).
+                let pos = state.pose.world_position(slot.bone);
+                let screen_pos = state.session.camera.world_to_screen(pos, viewport_size);
+                let point = egui::pos2(rect.min.x + screen_pos.x, rect.min.y + screen_pos.y);
+
+                let color = egui::Color32::from_rgba_unmultiplied(
+                    (slot.color[0] * 255.0) as u8,
+                    (slot.color[1] * 255.0) as u8,
+                    (slot.color[2] * 255.0) as u8,
+                    (slot.color[3] * 255.0) as u8,
+                );
+
+                let radius = if state.session.active_slot() == Some(slot_id) {
+                    8.0
+                } else {
+                    5.0
+                };
+                painter.circle_filled(point, radius, color);
+                painter.circle_stroke(point, radius, egui::Stroke::new(1.0, egui::Color32::BLACK));
+            }
+        }
+    }
+
+    // Textured attachments, in the pose's draw order (back to front) — the
+    // animated order, so a draw-order key reorders the artwork live.
+    //
+    // Clipping (T-405) is applied here rather than with a stencil buffer: the
+    // egui render pass this callback runs inside has no stencil attachment, and
+    // adding one would mean owning the whole pass. Instead a clipped draw has
+    // its vertices' alpha zeroed outside the polygon, which is exact at the
+    // vertices and interpolates across a triangle — good enough for the soft
+    // masks this is used for, and honest about what it is. A stencil pass is the
+    // upgrade path if hard edges are ever needed.
+    let mut clip: Option<(
+        ankhimate_core::attachment::ClippingAttachment,
+        Option<SlotId>,
+    )> = None;
+    let mut sprite_draws: Vec<SpriteDraw> = Vec::new();
+    for &slot_id in &state.pose.draw_order {
+        // A clip starts here and runs until its end slot.
+        if let Some(Attachment::Clipping(c)) = state
+            .doc
+            .skeleton
+            .resolve_slot(state.session.active_skin, slot_id)
+        {
+            let end = c.end_slot.as_ref().and_then(|name| {
+                state
+                    .doc
+                    .skeleton
+                    .slots
+                    .iter()
+                    .find(|(_, s)| &s.name == name)
+                    .map(|(id, _)| id)
+            });
+            clip = Some((c.clone(), end));
+            continue;
+        }
+
+        if let Some(mut draw) = sprite_for_slot(state, slot_id) {
+            if let Some((polygon, _)) = &clip
+                && let Some(bone) = state
+                    .doc
+                    .skeleton
+                    .slots
+                    .get(slot_id)
+                    .and_then(|s| state.pose.worlds.get(s.bone))
+                && let Some(inverse) = bone.invert()
+            {
+                for vertex in &mut draw.vertices {
+                    let world = glam::vec2(vertex.position[0], vertex.position[1]);
+                    if !polygon.contains(inverse.transform_point(world)) {
+                        vertex.color[3] = 0.0;
+                    }
+                }
+            }
+            sprite_draws.push(draw);
+        }
+
+        // Past the end slot, the clip stops applying.
+        if let Some((_, Some(end))) = &clip
+            && *end == slot_id
+        {
+            clip = None;
+        }
+    }
+
+    let custom_callback = CustomCallback {
+        view_proj: state.session.camera.view_proj_matrix(viewport_size),
+        bone_instances,
+        mesh_draws,
+        sprite_draws,
+        sprite_uploads,
+    };
+
+    // Into the slot reserved before anything was drawn, so the artwork lands
+    // under every gizmo while staying in the canvas's own layer.
+    canvas_painter.set(
+        artwork_slot,
+        eframe::egui_wgpu::Callback::new_paint_callback(rect, custom_callback),
+    );
+}

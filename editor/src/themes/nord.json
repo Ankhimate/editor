@@ -1,0 +1,15 @@
+{
+  "name": "Nord",
+  "primary": "#88c0d0",
+  "on_primary": "#2e3440",
+  "panel_fill": "#2e3440",
+  "window_fill": "#3b4252",
+  "faint_bg_color": "#434c5e",
+  "extreme_bg_color": "#242933",
+  "grid_color_even": "#2e344050",
+  "grid_color_odd": "#3b425250",
+  "origin_color": "#88c0d064",
+  "mesh_edge": "#88c0d0b4",
+  "mesh_vertex": "#7b88a1",
+  "mesh_vertex_selected": "#ebcb8b"
+}
