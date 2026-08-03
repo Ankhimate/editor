@@ -1,14 +1,5 @@
 use ankhimate_core::slot::BlendMode;
 use eframe::egui_wgpu;
-use wgpu::util::DeviceExt;
-
-/// Simple vertex: position (2D) + barycentric coordinates for edge detection.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    pub position: [f32; 2],
-    pub bary: [f32; 3],
-}
 
 /// Vertex for Meshes
 #[repr(C)]
@@ -21,14 +12,6 @@ pub struct MeshVertex {
     pub dark: [f32; 4],
 }
 
-/// Per-instance data: 4x4 model matrix + RGBA color.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct BoneInstance {
-    pub model_matrix: [[f32; 4]; 4],
-    pub color: [f32; 4],
-}
-
 /// Vertex and index budget for textured draws (regions and meshes together).
 ///
 /// Sized for a few thousand quads or a handful of dense meshes. Draws past the
@@ -38,12 +21,8 @@ pub const SPRITE_VERTEX_CAPACITY: usize = 64 * 1024;
 pub const SPRITE_INDEX_CAPACITY: usize = 192 * 1024;
 
 pub struct CustomRenderer {
-    pub pipeline: wgpu::RenderPipeline,
-    pub vertex_buffer: wgpu::Buffer,
-    pub num_vertices: u32,
     pub camera_buffer: wgpu::Buffer,
     pub camera_bind_group: wgpu::BindGroup,
-    pub instance_buffer: wgpu::Buffer,
 
     // Mesh Pipeline
     pub mesh_pipeline: wgpu::RenderPipeline,
@@ -67,11 +46,6 @@ pub struct CustomRenderer {
 
 impl CustomRenderer {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Canvas Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
-
         // 1. Camera Uniform Buffer
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Camera Uniform Buffer"),
@@ -103,129 +77,20 @@ impl CustomRenderer {
             label: Some("Camera Bind Group"),
         });
 
-        // 2. Pre-allocate Instance Buffer (Max 1024 bones)
-        let instance_stride = std::mem::size_of::<BoneInstance>() as u64;
-        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Bone Instance Buffer"),
-            size: instance_stride * 1024,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        // The bone gizmo used to be an instanced quad through its own pipeline
+        // and shader. It is drawn in egui now, with the same function that
+        // previews a bone while you drag it out — two drawings of one thing is
+        // one too many, and they had drifted into different shapes.
+
+        let mesh_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Mesh Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("mesh_shader.wgsl").into()),
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Canvas Pipeline Layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
-        });
-
-        // Instance buffer layout: mat4x4 (4 vec4s) + vec4 color
-        let instance_layout = wgpu::VertexBufferLayout {
-            array_stride: instance_stride,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![
-                // Model matrix columns
-                1 => Float32x4,  // col 0
-                2 => Float32x4,  // col 1
-                3 => Float32x4,  // col 2
-                4 => Float32x4,  // col 3
-                // Bone color (RGBA)
-                5 => Float32x4
-            ],
-        };
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Canvas Render Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[
-                    wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 6 => Float32x3],
-                    },
-                    instance_layout,
-                ],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        // ====================================================
-        // Spine-style bone mesh (normalized: base at origin, tip at X=1.0)
-        //
-        // The shape is a tapered wedge:
-        //   - Base joint at (0, 0)
-        //   - Widest point at ~25% of length
-        //   - Tip (point) at (1.0, 0)
-        //
-        // Y ranges from -1 to +1 in "bone width" units, scaled
-        // by the instance transform's Y scale.
-        // ====================================================
-        let w = 1.0_f32; // half-width at widest point (will be scaled by instance Y)
-        let bulge = 0.25_f32; // X position of widest point (25% along bone)
-
-        let vertices: &[Vertex] = &[
-            // Top triangle: base -> bulge_top -> tip
-            Vertex {
-                position: [0.0, 0.0],
-                bary: [1.0, 0.0, 0.0],
-            },
-            Vertex {
-                position: [bulge, w],
-                bary: [0.0, 1.0, 0.0],
-            },
-            Vertex {
-                position: [1.0, 0.0],
-                bary: [0.0, 0.0, 1.0],
-            },
-            // Bottom triangle: base -> tip -> bulge_bottom
-            Vertex {
-                position: [0.0, 0.0],
-                bary: [1.0, 0.0, 0.0],
-            },
-            Vertex {
-                position: [1.0, 0.0],
-                bary: [0.0, 1.0, 0.0],
-            },
-            Vertex {
-                position: [bulge, -w],
-                bary: [0.0, 0.0, 1.0],
-            },
-        ];
-
-        let num_vertices = vertices.len() as u32;
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Bone Vertex Buffer"),
-            contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        // ====================================================
-        // Mesh Pipeline Setup
-        // ====================================================
-        let mesh_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Mesh Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("mesh_shader.wgsl").into()),
         });
 
         let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -389,12 +254,8 @@ impl CustomRenderer {
         });
 
         Self {
-            pipeline,
-            vertex_buffer,
-            num_vertices,
             camera_buffer,
             camera_bind_group,
-            instance_buffer,
             mesh_pipeline,
             mesh_vertex_buffer,
             mesh_index_buffer,
@@ -594,7 +455,6 @@ pub struct MeshDrawCall {
 
 pub struct CustomCallback {
     pub view_proj: glam::Mat4,
-    pub bone_instances: Vec<BoneInstance>,
     pub mesh_draws: Vec<MeshDrawCall>,
     /// Textured attachments, back-to-front (T-301).
     pub sprite_draws: Vec<SpriteDraw>,
@@ -653,15 +513,6 @@ impl egui_wgpu::CallbackTrait for CustomCallback {
             0,
             bytemuck::cast_slice(&[self.view_proj.to_cols_array()]),
         );
-
-        // Write the Bone instance data
-        if !self.bone_instances.is_empty() {
-            queue.write_buffer(
-                &renderer.instance_buffer,
-                0,
-                bytemuck::cast_slice(&self.bone_instances),
-            );
-        }
 
         // Write the Mesh data (concat all draws)
         let mut all_vertices = Vec::new();
@@ -763,19 +614,6 @@ impl egui_wgpu::CallbackTrait for CustomCallback {
                 wgpu::IndexFormat::Uint32,
             );
             render_pass.draw_indexed(0..total_indices, 0, 0..1);
-        }
-
-        // Draw Bones
-        if !self.bone_instances.is_empty() {
-            render_pass.set_pipeline(&renderer.pipeline);
-            render_pass.set_bind_group(0, &renderer.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, renderer.vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, renderer.instance_buffer.slice(..));
-
-            render_pass.draw(
-                0..renderer.num_vertices,
-                0..self.bone_instances.len() as u32,
-            );
         }
     }
 }

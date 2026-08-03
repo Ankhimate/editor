@@ -1,7 +1,5 @@
 use crate::app_state::AppState;
-use crate::renderer::{
-    BoneInstance, CustomCallback, MeshDrawCall, MeshVertex, SpriteDraw, SpriteUpload,
-};
+use crate::renderer::{CustomCallback, MeshDrawCall, MeshVertex, SpriteDraw, SpriteUpload};
 use ankhimate_core::attachment::{Attachment, RegionAttachment};
 use ankhimate_core::ids::SlotId;
 use eframe::egui;
@@ -542,7 +540,6 @@ pub fn render_bones(
     let painter = canvas_painter.clone();
     let viewport_size = glam::Vec2::new(rect.width(), rect.height());
 
-    let mut bone_instances = Vec::new();
     let mut mesh_draws = Vec::new();
 
     for (bone_id, bone) in state.doc.skeleton.bones.iter() {
@@ -595,23 +592,29 @@ pub fn render_bones(
             | ankhimate_core::constraints::Constraint::Path(_) => false,
         });
 
-        // We still draw the IK target gizmo with egui, but we'll collect bone instance data for wgpu.
+        // The same kite the create-bone tool previews while you drag, drawn by
+        // the same function. It used to be a quad through a separate wgpu
+        // pipeline, so a bone changed shape the moment you released the mouse —
+        // two drawings of one thing that could, and did, disagree.
         if !is_ik_target {
-            let model_matrix = glam::Mat4::from_scale_rotation_translation(
-                glam::Vec3::new(bone.length * world.scale.x, world.scale.y * 15.0, 1.0),
-                glam::Quat::from_rotation_z(world.rotation),
-                glam::Vec3::new(origin.x, origin.y, 0.0),
-            );
-
-            bone_instances.push(BoneInstance {
-                model_matrix: model_matrix.to_cols_array_2d(),
-                color: [
-                    fill_color.r() as f32 / 255.0,
-                    fill_color.g() as f32 / 255.0,
-                    fill_color.b() as f32 / 255.0,
-                    fill_color.a() as f32 / 255.0,
-                ],
-            });
+            let points: Vec<egui::Pos2> = bone_gizmo_vertices(
+                origin,
+                world.rotation,
+                bone.length,
+                state.session.camera.zoom,
+            )
+            .iter()
+            .map(|v| {
+                let screen = state.session.camera.world_to_screen(*v, viewport_size);
+                egui::pos2(rect.min.x + screen.x, rect.min.y + screen.y)
+            })
+            .collect();
+            painter.add(egui::Shape::convex_polygon(
+                points.clone(),
+                fill_color,
+                egui::Stroke::new(1.0, stroke_color),
+            ));
+            painter.circle_filled(points[0], 3.5, joint_color);
         } else {
             let screen_radius = 8.0;
             let world_radius = screen_radius / state.session.camera.zoom;
@@ -1342,7 +1345,6 @@ pub fn render_bones(
 
     let custom_callback = CustomCallback {
         view_proj: state.session.camera.view_proj_matrix(viewport_size),
-        bone_instances,
         mesh_draws,
         sprite_draws,
         sprite_uploads,
