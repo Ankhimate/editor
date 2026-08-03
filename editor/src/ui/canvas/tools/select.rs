@@ -435,10 +435,99 @@ impl CanvasTool for SelectTool {
                 match (ctrl, ctx.state.session.hovered_bone) {
                     // Ctrl-click toggles a bone in the multi-selection.
                     (true, Some(bone)) => ctx.state.session.toggle_bone(bone),
-                    // A plain click replaces the selection (empty space clears it).
-                    (_, hovered) => ctx.state.session.select_bone(hovered),
+                    (_, Some(bone)) => ctx.state.session.select_bone(Some(bone)),
+                    // No bone under the cursor: try the artwork before giving up
+                    // and clearing. Clicking a piece is how you ask "what is
+                    // this and where does it live", and the tree scrolls to the
+                    // answer (T-708).
+                    (_, None) => {
+                        let picked = mouse_screen.and_then(|m| {
+                            let world = ctx.state.session.camera.screen_to_world(m, viewport_size);
+                            pick_attachment(ctx.state, world)
+                        });
+                        match picked {
+                            Some((slot, name, bone)) => {
+                                ctx.state.session.select_attachment(slot, name, bone)
+                            }
+                            None => ctx.state.session.select_bone(None),
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+/// The front-most attachment under a world-space point, if any (T-708).
+///
+/// Walks the draw order backwards, so what you click is what you see on top.
+/// Regions test against their quad, meshes against their triangles — a mesh's
+/// bounding box would happily claim the gap inside a curved piece.
+fn pick_attachment(
+    state: &crate::app_state::AppState,
+    world: glam::Vec2,
+) -> Option<(
+    ankhimate_core::ids::SlotId,
+    String,
+    ankhimate_core::ids::BoneId,
+)> {
+    use ankhimate_core::attachment::Attachment;
+
+    let inside = |a: glam::Vec2, b: glam::Vec2, c: glam::Vec2| {
+        let sign = |p: glam::Vec2, q: glam::Vec2, r: glam::Vec2| (q - p).perp_dot(r - p);
+        let (d1, d2, d3) = (sign(a, b, world), sign(b, c, world), sign(c, a, world));
+        let negative = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+        let positive = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+        !(negative && positive)
+    };
+
+    for &slot_id in state.pose.draw_order.iter().rev() {
+        let Some(slot) = state.doc.skeleton.slots.get(slot_id) else {
+            continue;
+        };
+        // Hidden slots are not clickable — they are not on screen to click.
+        if state.pose.slot_visible.get(slot_id) == Some(&false) {
+            continue;
+        }
+        let Some(name) = slot.attachment.as_deref() else {
+            continue;
+        };
+        let Some(attachment) = state
+            .doc
+            .skeleton
+            .resolve_slot_many(&state.session.skin_stack(), slot_id)
+        else {
+            continue;
+        };
+        let bone_world = state.pose.world(slot.bone);
+        let hit = match attachment {
+            Attachment::Region(r) => {
+                let c = r.local_corners().map(|v| bone_world.transform_point(v));
+                inside(c[0], c[1], c[2]) || inside(c[0], c[2], c[3])
+            }
+            Attachment::Mesh(m) => {
+                let skinned = !m.weights.is_empty() && !m.inverse_bind_matrices.is_empty();
+                let at = |i: usize| {
+                    if skinned {
+                        m.skin_vertex_with_ffd(i, glam::Vec2::ZERO, &state.pose)
+                    } else {
+                        bone_world.transform_point(m.setup_vertices[i])
+                    }
+                };
+                m.triangles.iter().any(|t| {
+                    let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
+                    a < m.setup_vertices.len()
+                        && b < m.setup_vertices.len()
+                        && c < m.setup_vertices.len()
+                        && inside(at(a), at(b), at(c))
+                })
+            }
+            // Clips and paths are authoring geometry with their own handles.
+            Attachment::Clipping(_) | Attachment::Path(_) => false,
+        };
+        if hit {
+            return Some((slot_id, name.to_string(), slot.bone));
+        }
+    }
+    None
 }

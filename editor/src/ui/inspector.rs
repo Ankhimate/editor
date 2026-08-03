@@ -15,6 +15,15 @@ const ROW_GAP: f32 = 3.0;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(2.0);
+    breadcrumb(ui, state);
+
+    // A focused constraint gets the panel to itself: it belongs to the rig, not
+    // to whichever bone happens to be selected, and showing it under a bone's
+    // transform made it look like a property of that bone.
+    if let Some(crate::session::Selection::Constraint(id)) = state.session.selection.clone() {
+        focused_constraint(ui, state, id);
+        return;
+    }
 
     if state.session.tool == Tool::WeightPaint {
         use crate::commands::weight_cmds::BrushMode;
@@ -119,6 +128,61 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     info_row(ui, "Length", &format!("{:.2}", bone_len));
     if let Some(p) = &parent_name {
         info_row(ui, "Parent", p);
+    }
+
+    // Colour: how limbs are told apart at a glance, and it inherits down the
+    // hierarchy, so setting it on a shoulder colours the whole arm (T-505).
+    {
+        let current = state
+            .doc
+            .skeleton
+            .bones
+            .get(bone_id)
+            .map(|b| b.color)
+            .unwrap_or(ankhimate_core::skeleton::Bone::default_color());
+        let inherited = crate::ui::canvas::renderer::group_color(&state.doc.skeleton, bone_id);
+        let own = current != ankhimate_core::skeleton::Bone::default_color();
+        let mut rgba = egui::Color32::from_rgba_unmultiplied(
+            (inherited[0] * 255.0) as u8,
+            (inherited[1] * 255.0) as u8,
+            (inherited[2] * 255.0) as u8,
+            255,
+        );
+        ui.horizontal(|ui| {
+            ui.add_sized([LABEL_W, FIELD_H], egui::Label::new("Colour"));
+            let editable = state.session.can_edit_structure();
+            let changed = ui
+                .add_enabled_ui(editable, |ui| ui.color_edit_button_srgba(&mut rgba))
+                .inner
+                .changed();
+            if changed {
+                state.dispatch(Box::new(crate::commands::bone_cmds::SetBoneColor::new(
+                    bone_id,
+                    [
+                        rgba.r() as f32 / 255.0,
+                        rgba.g() as f32 / 255.0,
+                        rgba.b() as f32 / 255.0,
+                        current[3],
+                    ],
+                )));
+            }
+            if !own {
+                ui.label(
+                    egui::RichText::new("inherited")
+                        .size(10.0)
+                        .color(ui.visuals().weak_text_color()),
+                );
+            } else if ui
+                .add_enabled(editable, egui::Button::new("Reset").small())
+                .on_hover_text("Fall back to the nearest coloured ancestor")
+                .clicked()
+            {
+                state.dispatch(Box::new(crate::commands::bone_cmds::SetBoneColor::new(
+                    bone_id,
+                    ankhimate_core::skeleton::Bone::default_color(),
+                )));
+            }
+        });
     }
     ui.add_space(10.0);
 
@@ -287,6 +351,165 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         ui.add_space(10.0);
         slot_inspector(ui, state, slot_id);
         attachment_inspector(ui, state, slot_id);
+    }
+}
+
+/// The path to the focused item, as clickable steps (T-708).
+///
+/// The inspector shows one thing at a time and used to leave you to infer which
+/// — a slot's panel and its attachment's panel look alike, and the difference
+/// matters when you are chasing a misplaced piece. The trail also walks back up:
+/// clicking a step selects it.
+fn breadcrumb(ui: &mut egui::Ui, state: &mut AppState) {
+    use crate::session::Selection;
+
+    let Some(selection) = state.session.selection.clone() else {
+        return;
+    };
+
+    // (label, what clicking it focuses)
+    let mut steps: Vec<(String, Selection)> = Vec::new();
+    let bone_trail = |state: &AppState, bone: ankhimate_core::ids::BoneId| {
+        let mut trail = Vec::new();
+        let mut cursor = Some(bone);
+        // Bounded by the hierarchy depth; a cycle is impossible by construction.
+        for _ in 0..64 {
+            let Some(id) = cursor else { break };
+            let Some(b) = state.doc.skeleton.bones.get(id) else {
+                break;
+            };
+            trail.push((b.name.clone(), Selection::Bone(id)));
+            cursor = b.parent;
+        }
+        trail.reverse();
+        trail
+    };
+
+    match &selection {
+        Selection::Bone(bone) => steps.extend(bone_trail(state, *bone)),
+        Selection::Slot(slot) => {
+            if let Some(s) = state.doc.skeleton.slots.get(*slot) {
+                steps.extend(bone_trail(state, s.bone));
+                steps.push((s.name.clone(), Selection::Slot(*slot)));
+            }
+        }
+        Selection::Attachment { slot, name } => {
+            if let Some(s) = state.doc.skeleton.slots.get(*slot) {
+                steps.extend(bone_trail(state, s.bone));
+                steps.push((s.name.clone(), Selection::Slot(*slot)));
+            }
+            steps.push((
+                name.clone(),
+                Selection::Attachment {
+                    slot: *slot,
+                    name: name.clone(),
+                },
+            ));
+        }
+        Selection::Constraint(id) => {
+            if let Some(c) = state.doc.skeleton.constraints.get(*id) {
+                if let Some(&bone) = c.affected_bones().first() {
+                    steps.extend(bone_trail(state, bone));
+                }
+                steps.push((c.name().to_string(), Selection::Constraint(*id)));
+            }
+        }
+    }
+
+    let mut jump: Option<Selection> = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (i, (label, target)) in steps.iter().enumerate() {
+            if i > 0 {
+                ui.label(
+                    egui::RichText::new("›")
+                        .size(11.0)
+                        .color(ui.visuals().weak_text_color()),
+                );
+            }
+            let last = i + 1 == steps.len();
+            let text = egui::RichText::new(label).size(11.0);
+            let text = if last {
+                text.strong()
+            } else {
+                text.color(ui.visuals().weak_text_color())
+            };
+            if ui
+                .add(egui::Label::new(text).sense(egui::Sense::click()))
+                .clicked()
+            {
+                jump = Some(target.clone());
+            }
+        }
+    });
+    if let Some(target) = jump {
+        match &target {
+            Selection::Bone(b) => state.session.select_bone(Some(*b)),
+            Selection::Slot(s) => state.session.select_slot(Some(*s)),
+            Selection::Attachment { slot, name } => {
+                let bone = state.doc.skeleton.slots.get(*slot).map(|s| s.bone);
+                if let Some(bone) = bone {
+                    state.session.select_attachment(*slot, name.clone(), bone);
+                }
+            }
+            Selection::Constraint(c) => state.session.select_constraint(*c),
+        }
+    }
+    ui.separator();
+}
+
+/// The panel for one focused constraint (T-708).
+fn focused_constraint(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    id: ankhimate_core::ids::ConstraintId,
+) {
+    use ankhimate_core::constraints::Constraint;
+
+    let Some(constraint) = state.doc.skeleton.constraints.get(id) else {
+        ui.label(
+            egui::RichText::new("This constraint no longer exists")
+                .size(11.0)
+                .color(ui.visuals().weak_text_color()),
+        );
+        return;
+    };
+    let (icon, kind) = match constraint {
+        Constraint::Ik(_) => (egui_phosphor::regular::TREE_STRUCTURE, "IK constraint"),
+        Constraint::Transform(_) => (
+            egui_phosphor::regular::ARROWS_LEFT_RIGHT,
+            "Transform constraint",
+        ),
+        Constraint::Physics(_) => (egui_phosphor::regular::WIND, "Physics constraint"),
+        Constraint::Path(_) => (egui_phosphor::regular::PATH, "Path constraint"),
+    };
+    let name = constraint.name().to_string();
+    // The bones it drives, so "what does this actually move" is answerable
+    // without cross-referencing the tree.
+    let driven: Vec<String> = constraint
+        .affected_bones()
+        .iter()
+        .filter_map(|b| state.doc.skeleton.bones.get(*b))
+        .map(|b| b.name.clone())
+        .collect();
+    let first = constraint.affected_bones().first().copied();
+
+    section_header(ui, icon, &name);
+    ui.add_space(2.0);
+    info_row(ui, "Kind", kind);
+    info_row(ui, "Drives", &driven.join(", "));
+    ui.add_space(6.0);
+
+    // The per-kind editors are written against a driven bone, which is also how
+    // they are reached from the bone panel; passing the first one keeps a single
+    // implementation rather than a second copy that can drift.
+    let Some(bone) = first else { return };
+    match state.doc.skeleton.constraints.get(id) {
+        Some(Constraint::Ik(_)) => ik_inspector(ui, state, bone),
+        Some(Constraint::Transform(_)) => constraint_inspector(ui, state, bone),
+        Some(Constraint::Physics(_)) => physics_inspector(ui, state, bone),
+        Some(Constraint::Path(_)) => path_constraint_inspector(ui, state, bone),
+        None => {}
     }
 }
 

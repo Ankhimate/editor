@@ -5,7 +5,7 @@
 //! must not land on the undo stack, and reopening a project should not restore
 //! someone else's scroll position.
 
-use ankhimate_core::ids::{AnimationId, AssetId, BoneId, SkinId, SlotId};
+use ankhimate_core::ids::{AnimationId, AssetId, BoneId, ConstraintId, SkinId, SlotId};
 use ankhimate_core::math::Transform;
 use ankhimate_core::slotmap::SecondaryMap;
 use std::collections::HashSet;
@@ -53,6 +53,21 @@ impl Tool {
     pub fn is_setup_only(self) -> bool {
         matches!(self, Tool::CreateBone | Tool::WeightPaint)
     }
+}
+
+/// What the inspector is looking at (T-708).
+///
+/// The tree used to select only bones and slots, so an attachment or a
+/// constraint could be *seen* but never inspected — you had to infer which one
+/// the panel meant from which slot happened to be active. Naming the focused
+/// thing makes the inspector's contents unambiguous and gives the breadcrumb
+/// something to render.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Selection {
+    Bone(BoneId),
+    Slot(SlotId),
+    Attachment { slot: SlotId, name: String },
+    Constraint(ConstraintId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +130,10 @@ pub struct Session {
     // ── Selection (multi) ────────────────────────────────────────────────
     /// Selected bones, in click order. The **last** entry is the active one that
     /// single-target panels (inspector, gizmos) operate on.
+    /// The focused item, which decides what the inspector shows (T-708).
+    /// Kept alongside the bone/slot lists rather than replacing them: multi-bone
+    /// selection drives posing, while this drives inspection.
+    pub selection: Option<Selection>,
     pub selected_bones: Vec<BoneId>,
     pub selected_slots: Vec<SlotId>,
     pub hovered_bone: Option<BoneId>,
@@ -246,6 +265,7 @@ impl Session {
     pub fn new(active_skin: SkinId) -> Self {
         Self {
             camera: crate::ui::canvas::camera::Camera2D::default(),
+            selection: None,
             selected_bones: Vec::new(),
             selected_slots: Vec::new(),
             hovered_bone: None,
@@ -341,7 +361,26 @@ impl Session {
     }
 
     /// Replace the selection with a single bone (a plain click).
+    /// Focus an attachment, and its slot with it — the inspector's attachment
+    /// section reads the slot, and the canvas gizmos follow the slot's bone.
+    pub fn select_attachment(&mut self, slot: SlotId, name: impl Into<String>, bone: BoneId) {
+        self.selected_slots.clear();
+        self.selected_slots.push(slot);
+        self.selected_bones.clear();
+        self.selected_bones.push(bone);
+        self.selection = Some(Selection::Attachment {
+            slot,
+            name: name.into(),
+        });
+    }
+
+    /// Focus a constraint.
+    pub fn select_constraint(&mut self, constraint: ConstraintId) {
+        self.selection = Some(Selection::Constraint(constraint));
+    }
+
     pub fn select_bone(&mut self, bone: Option<BoneId>) {
+        self.selection = bone.map(Selection::Bone);
         self.selected_bones.clear();
         if let Some(bone) = bone {
             self.selected_bones.push(bone);
@@ -358,6 +397,7 @@ impl Session {
     }
 
     pub fn select_slot(&mut self, slot: Option<SlotId>) {
+        self.selection = slot.map(Selection::Slot);
         self.selected_slots.clear();
         if let Some(slot) = slot {
             self.selected_slots.push(slot);

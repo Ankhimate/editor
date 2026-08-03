@@ -628,6 +628,71 @@ impl EditCommand for RenameBone {
     }
 }
 
+/// Set a bone's colour (T-505/T-708).
+///
+/// Colour is how a rigger tells limbs apart at a glance in a 67-bone rig, and it
+/// inherits: a bone with the default colour draws in its nearest coloured
+/// ancestor's, so colouring a shoulder colours the whole arm.
+pub struct SetBoneColor {
+    bone: BoneId,
+    after: [f32; 4],
+    before: Option<[f32; 4]>,
+}
+
+impl SetBoneColor {
+    pub fn new(bone: BoneId, after: [f32; 4]) -> Self {
+        Self {
+            bone,
+            after,
+            before: None,
+        }
+    }
+}
+
+impl EditCommand for SetBoneColor {
+    fn apply(&mut self, doc: &mut Document) {
+        let Some(bone) = doc.skeleton.bones.get_mut(self.bone) else {
+            return;
+        };
+        if self.before.is_none() {
+            self.before = Some(bone.color);
+        }
+        bone.color = self.after;
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let (Some(before), Some(bone)) =
+            (self.before.take(), doc.skeleton.bones.get_mut(self.bone))
+        {
+            bone.color = before;
+        }
+    }
+
+    fn merge(&mut self, next: &dyn EditCommand) -> bool {
+        let Some(other) = next.as_any().downcast_ref::<SetBoneColor>() else {
+            return false;
+        };
+        if other.bone != self.bone {
+            return false;
+        }
+        // Dragging in the colour picker is one edit.
+        self.after = other.after;
+        true
+    }
+
+    fn label(&self) -> &str {
+        "Set Bone Colour"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

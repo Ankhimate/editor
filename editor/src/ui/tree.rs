@@ -1,5 +1,8 @@
 use crate::app_state::AppState;
-use ankhimate_core::ids::BoneId;
+use crate::session::Selection;
+use ankhimate_core::attachment::Attachment;
+use ankhimate_core::constraints::Constraint;
+use ankhimate_core::ids::{BoneId, ConstraintId, SlotId};
 use eframe::egui;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
@@ -390,12 +393,19 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
     }
     cx += 14.0;
 
+    // The bone glyph carries the bone's colour — inherited from the nearest
+    // coloured ancestor (T-505), so a limb reads as one group at a glance. In a
+    // 67-bone rig that is the difference between finding a bone and hunting it.
     ui.painter().text(
         egui::pos2(cx + 8.0, rect.center().y),
         egui::Align2::CENTER_CENTER,
         egui_phosphor::regular::BONE,
         egui::FontId::proportional(12.0),
-        text_color.gamma_multiply(if is_selected { 1.0 } else { 0.7 }),
+        bone_tint(&state.doc.skeleton, bone_id).gamma_multiply(if is_selected {
+            1.0
+        } else {
+            0.85
+        }),
     );
     cx += 18.0;
 
@@ -444,8 +454,217 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
     }
 
     if is_open {
+        // What this bone carries, before its child bones: the slots it draws,
+        // each slot's attachments, and the constraints that drive it. All
+        // selectable — an item you can see but not click cannot be inspected,
+        // which is exactly what made a misplaced attachment hard to chase.
+        let slots: Vec<(SlotId, String, Option<String>)> = state
+            .doc
+            .skeleton
+            .slots
+            .iter()
+            .filter(|(_, s)| s.bone == bone_id)
+            .map(|(id, s)| (id, s.name.clone(), s.attachment.clone()))
+            .collect();
+        for (slot_id, slot_name, active) in slots {
+            let clicked = selectable_row(
+                ui,
+                state,
+                Row {
+                    icon: egui_phosphor::regular::CIRCLE_DASHED,
+                    label: slot_name,
+                    tint: None,
+                    depth: depth + 2,
+                    selection: Selection::Slot(slot_id),
+                    detail: String::new(),
+                },
+            )
+            .clicked();
+            if clicked {
+                state.session.select_slot(Some(slot_id));
+            }
+
+            // Attachments in the active skin, so the tree shows what is
+            // resolvable right now rather than every skin at once.
+            let skin = state.session.active_skin;
+            let names: Vec<String> = state
+                .doc
+                .skeleton
+                .skins
+                .get(skin)
+                .map(|s| s.names_for_slot(slot_id).map(str::to_string).collect())
+                .unwrap_or_default();
+            for name in names {
+                let Some(attachment) = state.doc.skeleton.skins[skin].get(slot_id, &name) else {
+                    continue;
+                };
+                let (icon, kind) = attachment_glyph(attachment);
+                let shown = active.as_deref() == Some(name.as_str());
+                let clicked = selectable_row(
+                    ui,
+                    state,
+                    Row {
+                        icon,
+                        label: name.clone(),
+                        // A hidden attachment is dimmed rather than omitted:
+                        // "the art exists but this slot is not showing it" is a
+                        // common cause of a piece missing from the canvas.
+                        tint: (!shown).then(|| ui.visuals().weak_text_color()),
+                        depth: depth + 3,
+                        selection: Selection::Attachment {
+                            slot: slot_id,
+                            name: name.clone(),
+                        },
+                        detail: kind.to_string(),
+                    },
+                )
+                .clicked();
+                if clicked {
+                    state.session.select_attachment(slot_id, name, bone_id);
+                }
+            }
+        }
+
+        let constraints: Vec<(ConstraintId, String, &'static str, &'static str)> = state
+            .doc
+            .skeleton
+            .constraint_order
+            .iter()
+            .filter_map(|id| {
+                let c = state.doc.skeleton.constraints.get(*id)?;
+                c.affected_bones().contains(&bone_id).then(|| {
+                    let (icon, kind) = constraint_glyph(c);
+                    (*id, c.name().to_string(), icon, kind)
+                })
+            })
+            .collect();
+        for (id, name, icon, kind) in constraints {
+            let clicked = selectable_row(
+                ui,
+                state,
+                Row {
+                    icon,
+                    label: name,
+                    tint: None,
+                    depth: depth + 2,
+                    selection: Selection::Constraint(id),
+                    detail: kind.to_string(),
+                },
+            )
+            .clicked();
+            if clicked {
+                state.session.select_constraint(id);
+            }
+        }
+
         for child in children {
             render_bone_node(ui, state, child, depth + 1);
         }
     }
+}
+
+/// One selectable row: an icon, a label, and what it focuses (T-708).
+///
+/// Every item in the rig gets one — bones, slots, attachments, constraints —
+/// because "I can see it but I cannot click it" is how a rig becomes hard to
+/// diagnose. Which is exactly the position we were in trying to work out why an
+/// imported character looked wrong.
+struct Row<'a> {
+    icon: &'a str,
+    label: String,
+    /// Tint for the icon; bones use their own colour, everything else follows
+    /// the theme.
+    tint: Option<egui::Color32>,
+    depth: usize,
+    selection: Selection,
+    /// Shown to the right in a dimmer colour: the attachment's kind, a
+    /// constraint's target, and so on.
+    detail: String,
+}
+
+/// Draw one row and report whether it was clicked.
+fn selectable_row(ui: &mut egui::Ui, state: &mut AppState, row: Row<'_>) -> egui::Response {
+    let height = 21.0;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    let selected = state.session.selection.as_ref() == Some(&row.selection);
+
+    if selected {
+        ui.painter().rect_filled(
+            rect,
+            0.0,
+            ui.visuals().selection.bg_fill.linear_multiply(0.3),
+        );
+        // Scroll the focused row into view, so selecting art on the canvas
+        // actually *shows* you where it lives in the tree.
+        if response.rect.height() > 0.0 {
+            ui.scroll_to_rect(rect, None);
+        }
+    } else if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+    }
+
+    let text_color = if selected {
+        ui.visuals().selection.bg_fill
+    } else {
+        ui.visuals().text_color()
+    };
+    let x = rect.min.x + 6.0 + row.depth as f32 * 12.0;
+    ui.painter().text(
+        egui::pos2(x, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        row.icon,
+        egui::FontId::proportional(12.0),
+        row.tint.unwrap_or(text_color.gamma_multiply(0.75)),
+    );
+    ui.painter().text(
+        egui::pos2(x + 16.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &row.label,
+        egui::FontId::proportional(12.5),
+        text_color,
+    );
+    if !row.detail.is_empty() {
+        ui.painter().text(
+            egui::pos2(rect.max.x - 6.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            &row.detail,
+            egui::FontId::proportional(10.0),
+            ui.visuals().weak_text_color(),
+        );
+    }
+    response
+}
+
+/// The icon and one-word kind for an attachment.
+fn attachment_glyph(attachment: &Attachment) -> (&'static str, &'static str) {
+    match attachment {
+        Attachment::Region(_) => (egui_phosphor::regular::IMAGE_SQUARE, "image"),
+        Attachment::Mesh(_) => (egui_phosphor::regular::POLYGON, "mesh"),
+        Attachment::Clipping(_) => (egui_phosphor::regular::SCISSORS, "clip"),
+        Attachment::Path(_) => (egui_phosphor::regular::PATH, "path"),
+    }
+}
+
+/// The icon and kind for a constraint. IK and FK-driven constraints get
+/// *different* glyphs on purpose: "why is this bone moving on its own" is
+/// answered by which kind is attached to it, so the two must not look alike.
+fn constraint_glyph(constraint: &Constraint) -> (&'static str, &'static str) {
+    match constraint {
+        Constraint::Ik(_) => (egui_phosphor::regular::TREE_STRUCTURE, "IK"),
+        Constraint::Transform(_) => (egui_phosphor::regular::ARROWS_LEFT_RIGHT, "transform"),
+        Constraint::Physics(_) => (egui_phosphor::regular::WIND, "physics"),
+        Constraint::Path(_) => (egui_phosphor::regular::PATH, "path"),
+    }
+}
+
+/// A bone's colour as the tree should show it: its own, or inherited from the
+/// nearest ancestor that set one.
+fn bone_tint(skeleton: &ankhimate_core::skeleton::Skeleton, bone: BoneId) -> egui::Color32 {
+    let [r, g, b, _] = crate::ui::canvas::renderer::group_color(skeleton, bone);
+    let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8;
+    egui::Color32::from_rgb(to_u8(r), to_u8(g), to_u8(b))
 }
