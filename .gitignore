@@ -51,3 +51,4 @@ flamegraph.svg
 /scratch/
 *.mp4
 *.webm
+/formats/examples/probe_once.rs
