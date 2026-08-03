@@ -35,10 +35,12 @@ flamegraph.svg
 # arrived. Committed samples are the generated ones (walker.ankh, minimal.ankh).
 /samples/skf/
 /samples/skellina.ankh
+/samples/spineboy.ankh
 /samples/*_imported.ankh
 # Local one-off converters for foreign rigs. Not product code, and they only
 # exist while a specific import is being chased.
 /formats/examples/import_skf_once.rs
+/formats/examples/import_spine_once.rs
 /formats/examples/verify_once.rs
 /preview.png
 
