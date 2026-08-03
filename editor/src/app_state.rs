@@ -716,13 +716,26 @@ impl AppState {
         let mut setup = ankhimate_core::pose::Pose::new();
         ankhimate_core::pose::evaluate(&self.doc.skeleton, &[], &mut setup);
 
+        // A mesh's vertices live in its slot's bone frame, so the bind needs
+        // that bone's world affine — the entry key carries the slot.
+        let slot_bones: std::collections::HashMap<_, _> = self
+            .doc
+            .skeleton
+            .slots
+            .iter()
+            .map(|(id, slot)| (id, setup.world(slot.bone)))
+            .collect();
         for (_, skin) in self.doc.skeleton.skins.iter_mut() {
-            for attachment in skin.entries.values_mut() {
+            for ((slot, _), attachment) in skin.entries.iter_mut() {
                 if let Attachment::Mesh(mesh) = attachment
                     && !mesh.weights.is_empty()
                     && mesh.inverse_bind_matrices.is_empty()
                 {
-                    mesh.bind_to_pose(&setup);
+                    let space = slot_bones
+                        .get(slot)
+                        .copied()
+                        .unwrap_or(ankhimate_core::transforms::Affine2::IDENTITY);
+                    mesh.bind_to_pose(&setup, space);
                 }
             }
         }

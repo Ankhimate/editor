@@ -184,7 +184,14 @@ impl MeshAttachment {
 
     /// Capture inverse bind affines from the **setup pose** — the pose obtained
     /// by evaluating the skeleton with no animations applied.
-    pub fn bind_to_pose(&mut self, setup_pose: &crate::pose::Pose) {
+    /// `mesh_space` is the world affine of the bone the mesh's vertices are
+    /// expressed in — its slot's bone. Without it the bind is wrong by exactly
+    /// that transform: `inverse_bind` maps *world* into a bone's frame, while
+    /// `setup_vertices` are local, so skinning fed local coordinates to a
+    /// world-space matrix. A mesh whose slot bone sat at the origin hid it;
+    /// anything else displaced the mesh, which is what a rig with a hip bone at
+    /// y=247 showed as a character standing on its head.
+    pub fn bind_to_pose(&mut self, setup_pose: &crate::pose::Pose, mesh_space: Affine2) {
         self.inverse_bind_matrices.clear();
         for vertex_weights in &self.weights {
             for vw in vertex_weights {
@@ -193,12 +200,17 @@ impl MeshAttachment {
                 {
                     // A bone with a zero-scale axis has no invertible bind
                     // affine; skip it so its weights fall back to setup.
+                    // Bone⁻¹ ∘ mesh-space: takes a vertex from the frame it is
+                    // stored in, through the world, into the bone's frame. At
+                    // the setup pose the two cancel and skinning reproduces the
+                    // rigid result exactly, which is the property that makes a
+                    // rebind invisible.
                     if let Some(inv) = setup_pose
                         .worlds
                         .get(vw.bone)
                         .and_then(|world| world.invert())
                     {
-                        slot.insert(inv);
+                        slot.insert(inv.mul(&mesh_space));
                     }
                 }
             }
@@ -422,6 +434,135 @@ mod tests {
         assert!(
             (far_mid - Vec2::new(-50.0, 0.0)).length() < 1e-4,
             "{far_mid:?}"
+        );
+    }
+    /// Binding at the setup pose must be invisible: skinning has to reproduce
+    /// exactly what rigid attachment produced, or every weighted mesh jumps the
+    /// moment it gains its first weight.
+    ///
+    /// The bind matrix maps *world* into a bone's frame, but `setup_vertices`
+    /// are in the slot bone's frame — so the bind has to carry that frame too.
+    /// A rig whose slot bone sits at the origin hides the difference entirely,
+    /// which is why this went unnoticed until a rig with a hip bone at y=247
+    /// drew its character upside down.
+    #[test]
+    fn binding_at_setup_reproduces_the_rigid_pose() {
+        use crate::ids::BoneId;
+        use crate::math::Transform;
+        use crate::pose::{Pose, evaluate};
+        use crate::skeleton::{Bone, Skeleton};
+
+        let mut skel = Skeleton::new();
+        let bone = |name: &str, parent: Option<BoneId>, pos: Vec2, deg: f32| Bone {
+            name: name.into(),
+            parent,
+            length: 40.0,
+            local_transform: Transform {
+                position: pos,
+                rotation: deg.to_radians(),
+                ..Transform::default()
+            },
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        };
+        // A hip well away from the origin, which is what exposes the bug.
+        let hip = skel.add_bone(bone("hip", None, Vec2::new(0.0, 247.0), 0.0));
+        let torso = skel.add_bone(bone("torso", Some(hip), Vec2::new(0.0, 60.0), 15.0));
+
+        let mut mesh = MeshAttachment {
+            texture: "art".into(),
+            // In the slot bone's frame, as our meshes always are.
+            setup_vertices: vec![
+                Vec2::new(-20.0, 0.0),
+                Vec2::new(20.0, 0.0),
+                Vec2::new(0.0, 50.0),
+            ],
+            uvs: vec![Vec2::ZERO; 3],
+            triangles: vec![[0, 1, 2]],
+            weights: vec![
+                vec![VertexWeight {
+                    bone: hip,
+                    weight: 1.0,
+                }],
+                vec![
+                    VertexWeight {
+                        bone: hip,
+                        weight: 0.5,
+                    },
+                    VertexWeight {
+                        bone: torso,
+                        weight: 0.5,
+                    },
+                ],
+                vec![VertexWeight {
+                    bone: torso,
+                    weight: 1.0,
+                }],
+            ],
+            ..MeshAttachment::default()
+        };
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        // The mesh hangs off the hip, so that is the frame its vertices are in.
+        mesh.bind_to_pose(&pose, pose.world(hip));
+
+        for (i, v) in mesh.setup_vertices.iter().enumerate() {
+            let rigid = pose.world(hip).transform_point(*v);
+            let skinned = mesh.skin_vertex_with_ffd(i, Vec2::ZERO, &pose);
+            assert!(
+                (rigid - skinned).length() < 1e-3,
+                "vertex {i}: rigid {rigid:?} but skinned {skinned:?}"
+            );
+        }
+    }
+
+    /// And once a bone moves, the skinned vertices follow it — otherwise the
+    /// test above would pass with skinning that does nothing at all.
+    #[test]
+    fn skinned_vertices_follow_their_bones() {
+        use crate::math::Transform;
+        use crate::pose::{Pose, evaluate};
+        use crate::skeleton::{Bone, Skeleton};
+
+        let mut skel = Skeleton::new();
+        let hip = skel.add_bone(Bone {
+            name: "hip".into(),
+            parent: None,
+            length: 40.0,
+            local_transform: Transform {
+                position: Vec2::new(0.0, 100.0),
+                ..Transform::default()
+            },
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let mut mesh = MeshAttachment {
+            setup_vertices: vec![Vec2::new(10.0, 0.0)],
+            uvs: vec![Vec2::ZERO],
+            weights: vec![vec![VertexWeight {
+                bone: hip,
+                weight: 1.0,
+            }]],
+            ..MeshAttachment::default()
+        };
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        mesh.bind_to_pose(&pose, pose.world(hip));
+        let before = mesh.skin_vertex_with_ffd(0, Vec2::ZERO, &pose);
+
+        // Turn the hip a quarter turn and re-evaluate.
+        skel.bones[hip].local_transform.rotation = std::f32::consts::FRAC_PI_2;
+        evaluate(&skel, &[], &mut pose);
+        let after = mesh.skin_vertex_with_ffd(0, Vec2::ZERO, &pose);
+
+        assert!(
+            (before - Vec2::new(10.0, 100.0)).length() < 1e-3,
+            "started beside the hip: {before:?}"
+        );
+        assert!(
+            (after - Vec2::new(0.0, 110.0)).length() < 1e-3,
+            "swung with it: {after:?}"
         );
     }
 }
