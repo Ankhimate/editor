@@ -26,6 +26,33 @@ pub struct Theme {
     /// A selected vertex handle.
     #[serde(default = "default_mesh_vertex_selected")]
     pub mesh_vertex_selected: String,
+
+    // ── Non-drawing attachments ─────────────────────────────────────────
+    // A hitbox and a point marker have to read as *not artwork* at a glance,
+    // which is why they get their own hues rather than borrowing the mesh
+    // wireframe's.
+    /// Outline of a bounding-box attachment.
+    #[serde(default = "default_hitbox_outline")]
+    pub hitbox_outline: String,
+    /// Fill of a bounding-box attachment. Deliberately faint: a hitbox covers
+    /// the art it guards, so an opaque one hides the thing you are aiming at.
+    #[serde(default = "default_hitbox_fill")]
+    pub hitbox_fill: String,
+    /// Cross and heading tick of a point attachment.
+    #[serde(default = "default_point_marker")]
+    pub point_marker: String,
+}
+
+fn default_hitbox_outline() -> String {
+    "#ff8c69c8".into()
+}
+
+fn default_hitbox_fill() -> String {
+    "#ff8c6922".into()
+}
+
+fn default_point_marker() -> String {
+    "#7ce38b".into()
 }
 
 fn default_mesh_edge() -> String {
@@ -107,6 +134,18 @@ impl Theme {
 
     pub fn mesh_vertex_selected(&self) -> Color32 {
         hex_to_color(&self.mesh_vertex_selected)
+    }
+
+    pub fn hitbox_outline(&self) -> Color32 {
+        hex_to_color(&self.hitbox_outline)
+    }
+
+    pub fn hitbox_fill(&self) -> Color32 {
+        hex_to_color(&self.hitbox_fill)
+    }
+
+    pub fn point_marker(&self) -> Color32 {
+        hex_to_color(&self.point_marker)
     }
 
     /// A vertex under the cursor: the selected colour, lifted.

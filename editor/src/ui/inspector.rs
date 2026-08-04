@@ -1781,6 +1781,60 @@ fn attachment_inspector(
                 state.session.selected_vertices.clear();
             }
         }
+        if ui
+            .add_enabled(
+                state.session.can_edit_structure(),
+                egui::Button::new("Add bounding box"),
+            )
+            .on_hover_text(
+                "A polygon a game can hit-test against — a hurtbox, a trigger \
+                 region, a pickup zone. Follows the pose; draws nothing.",
+            )
+            .clicked()
+        {
+            let skin = state.session.active_skin;
+            let slot_name = state
+                .doc
+                .skeleton
+                .slots
+                .get(slot_id)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| "slot".to_string());
+            if state.dispatch(Box::new(crate::commands::clip_cmds::AddBoundingBox::new(
+                skin,
+                slot_id,
+                format!("{slot_name}_box"),
+                120.0,
+            ))) {
+                state.session.mesh_edit = true;
+                state.session.selected_vertices.clear();
+            }
+        }
+        if ui
+            .add_enabled(
+                state.session.can_edit_structure(),
+                egui::Button::new("Add point"),
+            )
+            .on_hover_text(
+                "An anchor with a heading — a muzzle, a footstep spark, \
+                 \"hold the sword here\"",
+            )
+            .clicked()
+        {
+            let skin = state.session.active_skin;
+            let slot_name = state
+                .doc
+                .skeleton
+                .slots
+                .get(slot_id)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| "slot".to_string());
+            state.dispatch(Box::new(crate::commands::clip_cmds::AddPoint::new(
+                skin,
+                slot_id,
+                format!("{slot_name}_point"),
+            )));
+        }
         return;
     };
     let Some(skin) = owning_skin(&state.doc, state.session.active_skin, slot_id, &name) else {
@@ -1897,6 +1951,99 @@ fn attachment_inspector(
             }
         });
         influence_list(ui, state, skin, slot_id, &name);
+        return;
+    }
+
+    // Bounding boxes: the same polygon editor a clip uses, plus what makes them
+    // different — whether they follow one bone or several.
+    if let Some(Attachment::BoundingBox(bb)) = state.doc.skeleton.skins[skin].get(slot_id, &name) {
+        let vertices = bb.vertices.len();
+        let skinned = !bb.weights.is_empty();
+        ui.add_space(10.0);
+        section_header(ui, egui_phosphor::regular::BOUNDING_BOX, "Bounding Box");
+        ui.add_space(2.0);
+        info_row(ui, "Vertices", &vertices.to_string());
+        info_row(
+            ui,
+            "Follows",
+            if skinned {
+                "weighted bones"
+            } else {
+                "its slot's bone"
+            },
+        );
+        ui.add_space(4.0);
+
+        let mut editing = state.session.mesh_edit;
+        if ui
+            .add_enabled(setup, egui::Checkbox::new(&mut editing, "Edit polygon"))
+            .on_hover_text(
+                "Drag vertices · Ctrl+drag to box-select · shift-click to toggle\n\
+                 Click an edge to add a vertex · X deletes · Esc leaves",
+            )
+            .changed()
+        {
+            state.session.mesh_edit = editing;
+            state.session.selected_vertices.clear();
+        }
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(
+                "Weight it like a mesh to have it deform with a limb rather than \
+                 ride one bone rigidly.",
+            )
+            .size(10.5)
+            .color(ui.visuals().weak_text_color()),
+        );
+        return;
+    }
+
+    // Points: two numbers and an angle, so they get plain fields rather than a
+    // canvas mode.
+    if let Some(Attachment::Point(point)) = state.doc.skeleton.skins[skin].get(slot_id, &name) {
+        let mut position = point.position;
+        let mut degrees = point.rotation.to_degrees();
+        ui.add_space(10.0);
+        section_header(ui, egui_phosphor::regular::CROSSHAIR_SIMPLE, "Point");
+        ui.add_space(4.0);
+
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("X").size(11.0));
+            changed |= ui
+                .add_enabled(setup, egui::DragValue::new(&mut position.x).speed(0.5))
+                .changed();
+            ui.label(egui::RichText::new("Y").size(11.0));
+            changed |= ui
+                .add_enabled(setup, egui::DragValue::new(&mut position.y).speed(0.5))
+                .changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Angle").size(11.0));
+            changed |= ui
+                .add_enabled(
+                    setup,
+                    egui::DragValue::new(&mut degrees).speed(0.5).suffix("°"),
+                )
+                .changed();
+        });
+        if changed {
+            state.dispatch(Box::new(crate::commands::clip_cmds::SetPoint::new(
+                skin,
+                slot_id,
+                name.clone(),
+                ankhimate_core::attachment::PointAttachment {
+                    position,
+                    rotation: degrees.to_radians(),
+                },
+            )));
+        }
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("Exported for a game to spawn from; draws nothing.")
+                .size(10.5)
+                .color(ui.visuals().weak_text_color()),
+        );
         return;
     }
 

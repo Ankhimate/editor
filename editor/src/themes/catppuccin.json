@@ -11,5 +11,8 @@
   "origin_color": "#8aadf464",
   "mesh_edge": "#8aadf4b4",
   "mesh_vertex": "#6e738d",
-  "mesh_vertex_selected": "#f5a97f"
+  "mesh_vertex_selected": "#f5a97f",
+  "hitbox_outline": "#f5a97fc8",
+  "hitbox_fill": "#f5a97f22",
+  "point_marker": "#a6da95"
 }

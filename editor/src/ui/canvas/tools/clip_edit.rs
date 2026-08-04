@@ -14,7 +14,7 @@
 use super::ToolContext;
 use crate::commands::EditCommand;
 use crate::commands::attachment_cmds::owning_skin;
-use crate::commands::clip_cmds::{ClipEdit, EditClip, EditPath};
+use crate::commands::clip_cmds::{ClipEdit, EditBoundingBox, EditClip, EditPath};
 use ankhimate_core::attachment::{Attachment, ClippingAttachment};
 use ankhimate_core::ids::{SkinId, SlotId};
 use eframe::egui;
@@ -28,9 +28,25 @@ pub struct ClipTarget {
     pub name: String,
     pub clip: ClippingAttachment,
     pub world: ankhimate_core::transforms::Affine2,
-    /// A path attachment edits with the same gestures but is not a closed
-    /// polygon and routes to its own command (T-502).
-    pub is_path: bool,
+    /// Which attachment the polygon belongs to. All three edit with the same
+    /// gestures; they differ in whether the ring closes and which command the
+    /// edit routes to.
+    pub kind: PolygonKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolygonKind {
+    Clip,
+    /// Open rather than closed (T-502).
+    Path,
+    BoundingBox,
+}
+
+impl PolygonKind {
+    /// Does the last vertex join back to the first?
+    pub fn closed(self) -> bool {
+        !matches!(self, PolygonKind::Path)
+    }
 }
 
 /// Resolve the selected slot's clip, if clip editing applies right now.
@@ -48,14 +64,21 @@ pub fn target(state: &crate::app_state::AppState) -> Option<ClipTarget> {
     let skin = owning_skin(&state.doc, state.session.active_skin, slot_id, &name)?;
     // Clips and paths are both "a polygon on a slot" as far as the gestures go;
     // a path is simply open rather than closed.
-    let (clip, is_path) = match state.doc.skeleton.skins[skin].get(slot_id, &name)? {
-        Attachment::Clipping(clip) => (clip.clone(), false),
+    let (clip, kind) = match state.doc.skeleton.skins[skin].get(slot_id, &name)? {
+        Attachment::Clipping(clip) => (clip.clone(), PolygonKind::Clip),
         Attachment::Path(path) => (
             ClippingAttachment {
                 vertices: path.vertices.clone(),
                 end_slot: None,
             },
-            true,
+            PolygonKind::Path,
+        ),
+        Attachment::BoundingBox(bb) => (
+            ClippingAttachment {
+                vertices: bb.vertices.clone(),
+                end_slot: None,
+            },
+            PolygonKind::BoundingBox,
         ),
         _ => return None,
     };
@@ -66,7 +89,7 @@ pub fn target(state: &crate::app_state::AppState) -> Option<ClipTarget> {
         name,
         clip,
         world,
-        is_path,
+        kind,
     })
 }
 
@@ -89,20 +112,11 @@ pub fn vertex_screen_positions(
 
 /// The right command for whichever kind of polygon this is.
 fn edit_command(target: &ClipTarget, edit: ClipEdit) -> Box<dyn EditCommand> {
-    if target.is_path {
-        Box::new(EditPath::new(
-            target.skin,
-            target.slot,
-            target.name.clone(),
-            edit,
-        ))
-    } else {
-        Box::new(EditClip::new(
-            target.skin,
-            target.slot,
-            target.name.clone(),
-            edit,
-        ))
+    let (skin, slot, name) = (target.skin, target.slot, target.name.clone());
+    match target.kind {
+        PolygonKind::Path => Box::new(EditPath::new(skin, slot, name, edit)),
+        PolygonKind::Clip => Box::new(EditClip::new(skin, slot, name, edit)),
+        PolygonKind::BoundingBox => Box::new(EditBoundingBox::new(skin, slot, name, edit)),
     }
 }
 
@@ -131,10 +145,14 @@ pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
             .dispatch(edit_command(&target, ClipEdit::RemoveVertices(indices)))
         {
             ctx.state.session.selected_vertices.clear();
-        } else if target.is_path {
+        } else if target.kind == PolygonKind::Path {
             ctx.state
                 .session
                 .set_status("A path needs at least two vertices");
+        } else if target.kind == PolygonKind::BoundingBox {
+            ctx.state
+                .session
+                .set_status("A bounding box needs at least three vertices");
         } else {
             ctx.state
                 .session
@@ -242,7 +260,7 @@ pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
     // and offering the phantom last→first one would insert a vertex on a
     // segment that is not drawn.
     let count = positions.len();
-    let edges = if target.is_path {
+    let edges = if !target.kind.closed() {
         count.saturating_sub(1)
     } else {
         count

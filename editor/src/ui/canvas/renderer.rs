@@ -135,6 +135,28 @@ pub fn prepare_textures(state: &mut AppState) -> Vec<SpriteUpload> {
 /// Pivot-aware placement lives in core (`RegionAttachment::local_corners`) so
 /// the viewport, the exporter and the runtime cannot disagree about where an
 /// image sits.
+/// World position of one weighted vertex.
+///
+/// A bounding box skins the same way a mesh does but has no bind matrices of its
+/// own: its vertices are authored in each influencing bone's setup frame already,
+/// which is the same convention weighted mesh vertices use once bound.
+fn skinned_vertex(
+    weights: &[ankhimate_core::attachment::VertexWeight],
+    local: glam::Vec2,
+    state: &AppState,
+) -> glam::Vec2 {
+    let mut total = 0.0;
+    let mut sum = glam::Vec2::ZERO;
+    for w in weights {
+        let Some(world) = state.pose.worlds.get(w.bone) else {
+            continue;
+        };
+        sum += world.transform_point(local) * w.weight;
+        total += w.weight;
+    }
+    if total > 0.0 { sum / total } else { local }
+}
+
 fn region_corners(
     region: &RegionAttachment,
     bone_world: &ankhimate_core::transforms::Affine2,
@@ -186,6 +208,16 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
         .or(slot.dark_color)
         .unwrap_or([0.0; 4]);
 
+    // A sequence replaces the attachment's own texture with the frame the pose
+    // says is showing. Resolved here rather than in the model so a frame the
+    // asset database has since lost falls back to the attachment's texture
+    // instead of drawing nothing.
+    let sequence_frame = |sequence: &Option<ankhimate_core::attachment::Sequence>| {
+        let sequence = sequence.as_ref()?;
+        let index = state.pose.slot_sequence_frames.get(slot_id).copied()?;
+        sequence.frame(index).cloned()
+    };
+
     let region = match attachment {
         Attachment::Region(region) => region,
         // The non-artwork attachments: clips mask other slots (T-405), paths
@@ -199,7 +231,14 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
         // space, so the bone affine is all that is needed — weight skinning
         // (T-403) and deform offsets (T-404) slot in here later.
         Attachment::Mesh(mesh) => {
-            let asset_id = state.doc.assets.by_name(&mesh.texture)?;
+            // A linked mesh draws the source's geometry under its own texture.
+            let geometry = state
+                .doc
+                .skeleton
+                .resolve_linked_mesh(&state.session.skin_stack(), mesh);
+            let texture = sequence_frame(&mesh.sequence).unwrap_or_else(|| mesh.texture.clone());
+            let mesh = geometry;
+            let asset_id = state.doc.assets.by_name(&texture)?;
             let key = *state.session.texture_keys.get(asset_id)?;
             if mesh.triangles.is_empty() {
                 return None;
@@ -241,7 +280,8 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
         }
     };
 
-    let asset_id = state.doc.assets.by_name(&region.texture)?;
+    let texture = sequence_frame(&region.sequence).unwrap_or_else(|| region.texture.clone());
+    let asset_id = state.doc.assets.by_name(&texture)?;
     let key = *state.session.texture_keys.get(asset_id)?;
     let corners = region_corners(region, bone_world);
 
@@ -911,8 +951,9 @@ pub fn render_bones(
         let to_pos = |v: glam::Vec2| egui::pos2(rect.min.x + v.x, rect.min.y + v.y);
         let count = positions.len();
 
-        // A path is open; only a clip closes back to its first vertex.
-        let edges = if target.is_path {
+        // A path is open; a clip and a bounding box close back to their first
+        // vertex.
+        let edges = if !target.kind.closed() {
             count.saturating_sub(1)
         } else {
             count
@@ -946,6 +987,101 @@ pub fn render_bones(
                     theme.mesh_vertex()
                 },
             );
+        }
+    }
+
+    // Hitbox and point overlays. Neither draws artwork, so without this the only
+    // evidence they exist is a row in the tree — and a hitbox you cannot see is
+    // a hitbox you cannot place. Always drawn in setup mode, and while animating
+    // only for the selected item, so they do not fog the artwork being posed.
+    {
+        let selected_attachment = match &state.session.selection {
+            Some(crate::session::Selection::Attachment { slot, name }) => {
+                Some((*slot, name.clone()))
+            }
+            _ => None,
+        };
+        let always = !state.session.is_animating();
+        let skins = state.session.skin_stack();
+        for &slot_id in &state.pose.draw_order {
+            let Some(slot) = state.doc.skeleton.slots.get(slot_id) else {
+                continue;
+            };
+            let Some(name) = state
+                .pose
+                .slot_attachments
+                .get(slot_id)
+                .cloned()
+                .flatten()
+                .or_else(|| slot.attachment.clone())
+            else {
+                continue;
+            };
+            let focused = selected_attachment
+                .as_ref()
+                .is_some_and(|(s, n)| *s == slot_id && *n == name);
+            if !always && !focused {
+                continue;
+            }
+            let Some(attachment) = state.doc.skeleton.resolve_many(&skins, slot_id, &name) else {
+                continue;
+            };
+            let Some(bone_world) = state.pose.worlds.get(slot.bone) else {
+                continue;
+            };
+            let to_screen =
+                |v: glam::Vec2| crate::ui::canvas::camera::world_to_screen(v, rect, state);
+            match attachment {
+                Attachment::BoundingBox(b) if b.vertices.len() >= 2 => {
+                    // Skinned exactly like a mesh, and drawn from the same
+                    // vertices, so what you see is what a hit test would use.
+                    let skinned = !b.weights.is_empty();
+                    let points: Vec<egui::Pos2> = (0..b.vertices.len())
+                        .map(|i| {
+                            let world = if skinned {
+                                skinned_vertex(&b.weights[i], b.vertices[i], state)
+                            } else {
+                                bone_world.transform_point(b.vertices[i])
+                            };
+                            to_screen(world)
+                        })
+                        .collect();
+                    let stroke =
+                        egui::Stroke::new(if focused { 2.0 } else { 1.0 }, theme.hitbox_outline());
+                    painter.add(egui::Shape::convex_polygon(
+                        points.clone(),
+                        theme.hitbox_fill(),
+                        stroke,
+                    ));
+                    if focused {
+                        for p in &points {
+                            painter.circle_filled(*p, 3.0, theme.mesh_vertex());
+                        }
+                    }
+                }
+                Attachment::Point(point) => {
+                    let (world, rotation) = point.world(bone_world);
+                    let centre = to_screen(world);
+                    let color = theme.point_marker();
+                    // A cross plus a short heading tick: the orientation is the
+                    // half of a point attachment that a plain dot throws away.
+                    let arm = if focused { 9.0 } else { 6.0 };
+                    painter.line_segment(
+                        [centre - egui::vec2(arm, 0.0), centre + egui::vec2(arm, 0.0)],
+                        egui::Stroke::new(1.5, color),
+                    );
+                    painter.line_segment(
+                        [centre - egui::vec2(0.0, arm), centre + egui::vec2(0.0, arm)],
+                        egui::Stroke::new(1.5, color),
+                    );
+                    // Screen Y runs down while world Y runs up, so the heading
+                    // negates its sine (PLAN §2.2).
+                    let heading = egui::vec2(rotation.cos(), -rotation.sin()) * (arm * 2.0);
+                    painter.line_segment([centre, centre + heading], egui::Stroke::new(2.0, color));
+                    painter.circle_filled(centre, 2.5, color);
+                }
+                _ => {}
+            }
         }
     }
 
