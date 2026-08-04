@@ -397,7 +397,7 @@ restores exactly; setup bake is a single undoable command.
 (hash-compared in a test) and pixels; deleting an in-use asset warns and is undoable; dropping in
 Animate mode is refused with the mode hint.
 
-### T-302 ∥ PSD import (F-2)
+### 🟡 T-302 ∥ PSD import (F-2)
 **Deps:** T-301 · **Refs:** PLAN §5 F-2, §0
 - `formats/src/psd.rs` using the `psd` crate. Our documented mapping (`docs/psd-import.md`):
   layer group → bone (nested → hierarchy); image layer → slot + region attachment placed from layer
@@ -410,6 +410,12 @@ Animate mode is refused with the mode hint.
 **Accept:** checked-in CC0 test PSD imports to the documented structure (bone/slot/skin counts
 asserted); the whole import is one undoable command; re-import of a modified PSD keeps animations
 intact (pose-diff test).
+**Done:** `formats/src/psd.rs` with the documented mapping, the preview modal with per-row include
+and per-group flatten, and `ImportPsd` as one undoable command. Mapping functions unit-tested;
+end-to-end validated by hand against grouped, nested, offset and negative-bounds files.
+**Outstanding:** the checked-in fixture PSD, so the acceptance assertions above are not yet written.
+Three file-format traps are documented in `docs/psd-import.md`: group order is not parent-first, the
+visibility flag is inverted, and negative layer bounds panic `psd 0.3.5` (caught, layer skipped).
 
 ### ❌ T-303 — foreign armature importer *(removed)*
 Built and then deleted. Ankhimate's format is `.ankh`; carrying an importer for another editor's
@@ -429,7 +435,7 @@ another tool's source.
 **Accept:** recents survive restart; opening a sample works from a clean checkout; a deleted recent
 does not crash the launcher.
 
-### 🟡 T-305 ∥ ★ Atlas / spritesheet import modal (F-18) *(was T-404)*
+### ✅ T-305 ∥ ★ Atlas / spritesheet import modal (F-18) *(was T-404)*
 **Deps:** T-301 · **Refs:** PLAN §5 F-18
 - Import a sheet: grid slicer (rows/cols/margin/spacing) **or** manual rect list with numeric
   L/T/W/H fields and drag handles on a zoomable preview; auto-name cells (`sheet_00`…) with inline
@@ -437,6 +443,9 @@ does not crash the launcher.
 - Detect-cells helper: flood-fill on alpha to propose rects, user accepts/edits.
 **Accept:** a 4×4 sheet imports into 16 assets with pixel-exact crops (golden test); manual rects
 round-trip through the modal; cancel leaves the document untouched.
+**Done:** grid and rect modes share one `cells()`, so preview, count and import cannot disagree.
+Detect-cells is a 4-connected alpha flood fill with a floor of alpha 8 — an antialiased halo of 1-3
+welds neighbouring frames into one blob, and there is a test that fails at floor zero.
 
 ### ✅ T-306 ∥ Asset relink + external-source workflow
 **Deps:** T-301 · **Refs:** PLAN §6.1
@@ -949,6 +958,12 @@ breadth. Max useful parallel agents: 2–3 in Phase 3, 4–5 from Phase 5 onward
 | Crash log recovery, feedback | T-707 |
 | Web build | T-803 |
 | Camera x/y/zoom fields | T-708 (viewport readout); camera stays Session state by design |
+| Bounding boxes (hit/trigger regions) | T-802 — skinned, editable with the clip polygon tools |
+| Point attachments (spawn/FX anchors) | T-802 |
+| Animated sequences on an attachment | T-802 — frame list, fps, hold/once/loop/ping-pong ± reverse |
+| Linked meshes (shared geometry across skins) | T-802 |
+| Skins that own bones and constraints | T-802 — inactive skins skip both |
+| Events with audio (path, volume, balance) | T-802 |
 
 Beyond parity (features the open-source alternatives lack): slot/skin model (T-105/T-507), deform
 timelines
