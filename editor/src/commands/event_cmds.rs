@@ -75,6 +75,61 @@ impl EditCommand for AddEvent {
     }
 }
 
+/// Copy an event, payload and all.
+///
+/// A separate command rather than add-then-edit: two commands would be two undo
+/// steps for one intention, and the intermediate state — a copy with the right
+/// name and a blank payload — is not one anybody asked to see.
+pub struct DuplicateEvent {
+    anim: AnimationId,
+    index: usize,
+    before: Option<Vec<EventKey>>,
+}
+
+impl DuplicateEvent {
+    pub fn new(anim: AnimationId, index: usize) -> Self {
+        Self {
+            anim,
+            index,
+            before: None,
+        }
+    }
+}
+
+impl EditCommand for DuplicateEvent {
+    fn apply(&mut self, doc: &mut Document) {
+        let Some(events) = events_mut(doc, self.anim) else {
+            return;
+        };
+        let Some(source) = events.get(self.index).cloned() else {
+            return;
+        };
+        self.before = Some(events.clone());
+        // Same time, so it lands next to its original rather than somewhere the
+        // user has to go looking for.
+        events.push(source);
+        events.sort_by(|a, b| a.time.total_cmp(&b.time));
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let (Some(before), Some(events)) = (self.before.take(), events_mut(doc, self.anim)) {
+            *events = before;
+        }
+    }
+
+    fn label(&self) -> &str {
+        "Duplicate Event"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Animate)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// What an edit does to one event.
 pub enum EventEdit {
     /// Move it in time. Merges, so dragging a marker is one step.

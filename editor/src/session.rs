@@ -232,6 +232,13 @@ pub struct Session {
 
     /// A spritesheet waiting to be sliced (T-305). Cancelling drops it.
     pub pending_atlas: Option<crate::ui::atlas::PendingAtlas>,
+    /// Which event the event pane is editing, as an index into the active
+    /// animation's list.
+    ///
+    /// An index, not an id, because events have none — they are a plain vector
+    /// that re-sorts whenever one is retimed. The pane clamps it every frame
+    /// rather than pretending it is an identity.
+    pub selected_event: Option<usize>,
     /// Slots hidden from the viewport by the tree's visibility column.
     ///
     /// A way of looking, not an edit: it never touches the document, never lands
@@ -350,6 +357,7 @@ impl Session {
             trace_refined: false,
             pending_trace: None,
             pending_atlas: None,
+            selected_event: None,
             hidden_slots: std::collections::HashSet::new(),
             tree_filter: String::new(),
             reveal_selection: false,
