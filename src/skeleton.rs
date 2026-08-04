@@ -1,4 +1,4 @@
-﻿use crate::attachment::Attachment;
+use crate::attachment::Attachment;
 use crate::constraints::Constraint;
 use crate::ids::{BoneId, ConstraintId, SkinId, SlotId};
 use crate::math::Transform;
@@ -129,6 +129,73 @@ impl Skeleton {
     /// Resolve whatever the slot currently points at, if anything.
     pub fn resolve_slot(&self, active: SkinId, slot: SlotId) -> Option<&Attachment> {
         self.resolve_slot_many(&[active], slot)
+    }
+
+    /// The mesh whose geometry `mesh` actually uses, following a link if it has
+    /// one.
+    ///
+    /// A linked mesh keeps its own texture and its own name but borrows vertices,
+    /// UVs, triangles and weights from a source elsewhere. Callers that want to
+    /// *draw* a mesh want this; callers that want to edit one want the mesh they
+    /// were given, because editing through a link would silently rewrite the
+    /// source every other copy depends on.
+    ///
+    /// Returns `mesh` unchanged when it has no link, or when the link dangles —
+    /// a broken link should draw the mesh, not nothing at all.
+    pub fn resolve_linked_mesh<'a>(
+        &'a self,
+        active: &[SkinId],
+        mesh: &'a crate::attachment::MeshAttachment,
+    ) -> &'a crate::attachment::MeshAttachment {
+        let Some(link) = &mesh.linked else {
+            return mesh;
+        };
+        let Some((slot, _)) = self.slots.iter().find(|(_, s)| s.name == link.slot) else {
+            return mesh;
+        };
+        // An explicit skin name pins the source; without one it resolves the same
+        // way any other attachment does, so a link inside a skin finds that
+        // skin's version first.
+        let found = match &link.skin {
+            Some(name) => self
+                .skins
+                .iter()
+                .find(|(_, sk)| sk.name == *name)
+                .and_then(|(_, sk)| sk.get(slot, &link.attachment)),
+            None => self.resolve_many(active, slot, &link.attachment),
+        };
+        match found {
+            Some(Attachment::Mesh(source)) => source,
+            _ => mesh,
+        }
+    }
+
+    /// Bones and constraints that belong to a skin which is not active.
+    ///
+    /// Evaluation uses this to skip them outright: a cape's physics chain should
+    /// cost nothing while the cape is off.
+    pub fn inactive_skin_members(&self, active: &[SkinId]) -> (Vec<BoneId>, Vec<ConstraintId>) {
+        let (mut bones, mut constraints) = (Vec::new(), Vec::new());
+        for (id, skin) in self.skins.iter() {
+            if id == self.default_skin || active.contains(&id) {
+                continue;
+            }
+            bones.extend(skin.bones.iter().copied());
+            constraints.extend(skin.constraints.iter().copied());
+        }
+        // A bone or constraint listed by an active skin wins: two skins may share
+        // a chain, and one of them being off is not a reason to drop it.
+        let (keep_b, keep_c) = active.iter().filter_map(|id| self.skins.get(*id)).fold(
+            (Vec::new(), Vec::new()),
+            |mut acc, skin| {
+                acc.0.extend(skin.bones.iter().copied());
+                acc.1.extend(skin.constraints.iter().copied());
+                acc
+            },
+        );
+        bones.retain(|b| !keep_b.contains(b));
+        constraints.retain(|c| !keep_c.contains(c));
+        (bones, constraints)
     }
 
     /// [`Self::resolve_slot`] against several active skins (T-507).
@@ -363,6 +430,7 @@ mod tests {
             height: 10.0,
             uv_rect: Rect::default(),
             pivot: glam::Vec2::splat(0.5),
+            sequence: None,
         })
     }
 

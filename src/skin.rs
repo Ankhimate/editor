@@ -10,7 +10,7 @@
 //! skin ("just a different head") only needs to list what it overrides.
 
 use crate::attachment::Attachment;
-use crate::ids::SlotId;
+use crate::ids::{BoneId, ConstraintId, SlotId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,6 +21,20 @@ pub struct Skin {
     pub name: String,
     /// `(slot, attachment-name)` → attachment data.
     pub entries: HashMap<(SlotId, String), Attachment>,
+
+    /// Bones this skin brings with it.
+    ///
+    /// A skin is rarely only a re-texture. A cape needs its own chain, a hat
+    /// needs a brim bone, and those bones are meaningless — and their constraints
+    /// actively wrong — when the skin is not worn. Listing them here lets
+    /// evaluation skip the whole branch instead of solving physics for a cape
+    /// nobody is wearing.
+    #[serde(default)]
+    pub bones: Vec<BoneId>,
+
+    /// Constraints that only apply while this skin is active.
+    #[serde(default)]
+    pub constraints: Vec<ConstraintId>,
 }
 
 impl Skin {
@@ -28,6 +42,8 @@ impl Skin {
         Self {
             name: name.into(),
             entries: HashMap::new(),
+            bones: Vec::new(),
+            constraints: Vec::new(),
         }
     }
 
@@ -89,6 +105,7 @@ mod tests {
             height: 10.0,
             uv_rect: Rect::default(),
             pivot: glam::Vec2::splat(0.5),
+            sequence: None,
         })
     }
 

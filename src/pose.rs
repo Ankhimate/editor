@@ -40,6 +40,13 @@ pub struct Pose {
     /// costs nothing on a rig that never hides anything.
     pub slot_visible: SecondaryMap<SlotId, bool>,
     pub slot_attachments: SecondaryMap<SlotId, Option<String>>,
+    /// Which frame of an animated attachment's sequence is showing.
+    ///
+    /// Derived from playback time rather than keyed: a sequence *is* "play these
+    /// frames at this rate", and making an animator key every frame of a 24-frame
+    /// explosion would be a worse version of the flipbook they came here to
+    /// avoid. Absent means the attachment has no sequence.
+    pub slot_sequence_frames: SecondaryMap<SlotId, u32>,
     /// Draw order after animation offsets are applied.
     pub draw_order: Vec<SlotId>,
     /// FFD vertex offsets, keyed by (slot, attachment name).
@@ -97,6 +104,7 @@ impl Pose {
         self.slot_dark_colors.clear();
         self.slot_visible.clear();
         self.slot_attachments.clear();
+        self.slot_sequence_frames.clear();
         self.draw_order.clear();
         self.deforms.clear();
         self.ik_mix.clear();
@@ -117,7 +125,25 @@ impl Pose {
 /// `out` is reused across calls: it is reset on entry, so callers can keep one
 /// `Pose` per viewport and avoid reallocating every frame.
 pub fn evaluate(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut Pose) {
-    evaluate_inner(skel, anims, None, None, 0.0, out)
+    evaluate_inner(skel, anims, None, None, None, 0.0, out)
+}
+
+/// [`evaluate`] restricted to a set of active skins.
+///
+/// Bones and constraints a skin brings with it (`Skin::bones`,
+/// `Skin::constraints`) are skipped while that skin is off — a cape's physics
+/// chain costs nothing when the cape is not worn, and more importantly cannot
+/// drag a bone that is no longer under anything.
+///
+/// `evaluate` itself gates nothing, so callers that do not model skins keep the
+/// behaviour they had.
+pub fn evaluate_skinned(
+    skel: &Skeleton,
+    anims: &[(&Animation, f32, f32)],
+    active_skins: &[crate::ids::SkinId],
+    out: &mut Pose,
+) {
+    evaluate_inner(skel, anims, None, Some(active_skins), None, 0.0, out)
 }
 
 /// [`evaluate`] with local transforms overridden for some bones.
@@ -136,7 +162,7 @@ pub fn evaluate_posed(
     overrides: &SecondaryMap<BoneId, Transform>,
     out: &mut Pose,
 ) {
-    evaluate_inner(skel, anims, Some(overrides), None, 0.0, out)
+    evaluate_inner(skel, anims, Some(overrides), None, None, 0.0, out)
 }
 
 /// [`evaluate`] with a physics simulation advanced by `dt` (T-503, ADR 0007).
@@ -151,7 +177,7 @@ pub fn evaluate_with(
     dt: f32,
     out: &mut Pose,
 ) {
-    evaluate_inner(skel, anims, None, Some(physics), dt, out)
+    evaluate_inner(skel, anims, None, None, Some(physics), dt, out)
 }
 
 /// Everything at once: overrides *and* an advancing simulation.
@@ -163,13 +189,14 @@ pub fn evaluate_posed_with(
     dt: f32,
     out: &mut Pose,
 ) {
-    evaluate_inner(skel, anims, Some(overrides), Some(physics), dt, out)
+    evaluate_inner(skel, anims, Some(overrides), None, Some(physics), dt, out)
 }
 
 fn evaluate_inner(
     skel: &Skeleton,
     anims: &[(&Animation, f32, f32)],
     overrides: Option<&SecondaryMap<BoneId, Transform>>,
+    active_skins: Option<&[crate::ids::SkinId]>,
     physics: Option<&mut PhysicsState>,
     dt: f32,
     out: &mut Pose,
@@ -214,7 +241,32 @@ fn evaluate_inner(
     // `update_worlds` composes the FK chain; constraints need world state to
     // solve against, so they run inside it per chain (see T-104).
     update_worlds(skel, out);
-    apply_constraints(skel, out, physics, dt);
+    let skipped = active_skins
+        .map(|active| skel.inactive_skin_members(active).1)
+        .unwrap_or_default();
+    apply_constraints(skel, out, &skipped, physics, dt);
+
+    // ── Stage 5: sequence frames ─────────────────────────────────────────
+    // After attachment timelines, because the attachment showing decides which
+    // sequence (if any) is playing.
+    let time = anims
+        .iter()
+        .max_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(_, t, _)| *t)
+        .unwrap_or(0.0);
+    let skins = active_skins.unwrap_or(&[]);
+    for (slot, name) in out.slot_attachments.iter() {
+        let Some(name) = name else { continue };
+        let sequence = match skel.resolve_many(skins, slot, name) {
+            Some(crate::attachment::Attachment::Region(r)) => r.sequence.as_ref(),
+            Some(crate::attachment::Attachment::Mesh(m)) => m.sequence.as_ref(),
+            _ => None,
+        };
+        if let Some(sequence) = sequence {
+            out.slot_sequence_frames
+                .insert(slot, sequence.index_at(time));
+        }
+    }
 }
 
 /// Stage 2 — apply animation timelines into the `Pose`.
@@ -490,11 +542,16 @@ fn update_world_of(skel: &Skeleton, out: &mut Pose, id: BoneId) {
 fn apply_constraints(
     skel: &Skeleton,
     out: &mut Pose,
+    skipped: &[ConstraintId],
     mut physics: Option<&mut PhysicsState>,
     dt: f32,
 ) {
     let ordered: Vec<(ConstraintId, &Constraint)> = skel.ordered_constraints().collect();
     for (id, constraint) in ordered {
+        // Belongs to a skin that is not being worn.
+        if skipped.contains(&id) {
+            continue;
+        }
         match constraint {
             Constraint::Ik(ik) => {
                 // An `IkMix` timeline overrides the constraint's authored mix.

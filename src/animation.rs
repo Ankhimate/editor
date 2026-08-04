@@ -88,6 +88,24 @@ pub struct EventKey {
     pub float_value: f32,
     #[serde(default)]
     pub string_value: String,
+
+    /// Sound to play with the event, as an asset name. Empty means silent.
+    ///
+    /// An event that says "footstep" and an event that *plays* a footstep are the
+    /// same authoring act; splitting them into two timelines means keeping two
+    /// things in sync forever.
+    #[serde(default)]
+    pub audio: String,
+    /// Playback gain, `1.0` being the sample as recorded.
+    #[serde(default = "unit")]
+    pub volume: f32,
+    /// Stereo placement: `-1` hard left, `0` centre, `1` hard right.
+    #[serde(default)]
+    pub balance: f32,
+}
+
+fn unit() -> f32 {
+    1.0
 }
 
 /// Events fired by advancing a clip from `from` to `to` (T-506).
@@ -855,6 +873,9 @@ mod tests {
                     int_value: 0,
                     float_value: 0.0,
                     string_value: String::new(),
+                    audio: String::new(),
+                    volume: 1.0,
+                    balance: 0.0,
                 })
                 .collect(),
         }
