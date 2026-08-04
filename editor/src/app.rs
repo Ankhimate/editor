@@ -120,7 +120,10 @@ impl AnkhimateApp {
         let events = tiles.insert_pane(Tab::Events);
         let constraints = tiles.insert_pane(Tab::Constraints);
 
-        let canvas_tab = tiles.insert_tab_tile(vec![canvas]);
+        // The slot editor tabs with the viewport, so opening a piece replaces the
+        // rig on screen the way a smart object replaces the document.
+        let slot_editor = tiles.insert_pane(Tab::SlotEditor);
+        let canvas_tab = tiles.insert_tab_tile(vec![canvas, slot_editor]);
         // Properties gets its own tile rather than sharing tabs with Assets:
         // the transform controls are used constantly, and hiding them behind a
         // tab every time the image library is opened is the wrong trade.
@@ -703,6 +706,17 @@ impl eframe::App for AnkhimateApp {
             });
 
         // ── Toolbar ──────────────────────────────────────────────────────
+        // A tool asked for a pane to be brought forward — double-clicking art
+        // opening the slot editor, say. Consumed here, once.
+        if let Some(tab) = self.state.session.focus_tab.take() {
+            if self.find_pane(tab).is_none() {
+                self.add_pane(tab);
+            }
+            self.tree.make_active(
+                |_, tile| matches!(tile, egui_tiles::Tile::Pane(pane) if *pane == tab),
+            );
+        }
+
         egui::TopBottomPanel::top("toolbar")
             .frame(
                 egui::Frame::NONE

@@ -204,6 +204,8 @@ fn update_attachment_mode(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2
             }
         } else if let Some(bone) = ctx.state.session.hovered_bone {
             ctx.state.session.select_bone(Some(bone));
+        } else if open_in_slot_editor(ctx, mouse_screen, viewport_size) {
+            // Handled: a double-click opened the piece for placing.
         } else if let Some((slot, name, bone)) = under_cursor {
             let already = matches!(
                 &ctx.state.session.selection,
@@ -498,6 +500,9 @@ impl CanvasTool for SelectTool {
                 }
             } else {
                 let ctrl = ctx.ui.input(|i| i.modifiers.ctrl);
+                if open_in_slot_editor(ctx, mouse_screen, viewport_size) {
+                    return;
+                }
                 match (ctrl, ctx.state.session.hovered_bone) {
                     // Ctrl-click toggles a bone in the multi-selection.
                     (true, Some(bone)) => ctx.state.session.toggle_bone(bone),
@@ -522,6 +527,44 @@ impl CanvasTool for SelectTool {
             }
         }
     }
+}
+
+/// Double-click on art: open it in the slot-space editor.
+///
+/// The same gesture Photoshop uses to open a smart object, and for the same
+/// reason — placing a piece against the whole rig means fighting sixty other
+/// pieces for the same few pixels of handle.
+///
+/// Returns whether it consumed the click, so the caller does not also run its
+/// single-click selection and leave the two fighting over what is selected.
+fn open_in_slot_editor(
+    ctx: &mut ToolContext,
+    mouse_screen: Option<glam::Vec2>,
+    viewport_size: glam::Vec2,
+) -> bool {
+    if !ctx.ui.input(|i| {
+        i.pointer
+            .button_double_clicked(egui::PointerButton::Primary)
+    }) {
+        return false;
+    }
+    let Some(mouse_p) = mouse_screen else {
+        return false;
+    };
+    let world = ctx
+        .state
+        .session
+        .camera
+        .screen_to_world(mouse_p, viewport_size);
+    let Some((slot, name, bone)) = pick_attachment(ctx.state, world) else {
+        return false;
+    };
+    ctx.state
+        .session
+        .select_attachment(slot, name.clone(), bone);
+    ctx.state.session.slot_edit = Some(crate::ui::slot_editor::SlotEdit::new(slot, name));
+    ctx.state.session.focus_tab = Some(crate::ui::Tab::SlotEditor);
+    true
 }
 
 /// The front-most attachment under a world-space point, if any (T-708).

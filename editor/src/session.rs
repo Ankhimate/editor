@@ -232,6 +232,18 @@ pub struct Session {
 
     /// A spritesheet waiting to be sliced (T-305). Cancelling drops it.
     pub pending_atlas: Option<crate::ui::atlas::PendingAtlas>,
+    /// A pane to bring to the front, consumed by the next frame.
+    ///
+    /// The panel tree belongs to the app, not to the session, so a tool that
+    /// wants a tab focused leaves a request here rather than reaching across.
+    pub focus_tab: Option<crate::ui::Tab>,
+    /// The attachment open in the slot-space editor, if any.
+    pub slot_edit: Option<crate::ui::slot_editor::SlotEdit>,
+    /// Which handle that pane is dragging, as a small code.
+    ///
+    /// A code rather than the pane's own enum: the drag has to survive between
+    /// frames, and `Session` should not have to know what a corner handle is.
+    pub slot_edit_grab_kind: Option<usize>,
     /// Which event the event pane is editing, as an index into the active
     /// animation's list.
     ///
@@ -357,6 +369,9 @@ impl Session {
             trace_refined: false,
             pending_trace: None,
             pending_atlas: None,
+            focus_tab: None,
+            slot_edit: None,
+            slot_edit_grab_kind: None,
             selected_event: None,
             hidden_slots: std::collections::HashSet::new(),
             tree_filter: String::new(),

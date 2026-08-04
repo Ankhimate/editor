@@ -8,6 +8,7 @@ pub mod events;
 pub mod inspector;
 pub mod psd_import;
 pub mod skins;
+pub mod slot_editor;
 pub mod startup;
 pub mod timeline;
 pub mod toolbar;
@@ -28,6 +29,7 @@ pub enum Tab {
     DrawOrder,
     Assets,
     Skins,
+    SlotEditor,
     Animations,
     Events,
     Constraints,
@@ -39,8 +41,9 @@ impl Tab {
     /// One list rather than a menu that has to be edited whenever a pane is
     /// added — a View menu missing the pane you are looking for is worse than no
     /// View menu, because it reads as "that panel does not exist".
-    pub const ALL: [Tab; 11] = [
+    pub const ALL: [Tab; 12] = [
         Tab::Canvas,
+        Tab::SlotEditor,
         Tab::Hierarchy,
         Tab::Inspector,
         Tab::Timeline,
@@ -63,6 +66,7 @@ impl Tab {
             Tab::DrawOrder => "Draw Order",
             Tab::Assets => "Assets",
             Tab::Skins => "Skins",
+            Tab::SlotEditor => "Slot Editor",
             Tab::Animations => "Animations",
             Tab::Events => "Events",
             Tab::Constraints => "Constraints",
@@ -79,6 +83,7 @@ impl Tab {
             Tab::DrawOrder => egui_phosphor::fill::STACK,
             Tab::Assets => egui_phosphor::fill::IMAGES,
             Tab::Skins => egui_phosphor::fill::T_SHIRT,
+            Tab::SlotEditor => egui_phosphor::fill::CROP,
             Tab::Animations => egui_phosphor::fill::FILM_SLATE,
             Tab::Events => egui_phosphor::fill::FLAG,
             Tab::Constraints => egui_phosphor::fill::LINK,
@@ -158,6 +163,11 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             Tab::Skins => {
                 egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
                     skins::ui(ui, self.state);
+                });
+            }
+            Tab::SlotEditor => {
+                egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                    slot_editor::ui(ui, self.state);
                 });
             }
             Tab::Animations => {
