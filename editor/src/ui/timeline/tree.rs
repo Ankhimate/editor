@@ -81,9 +81,9 @@ pub fn ui(
                     toggle = Some(data.fold_id);
                 }
                 let tri = if *folded {
-                    egui_phosphor::regular::CARET_RIGHT
+                    crate::ui::icons::CARET_RIGHT
                 } else {
-                    egui_phosphor::regular::CARET_DOWN
+                    crate::ui::icons::CARET_DOWN
                 };
                 painter.text(
                     tri_rect.center(),
@@ -166,9 +166,9 @@ pub fn ui(
             dot_rect.center(),
             egui::Align2::CENTER_CENTER,
             if on {
-                egui_phosphor::fill::CIRCLE
+                crate::ui::icons::DOT_ON
             } else {
-                egui_phosphor::regular::CIRCLE
+                crate::ui::icons::DOT_OFF
             },
             egui::FontId::proportional(8.0),
             if on {

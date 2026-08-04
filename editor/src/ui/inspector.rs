@@ -28,7 +28,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     if state.session.tool == Tool::WeightPaint {
         use crate::commands::weight_cmds::BrushMode;
 
-        section_header(ui, egui_phosphor::regular::PAINT_BRUSH, "Weight Paint");
+        section_header(ui, crate::ui::icons::WEIGHT_PAINT, "Weight Paint");
         ui.add_space(4.0);
         transform_row_single(
             ui,
@@ -95,7 +95,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         ui.add_space(32.0);
         ui.vertical_centered(|ui| {
             ui.label(
-                egui::RichText::new(egui_phosphor::regular::CURSOR_CLICK)
+                egui::RichText::new(crate::ui::icons::NOTHING_SELECTED)
                     .size(32.0)
                     .color(ui.visuals().weak_text_color()),
             );
@@ -123,7 +123,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         .and_then(|p| state.doc.skeleton.bones.get(p))
         .map(|b| b.name.clone());
 
-    section_header(ui, egui_phosphor::regular::BONE, &bone_name);
+    section_header(ui, crate::ui::icons::BONE, &bone_name);
     ui.add_space(2.0);
     info_row(ui, "Length", &format!("{:.2}", bone_len));
     if let Some(p) = &parent_name {
@@ -187,11 +187,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(10.0);
 
     // ── Local Transform ───────────────────────────────────────────────────
-    section_header(
-        ui,
-        egui_phosphor::regular::ARROWS_OUT_CARDINAL,
-        "Local Transform",
-    );
+    section_header(ui, crate::ui::icons::TRANSLATE, "Local Transform");
     ui.add_space(4.0);
 
     // Setup mode edits the setup transform; Animate mode edits the *posed*
@@ -325,7 +321,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
 
     // ── World Transform (read-only) ───────────────────────────────────────
     ui.add_space(10.0);
-    section_header(ui, egui_phosphor::regular::GLOBE, "World Transform");
+    section_header(ui, crate::ui::icons::WORLD, "World Transform");
     ui.add_space(2.0);
 
     let wt = match state.doc.skeleton.bones.contains_key(bone_id) {
@@ -475,13 +471,13 @@ fn focused_constraint(
         return;
     };
     let (icon, kind) = match constraint {
-        Constraint::Ik(_) => (egui_phosphor::regular::TREE_STRUCTURE, "IK constraint"),
+        Constraint::Ik(_) => (crate::ui::icons::IK, "IK constraint"),
         Constraint::Transform(_) => (
-            egui_phosphor::regular::ARROWS_LEFT_RIGHT,
+            crate::ui::icons::TRANSFORM_CONSTRAINT,
             "Transform constraint",
         ),
-        Constraint::Physics(_) => (egui_phosphor::regular::WIND, "Physics constraint"),
-        Constraint::Path(_) => (egui_phosphor::regular::PATH, "Path constraint"),
+        Constraint::Physics(_) => (crate::ui::icons::PHYSICS, "Physics constraint"),
+        Constraint::Path(_) => (crate::ui::icons::PATH, "Path constraint"),
     };
     let name = constraint.name().to_string();
     // The bones it drives, so "what does this actually move" is answerable
@@ -548,7 +544,7 @@ fn constraint_inspector(
         .collect();
 
     ui.add_space(10.0);
-    section_header(ui, egui_phosphor::regular::LINK, "Constraints");
+    section_header(ui, crate::ui::icons::CONSTRAINT, "Constraints");
     ui.add_space(2.0);
 
     if driving.is_empty() {
@@ -1858,7 +1854,7 @@ fn attachment_inspector(
         let (vertices, triangles) = (mesh.setup_vertices.len(), mesh.triangles.len());
         let pinned_edges = mesh.edges.len();
         ui.add_space(10.0);
-        section_header(ui, egui_phosphor::regular::POLYGON, "Mesh");
+        section_header(ui, crate::ui::icons::MESH, "Mesh");
         ui.add_space(2.0);
         info_row(ui, "Vertices", &vertices.to_string());
         info_row(ui, "Triangles", &triangles.to_string());
@@ -1960,7 +1956,7 @@ fn attachment_inspector(
         let vertices = bb.vertices.len();
         let skinned = !bb.weights.is_empty();
         ui.add_space(10.0);
-        section_header(ui, egui_phosphor::regular::BOUNDING_BOX, "Bounding Box");
+        section_header(ui, crate::ui::icons::HITBOX, "Bounding Box");
         ui.add_space(2.0);
         info_row(ui, "Vertices", &vertices.to_string());
         info_row(
@@ -2004,7 +2000,7 @@ fn attachment_inspector(
         let mut position = point.position;
         let mut degrees = point.rotation.to_degrees();
         ui.add_space(10.0);
-        section_header(ui, egui_phosphor::regular::CROSSHAIR_SIMPLE, "Point");
+        section_header(ui, crate::ui::icons::POINT, "Point");
         ui.add_space(4.0);
 
         let mut changed = false;
@@ -2052,7 +2048,7 @@ fn attachment_inspector(
         let vertices = clip.vertices.len();
         let end_slot = clip.end_slot.clone();
         ui.add_space(10.0);
-        section_header(ui, egui_phosphor::regular::SCISSORS, "Clipping");
+        section_header(ui, crate::ui::icons::CLIP, "Clipping");
         ui.add_space(2.0);
         info_row(ui, "Vertices", &vertices.to_string());
         ui.add_space(4.0);
@@ -2132,7 +2128,7 @@ fn attachment_inspector(
     let setup = state.session.can_edit_structure();
 
     ui.add_space(10.0);
-    section_header(ui, egui_phosphor::regular::FRAME_CORNERS, "Attachment");
+    section_header(ui, crate::ui::icons::ATTACHMENT, "Attachment");
     ui.add_space(2.0);
     info_row(ui, "Image", &texture);
     info_row(ui, "In skin", &skin_name);
@@ -2342,7 +2338,7 @@ fn slot_inspector(ui: &mut egui::Ui, state: &mut AppState, slot_id: ankhimate_co
         .unwrap_or(slot.color);
     let current_attachment = slot.attachment.clone();
 
-    section_header(ui, egui_phosphor::regular::IMAGE_SQUARE, &slot_name);
+    section_header(ui, crate::ui::icons::IMAGE, &slot_name);
     ui.add_space(4.0);
 
     // Color picker (keyable). egui works in sRGB Color32.

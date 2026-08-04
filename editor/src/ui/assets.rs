@@ -57,7 +57,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let import = ui.add_enabled(
                 setup,
-                egui::Button::new(format!("{} Import", egui_phosphor::regular::PLUS)),
+                egui::Button::new(format!("{} Import", crate::ui::icons::ADD)),
             );
             let import = if setup {
                 import.on_hover_text("Import image files into the library")
@@ -72,7 +72,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
             if ui
                 .add_enabled(
                     setup && !state.doc.assets.is_empty(),
-                    egui::Button::new(egui_phosphor::regular::ARROWS_CLOCKWISE),
+                    egui::Button::new(crate::ui::icons::REFRESH),
                 )
                 .on_hover_text("Check source files for changes")
                 .clicked()
@@ -80,14 +80,14 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                 check_sources(state);
             }
             if ui
-                .add_enabled(setup, egui::Button::new(egui_phosphor::regular::GRID_FOUR))
+                .add_enabled(setup, egui::Button::new(crate::ui::icons::GRID))
                 .on_hover_text("Import a spritesheet and slice it into cells")
                 .clicked()
             {
                 open_sheet_dialog(state);
             }
             if ui
-                .add_enabled(setup, egui::Button::new(egui_phosphor::regular::STACK))
+                .add_enabled(setup, egui::Button::new(crate::ui::icons::DRAW_ORDER))
                 .on_hover_text("Import a layered PSD as a rig")
                 .clicked()
             {
@@ -101,7 +101,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         ui.add_space(12.0);
         ui.vertical_centered(|ui| {
             ui.label(
-                egui::RichText::new(egui_phosphor::regular::IMAGES)
+                egui::RichText::new(crate::ui::icons::ASSETS)
                     .size(28.0)
                     .color(ui.visuals().weak_text_color()),
             );

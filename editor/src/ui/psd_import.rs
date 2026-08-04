@@ -219,9 +219,9 @@ fn layer_tree(ui: &mut egui::Ui, pending: &mut PendingPsd) {
                         pending.set_subtree(&node.path, on);
                     }
                     let icon = if node.is_group {
-                        egui_phosphor::regular::FOLDER
+                        crate::ui::icons::FOLDER
                     } else {
-                        egui_phosphor::regular::IMAGE_SQUARE
+                        crate::ui::icons::IMAGE
                     };
                     let label = egui::RichText::new(format!("{icon} {}", node.name)).size(12.0);
                     let label = if node.visible {

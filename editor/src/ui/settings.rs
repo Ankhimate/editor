@@ -54,13 +54,9 @@ pub fn ui(
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 for (label, icon, value) in [
-                    (
-                        "Appearance",
-                        egui_phosphor::fill::PALETTE,
-                        Section::Appearance,
-                    ),
-                    ("Grid", egui_phosphor::fill::GRID_FOUR, Section::Grid),
-                    ("Fonts", egui_phosphor::fill::TEXT_AA, Section::Fonts),
+                    ("Appearance", crate::ui::icons::PALETTE, Section::Appearance),
+                    ("Grid", crate::ui::icons::GRID, Section::Grid),
+                    ("Fonts", crate::ui::icons::STRING, Section::Fonts),
                 ] {
                     if ui
                         .selectable_label(section == value, format!("{icon}  {label}"))
@@ -258,6 +254,34 @@ fn grid(ui: &mut egui::Ui, config: &mut Config) {
 
 fn fonts(ui: &mut egui::Ui, config: &mut Config) {
     ui.add_space(4.0);
+    ui.label(egui::RichText::new("Scale").strong());
+    ui.label(
+        egui::RichText::new(
+            "Renders text and icons at a higher resolution rather than blowing up              the same bitmap — this is the one that fixes blocky glyphs, not the              sizes below.",
+        )
+        .size(10.5)
+        .color(ui.visuals().weak_text_color()),
+    );
+    ui.horizontal(|ui| {
+        let before = config.ui_scale;
+        ui.add(
+            egui::Slider::new(&mut config.ui_scale, 0.75..=2.5)
+                .fixed_decimals(2)
+                .suffix("×"),
+        );
+        if ui.button("Reset").clicked() {
+            config.ui_scale = 1.0;
+        }
+        if (config.ui_scale - before).abs() > 1e-4 {
+            // Every glyph is re-rasterised, so this is applied as it changes
+            // rather than every frame.
+            ui.ctx().set_zoom_factor(config.ui_scale.clamp(0.5, 3.0));
+        }
+    });
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Sizes").strong());
     ui.label(
         egui::RichText::new(
             "Per area, not one scale: the timeline packs sixty rows into a panel and \

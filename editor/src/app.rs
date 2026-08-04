@@ -28,12 +28,19 @@ impl AnkhimateApp {
 
     /// Start up, optionally opening a project immediately.
     pub fn with_file(cc: &eframe::CreationContext<'_>, open: Option<std::path::PathBuf>) -> Self {
+        // Remix Icon: one consistent 24px grid and a matching stroke weight, so a
+        // column of glyphs reads as a set rather than as a pile of clip art. The
+        // vocabulary lives in `ui::icons`, not scattered across the panels.
         let mut fonts = egui::FontDefinitions::default();
-        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-        // Filled glyphs for the tree: at 12px an outline icon is mostly gaps,
-        // and sixty of them down a panel read as noise rather than as a list.
-        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Fill);
+        egui_remixicon::add_to_fonts(&mut fonts);
         cc.egui_ctx.set_fonts(fonts);
+
+        // Text and icons are rasterised at `size × zoom × pixels_per_point`, so
+        // the UI scale is the only thing that makes them genuinely sharper rather
+        // than bigger-and-still-blocky. Restored before the first frame: changing
+        // it later re-rasterises every glyph, which is a visible hitch.
+        cc.egui_ctx
+            .set_zoom_factor(crate::config::Config::load().ui_scale.clamp(0.5, 3.0));
 
         // User themes join the built-ins here rather than being loaded lazily:
         // the saved choice may well be one of them, and starting in the wrong
@@ -580,12 +587,12 @@ impl eframe::App for AnkhimateApp {
                                     &mut self.state.session.show_artwork,
                                     format!(
                                         "{}  Artwork",
-                                        egui_phosphor::fill::IMAGE_SQUARE
+                                        crate::ui::icons::IMAGE
                                     ),
                                 );
                                 ui.checkbox(
                                     &mut self.state.session.show_bones,
-                                    format!("{}  Bones", egui_phosphor::fill::BONE),
+                                    format!("{}  Bones", crate::ui::icons::BONE),
                                 );
                                 if !self.state.session.hidden_slots.is_empty() {
                                     let hidden = self.state.session.hidden_slots.len();

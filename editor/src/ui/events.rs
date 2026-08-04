@@ -68,7 +68,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::Theme) 
 fn toolbar(ui: &mut egui::Ui, state: &mut AppState, anim: AnimationId, events: &[EventKey]) {
     ui.horizontal(|ui| {
         if ui
-            .button(format!("{} New", egui_phosphor::fill::PLUS))
+            .button(format!("{} New", crate::ui::icons::ADD))
             .on_hover_text("Add an event at the playhead")
             .clicked()
         {
@@ -88,7 +88,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut AppState, anim: AnimationId, events: &
         if ui
             .add_enabled(
                 selected.is_some(),
-                egui::Button::new(egui_phosphor::fill::COPY),
+                egui::Button::new(crate::ui::icons::DUPLICATE),
             )
             .on_hover_text("Duplicate")
             .clicked()
@@ -100,7 +100,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut AppState, anim: AnimationId, events: &
             .add_enabled(
                 selected.is_some(),
                 egui::Button::new(
-                    egui::RichText::new(egui_phosphor::fill::TRASH)
+                    egui::RichText::new(crate::ui::icons::DELETE)
                         .color(ui.visuals().error_fg_color),
                 ),
             )
@@ -159,9 +159,9 @@ fn list(ui: &mut egui::Ui, state: &mut AppState, events: &[EventKey], theme: &cr
                     egui::pos2(rect.min.x + 8.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     if event.audio.is_empty() {
-                        egui_phosphor::fill::FLAG
+                        crate::ui::icons::EVENTS
                     } else {
-                        egui_phosphor::fill::SPEAKER_HIGH
+                        crate::ui::icons::AUDIO
                     },
                     egui::FontId::proportional(11.0),
                     // The same colour the timeline lane marks events in.
@@ -246,7 +246,7 @@ fn form(
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new(egui_phosphor::fill::FLAG)
+            egui::RichText::new(crate::ui::icons::EVENTS)
                 .size(13.0)
                 .color(theme.event_marker()),
         );
@@ -262,7 +262,7 @@ fn form(
     ui.add_space(4.0);
 
     // Time, with a shortcut for the commonest retime there is.
-    let retime = row(ui, egui_phosphor::fill::CLOCK, "Time", |ui| {
+    let retime = row(ui, crate::ui::icons::TIME, "Time", |ui| {
         let mut time = event.time;
         let mut changed = ui
             .add(
@@ -298,7 +298,7 @@ fn form(
     let mut payload = event.clone();
     let mut payload_changed = false;
 
-    payload_changed |= row(ui, egui_phosphor::fill::HASH, "Integer", |ui| {
+    payload_changed |= row(ui, crate::ui::icons::INTEGER, "Integer", |ui| {
         ui.add_sized(
             [ui.available_width(), 20.0],
             egui::DragValue::new(&mut payload.int_value),
@@ -308,7 +308,7 @@ fn form(
     })
     .is_some();
 
-    payload_changed |= row(ui, egui_phosphor::fill::PERCENT, "Float", |ui| {
+    payload_changed |= row(ui, crate::ui::icons::FLOAT, "Float", |ui| {
         ui.add_sized(
             [ui.available_width(), 20.0],
             egui::DragValue::new(&mut payload.float_value).speed(0.01),
@@ -318,7 +318,7 @@ fn form(
     })
     .is_some();
 
-    payload_changed |= row(ui, egui_phosphor::fill::TEXT_AA, "String", |ui| {
+    payload_changed |= row(ui, crate::ui::icons::STRING, "String", |ui| {
         ui.add_sized(
             [ui.available_width(), 20.0],
             egui::TextEdit::singleline(&mut payload.string_value),
@@ -328,7 +328,7 @@ fn form(
     })
     .is_some();
 
-    payload_changed |= row(ui, egui_phosphor::fill::SPEAKER_HIGH, "Audio", |ui| {
+    payload_changed |= row(ui, crate::ui::icons::AUDIO, "Audio", |ui| {
         ui.add_sized(
             [ui.available_width(), 20.0],
             egui::TextEdit::singleline(&mut payload.audio).hint_text("asset name"),
@@ -341,24 +341,19 @@ fn form(
     // Volume and balance only mean anything with a sound attached, so they only
     // appear with one. Two disabled sliders on every event is furniture.
     if !payload.audio.is_empty() {
-        payload_changed |= row(
-            ui,
-            egui_phosphor::fill::SPEAKER_SIMPLE_HIGH,
-            "Volume",
-            |ui| {
-                ui.add_sized(
-                    [ui.available_width(), 20.0],
-                    egui::Slider::new(&mut payload.volume, 0.0..=2.0).fixed_decimals(2),
-                )
-                .changed()
-                .then_some(())
-            },
-        )
+        payload_changed |= row(ui, crate::ui::icons::AUDIO, "Volume", |ui| {
+            ui.add_sized(
+                [ui.available_width(), 20.0],
+                egui::Slider::new(&mut payload.volume, 0.0..=2.0).fixed_decimals(2),
+            )
+            .changed()
+            .then_some(())
+        })
         .is_some();
 
         payload_changed |= row(
             ui,
-            egui_phosphor::fill::ARROWS_LEFT_RIGHT,
+            crate::ui::icons::TRANSFORM_CONSTRAINT,
             "Balance",
             |ui| {
                 ui.add_sized(

@@ -18,7 +18,7 @@ use eframe::egui;
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     ui.horizontal(|ui| {
         if ui
-            .button(format!("{} New", egui_phosphor::fill::PLUS))
+            .button(format!("{} New", crate::ui::icons::ADD))
             .clicked()
         {
             let name = format!("animation{}", state.doc.animations.len() + 1);
@@ -34,7 +34,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         if ui
             .add_enabled(
                 active.is_some(),
-                egui::Button::new(format!("{} Duplicate", egui_phosphor::fill::COPY)),
+                egui::Button::new(format!("{} Duplicate", crate::ui::icons::DUPLICATE)),
             )
             .clicked()
             && let Some(id) = active
@@ -110,9 +110,9 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                     egui::pos2(rect.min.x + 8.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     if *looping {
-                        egui_phosphor::fill::REPEAT
+                        crate::ui::icons::LOOP
                     } else {
-                        egui_phosphor::fill::FILM_STRIP
+                        crate::ui::icons::DOPESHEET
                     },
                     egui::FontId::proportional(12.0),
                     text_color.gamma_multiply(0.7),

@@ -60,7 +60,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         ui.horizontal(|ui| {
             // Up = toward front (earlier in this list).
             if ui
-                .add_enabled(i > 0, egui::Button::new(egui_phosphor::regular::CARET_UP))
+                .add_enabled(i > 0, egui::Button::new(crate::ui::icons::CARET_UP))
                 .clicked()
             {
                 swap = Some((i, i - 1));
@@ -68,7 +68,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
             if ui
                 .add_enabled(
                     i + 1 < front_to_back.len(),
-                    egui::Button::new(egui_phosphor::regular::CARET_DOWN),
+                    egui::Button::new(crate::ui::icons::CARET_DOWN),
                 )
                 .clicked()
             {

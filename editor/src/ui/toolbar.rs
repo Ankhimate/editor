@@ -31,7 +31,7 @@ pub fn ui(
             ui,
             theme,
             ToolBtn {
-                icon: egui_phosphor::regular::CURSOR,
+                icon: crate::ui::icons::SELECT,
                 shortcut: "V",
                 tooltip: "Select",
                 selected: state.session.tool == Tool::Select,
@@ -43,7 +43,7 @@ pub fn ui(
             ui,
             theme,
             ToolBtn {
-                icon: egui_phosphor::regular::BONE,
+                icon: crate::ui::icons::BONE,
                 shortcut: "B",
                 tooltip: "Create Bone",
                 selected: state.session.tool == Tool::CreateBone,
@@ -55,7 +55,7 @@ pub fn ui(
             ui,
             theme,
             ToolBtn {
-                icon: egui_phosphor::regular::PAINT_BRUSH,
+                icon: crate::ui::icons::WEIGHT_PAINT,
                 shortcut: "W",
                 tooltip: "Weight Paint",
                 selected: state.session.tool == Tool::WeightPaint,
@@ -77,29 +77,24 @@ pub fn ui(
         // reason to reach for them.
         for spec in [
             (
-                egui_phosphor::regular::ARROWS_OUT_CARDINAL,
+                crate::ui::icons::TRANSLATE,
                 "T",
                 "Translate",
                 TransformTool::Translate,
             ),
             (
-                egui_phosphor::regular::ARROW_CLOCKWISE,
+                crate::ui::icons::ROTATE,
                 "R",
                 "Rotate",
                 TransformTool::Rotate,
             ),
             (
-                egui_phosphor::regular::RESIZE,
+                crate::ui::icons::TOOL_SCALE,
                 "S",
                 "Scale",
                 TransformTool::Scale,
             ),
-            (
-                egui_phosphor::regular::PARALLELOGRAM,
-                "H",
-                "Shear",
-                TransformTool::Shear,
-            ),
+            (crate::ui::icons::SHEAR, "H", "Shear", TransformTool::Shear),
         ] {
             let (icon, shortcut, tooltip, tool) = spec;
             tool_btn(
@@ -132,12 +127,12 @@ pub fn ui(
         // seconds, and a menu makes that four clicks instead of one.
         for (icon, tooltip, flag) in [
             (
-                egui_phosphor::regular::IMAGE_SQUARE,
+                crate::ui::icons::IMAGE,
                 "Show artwork (1)",
                 &mut state.session.show_artwork,
             ),
             (
-                egui_phosphor::regular::BONE,
+                crate::ui::icons::BONE,
                 "Show bones (2)",
                 &mut state.session.show_bones,
             ),
@@ -167,7 +162,7 @@ pub fn ui(
         let can_redo = state.history.can_redo();
 
         let undo = ui
-            .add_enabled(can_undo, icon_btn(egui_phosphor::regular::ARROW_U_UP_LEFT))
+            .add_enabled(can_undo, icon_btn(crate::ui::icons::UNDO))
             .on_hover_text(format!(
                 "Undo (Ctrl+Z)  [{} steps]",
                 state.history.undo_depth()
@@ -177,7 +172,7 @@ pub fn ui(
         }
 
         let redo = ui
-            .add_enabled(can_redo, icon_btn(egui_phosphor::regular::ARROW_U_UP_RIGHT))
+            .add_enabled(can_redo, icon_btn(crate::ui::icons::REDO))
             .on_hover_text(format!("Redo (Ctrl+Y)  [{} steps]", 0));
         if redo.clicked() {
             *trigger_redo = true;
@@ -188,11 +183,7 @@ pub fn ui(
             ui.add_space(6.0);
             let mut current = theme.clone();
             egui::ComboBox::from_id_salt("theme_selector")
-                .selected_text(format!(
-                    "{} {}",
-                    egui_phosphor::regular::PALETTE,
-                    current.label()
-                ))
+                .selected_text(format!("{} {}", crate::ui::icons::PALETTE, current.label()))
                 .width(130.0)
                 .show_ui(ui, |ui| {
                     for t in available_themes {

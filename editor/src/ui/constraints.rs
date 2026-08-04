@@ -110,9 +110,9 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                         arrow_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         if up {
-                            egui_phosphor::regular::CARET_UP
+                            crate::ui::icons::CARET_UP
                         } else {
-                            egui_phosphor::regular::CARET_DOWN
+                            crate::ui::icons::CARET_DOWN
                         },
                         egui::FontId::proportional(10.0),
                         if enabled {
@@ -174,10 +174,10 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
 
 fn glyph(constraint: &Constraint) -> (&'static str, &'static str) {
     match constraint {
-        Constraint::Ik(_) => (egui_phosphor::fill::TREE_STRUCTURE, "IK"),
-        Constraint::Transform(_) => (egui_phosphor::fill::ARROWS_LEFT_RIGHT, "transform"),
-        Constraint::Physics(_) => (egui_phosphor::fill::WIND, "physics"),
-        Constraint::Path(_) => (egui_phosphor::fill::PATH, "path"),
+        Constraint::Ik(_) => (crate::ui::icons::IK, "IK"),
+        Constraint::Transform(_) => (crate::ui::icons::TRANSFORM_CONSTRAINT, "transform"),
+        Constraint::Physics(_) => (crate::ui::icons::PHYSICS, "physics"),
+        Constraint::Path(_) => (crate::ui::icons::PATH, "path"),
     }
 }
 

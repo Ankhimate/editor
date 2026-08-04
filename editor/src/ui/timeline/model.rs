@@ -121,14 +121,14 @@ impl TimelineModel {
 
             let (icon, tint) = match key {
                 GroupKey::Bone(b) => (
-                    egui_phosphor::fill::BONE,
+                    crate::ui::icons::BONE,
                     Some(crate::ui::canvas::renderer::group_color(
                         &state.doc.skeleton,
                         b,
                     )),
                 ),
-                GroupKey::Slot(_) => (egui_phosphor::fill::CIRCLE_DASHED, None),
-                GroupKey::Global => (egui_phosphor::fill::STACK, None),
+                GroupKey::Slot(_) => (crate::ui::icons::SLOT, None),
+                GroupKey::Global => (crate::ui::icons::DRAW_ORDER, None),
             };
             // Stamped here rather than at construction: a row does not know its
             // own position until the group is assembled.
@@ -298,7 +298,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Bone(*bone),
                 PropertyRow {
                     label: "translate",
-                    icon: egui_phosphor::fill::ARROWS_OUT_CARDINAL,
+                    icon: crate::ui::icons::TRANSLATE,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Translate,
@@ -316,7 +316,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Bone(*bone),
                 PropertyRow {
                     label: "rotate",
-                    icon: egui_phosphor::fill::ARROW_CLOCKWISE,
+                    icon: crate::ui::icons::ROTATE,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Rotate,
@@ -334,7 +334,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Bone(*bone),
                 PropertyRow {
                     label: "scale",
-                    icon: egui_phosphor::fill::CORNERS_OUT,
+                    icon: crate::ui::icons::SCALE,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Scale,
@@ -352,7 +352,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Bone(*bone),
                 PropertyRow {
                     label: "shear",
-                    icon: egui_phosphor::fill::PARALLELOGRAM,
+                    icon: crate::ui::icons::SHEAR,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Shear,
@@ -383,7 +383,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Slot(*slot),
                 PropertyRow {
                     label: "color",
-                    icon: egui_phosphor::fill::PALETTE,
+                    icon: crate::ui::icons::PALETTE,
                     addr: TimelineAddr::SlotColor { slot: *slot },
                     keys: infos,
                     channels: vec![GraphChannel {
@@ -409,7 +409,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Slot(*slot),
                 PropertyRow {
                     label: "attachment",
-                    icon: egui_phosphor::fill::IMAGE_SQUARE,
+                    icon: crate::ui::icons::IMAGE,
                     addr: TimelineAddr::SlotAttachment { slot: *slot },
                     keys: infos,
                     channels: Vec::new(),
@@ -460,7 +460,7 @@ fn read_only_row(label: &'static str, keys: impl Iterator<Item = (f32, Interp)>)
         .collect();
     PropertyRow {
         label,
-        icon: egui_phosphor::fill::LOCK_SIMPLE,
+        icon: crate::ui::icons::READ_ONLY,
         // A harmless placeholder addr; read-only rows are not edited here.
         addr: TimelineAddr::SlotColor {
             slot: Default::default(),

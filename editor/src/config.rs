@@ -32,6 +32,18 @@ pub struct Config {
     pub grid: GridSettings,
     #[serde(default)]
     pub fonts: FontSettings,
+    /// Global UI scale, multiplying egui's own DPI factor.
+    ///
+    /// This is what actually fixes blocky text: glyphs are rasterised at
+    /// `size × zoom × pixels_per_point`, so raising it renders them at a higher
+    /// resolution rather than scaling up the same blocky bitmap. Font *sizes* do
+    /// not do that — a 20pt glyph at 1× is still rasterised once per pixel.
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
+}
+
+fn default_ui_scale() -> f32 {
+    1.0
 }
 
 /// The viewport's transparency checker.
@@ -305,5 +317,30 @@ mod settings_tests {
         assert_eq!(grid.cell, 50.0);
         assert_eq!(grid.min_cell_px, 8.0);
         assert!(grid.show);
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    /// The scale is what re-rasterises glyphs, so a config missing it must land
+    /// on 1.0 rather than 0.0 — which would render nothing at all.
+    #[test]
+    fn a_config_without_a_scale_defaults_to_one() {
+        let json = r#"{"recent_files":[],"skip_startup":false}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.ui_scale, 1.0);
+    }
+
+    #[test]
+    fn the_scale_round_trips() {
+        let config = Config {
+            ui_scale: 1.75,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ui_scale, 1.75);
     }
 }

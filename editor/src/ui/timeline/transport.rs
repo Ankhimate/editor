@@ -9,16 +9,16 @@ use crate::app_state::AppState;
 use eframe::egui;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
-    use egui_phosphor::regular as icon;
+    use crate::ui::icons as icon;
 
     // Go to start.
-    if ui.button(icon::SKIP_BACK).on_hover_text("Start").clicked() {
+    if ui.button(icon::SKIP_START).on_hover_text("Start").clicked() {
         state.session.playing = false;
         state.set_playhead(0.0);
     }
     // Previous key.
     if ui
-        .button(icon::CARET_LEFT)
+        .button(icon::PREV_KEY)
         .on_hover_text("Previous key (Ctrl+←)")
         .clicked()
     {
@@ -26,7 +26,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     }
     // Step back one frame.
     if ui
-        .button(icon::REWIND)
+        .button(icon::STEP_BACK)
         .on_hover_text("Step back (←)")
         .clicked()
     {
@@ -46,7 +46,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
 
     // Step forward one frame.
     if ui
-        .button(icon::FAST_FORWARD)
+        .button(icon::STEP_FORWARD)
         .on_hover_text("Step forward (→)")
         .clicked()
     {
@@ -54,14 +54,14 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     }
     // Next key.
     if ui
-        .button(icon::CARET_RIGHT)
+        .button(icon::NEXT_KEY)
         .on_hover_text("Next key (Ctrl+→)")
         .clicked()
     {
         state.jump_key(true);
     }
     // Go to end.
-    if ui.button(icon::SKIP_FORWARD).on_hover_text("End").clicked()
+    if ui.button(icon::SKIP_END).on_hover_text("End").clicked()
         && let Some(dur) = state
             .session
             .active_animation
@@ -77,7 +77,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     // Loop toggle.
     let mut looping = state.session.looping;
     if ui
-        .selectable_label(looping, icon::REPEAT)
+        .selectable_label(looping, icon::LOOP)
         .on_hover_text("Loop")
         .clicked()
     {

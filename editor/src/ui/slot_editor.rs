@@ -333,7 +333,7 @@ fn header(
 ) {
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new(egui_phosphor::fill::IMAGE_SQUARE)
+            egui::RichText::new(crate::ui::icons::IMAGE)
                 .size(13.0)
                 .color(ui.visuals().selection.bg_fill),
         );
@@ -356,14 +356,14 @@ fn header(
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
-                .button(egui_phosphor::regular::X)
+                .button(crate::ui::icons::CLOSE)
                 .on_hover_text("Close")
                 .clicked()
             {
                 state.session.slot_edit = None;
             }
             if ui
-                .button(egui_phosphor::regular::ARROWS_OUT)
+                .button(crate::ui::icons::FIT)
                 .on_hover_text("Fit to view")
                 .clicked()
                 && let Some(edit) = state.session.slot_edit.as_mut()

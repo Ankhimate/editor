@@ -286,7 +286,7 @@ fn header(ui: &mut egui::Ui, state: &mut AppState, view: &mut ViewState) {
             .map(|a| a.name.clone())
             .unwrap_or_default();
         ui.label(
-            egui::RichText::new(format!("{} {name}", egui_phosphor::fill::FILM_SLATE))
+            egui::RichText::new(format!("{} {name}", crate::ui::icons::ANIMATIONS))
                 .strong()
                 .size(11.5),
         );
@@ -297,7 +297,7 @@ fn header(ui: &mut egui::Ui, state: &mut AppState, view: &mut ViewState) {
             let count = view.soloed.len();
             if ui
                 .button(
-                    egui::RichText::new(format!("{} solo {count}", egui_phosphor::fill::CIRCLE))
+                    egui::RichText::new(format!("{} solo {count}", crate::ui::icons::DOT_ON))
                         .color(ui.visuals().selection.bg_fill)
                         .size(11.0),
                 )
@@ -315,14 +315,14 @@ fn header(ui: &mut egui::Ui, state: &mut AppState, view: &mut ViewState) {
         // Zoom, at the end where it is out of the way of the controls used every
         // few seconds.
         if ui
-            .button(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS)
+            .button(crate::ui::icons::ZOOM_OUT)
             .on_hover_text("Zoom out (Ctrl+scroll)")
             .clicked()
         {
             view.px_per_sec = (view.px_per_sec / 1.4).clamp(MIN_PX_PER_SEC, MAX_PX_PER_SEC);
         }
         if ui
-            .button(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS)
+            .button(crate::ui::icons::ZOOM_IN)
             .on_hover_text("Zoom in (Ctrl+scroll)")
             .clicked()
         {
@@ -345,7 +345,7 @@ fn header(ui: &mut egui::Ui, state: &mut AppState, view: &mut ViewState) {
             view.px_per_sec = (frame_px * fps).clamp(MIN_PX_PER_SEC, MAX_PX_PER_SEC);
         }
         if ui
-            .button(egui_phosphor::regular::ARROWS_OUT_LINE_HORIZONTAL)
+            .button(crate::ui::icons::FIT)
             .on_hover_text("Fit the clip to the view")
             .clicked()
         {
@@ -422,7 +422,7 @@ fn setup_mode_placeholder(ui: &mut egui::Ui, state: &mut AppState) {
     ui.vertical_centered(|ui| {
         ui.add_space(ui.available_height() / 2.0 - 40.0);
         ui.label(
-            egui::RichText::new(egui_phosphor::regular::FILM_STRIP)
+            egui::RichText::new(crate::ui::icons::DOPESHEET)
                 .size(28.0)
                 .color(ui.visuals().weak_text_color()),
         );
@@ -448,7 +448,7 @@ fn clip_chooser(ui: &mut egui::Ui, state: &mut AppState) {
     ui.vertical_centered(|ui| {
         ui.add_space(ui.available_height() / 2.0 - 40.0);
         ui.label(
-            egui::RichText::new(egui_phosphor::regular::FILM_STRIP)
+            egui::RichText::new(crate::ui::icons::DOPESHEET)
                 .size(28.0)
                 .color(ui.visuals().weak_text_color()),
         );

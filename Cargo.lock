@@ -220,7 +220,7 @@ dependencies = [
  "bytemuck",
  "directories",
  "eframe",
- "egui-phosphor",
+ "egui-remixicon",
  "egui_tiles",
  "env_logger",
  "glam",
@@ -1055,10 +1055,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "egui-phosphor"
-version = "0.12.0"
+name = "egui-remixicon"
+version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4e4b18e368ff336c8dd2102992e2631b118f29a2164b0d2be9d8889dcd367e"
+checksum = "e91021616f8b9022503638c5c5ed98714bd09077cbe05febfaf82b90d45e1d61"
 dependencies = [
  "egui",
 ]

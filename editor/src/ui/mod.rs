@@ -5,6 +5,7 @@ pub mod canvas;
 pub mod constraints;
 pub mod draw_order;
 pub mod events;
+pub mod icons;
 pub mod inspector;
 pub mod psd_import;
 pub mod settings;
@@ -76,18 +77,18 @@ impl Tab {
 
     pub fn icon(self) -> &'static str {
         match self {
-            Tab::Canvas => egui_phosphor::fill::MONITOR,
-            Tab::Inspector => egui_phosphor::fill::SLIDERS,
-            Tab::Hierarchy => egui_phosphor::fill::TREE_STRUCTURE,
-            Tab::Timeline => egui_phosphor::fill::FILM_STRIP,
-            Tab::Graph => egui_phosphor::fill::CHART_LINE,
-            Tab::DrawOrder => egui_phosphor::fill::STACK,
-            Tab::Assets => egui_phosphor::fill::IMAGES,
-            Tab::Skins => egui_phosphor::fill::T_SHIRT,
-            Tab::SlotEditor => egui_phosphor::fill::CROP,
-            Tab::Animations => egui_phosphor::fill::FILM_SLATE,
-            Tab::Events => egui_phosphor::fill::FLAG,
-            Tab::Constraints => egui_phosphor::fill::LINK,
+            Tab::Canvas => crate::ui::icons::VIEWPORT,
+            Tab::Inspector => crate::ui::icons::PROPERTIES,
+            Tab::Hierarchy => crate::ui::icons::IK,
+            Tab::Timeline => crate::ui::icons::DOPESHEET,
+            Tab::Graph => crate::ui::icons::GRAPH,
+            Tab::DrawOrder => crate::ui::icons::DRAW_ORDER,
+            Tab::Assets => crate::ui::icons::ASSETS,
+            Tab::Skins => crate::ui::icons::SKIN,
+            Tab::SlotEditor => crate::ui::icons::SLOT_EDITOR,
+            Tab::Animations => crate::ui::icons::ANIMATIONS,
+            Tab::Events => crate::ui::icons::EVENTS,
+            Tab::Constraints => crate::ui::icons::CONSTRAINT,
         }
     }
 }

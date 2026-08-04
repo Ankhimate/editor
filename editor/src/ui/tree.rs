@@ -28,7 +28,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, fonts: &crate::config::FontSe
     ui.horizontal(|ui| {
         ui.add_space(4.0);
         ui.label(
-            egui::RichText::new(egui_phosphor::fill::MAGNIFYING_GLASS)
+            egui::RichText::new(crate::ui::icons::SEARCH)
                 .size(12.0)
                 .color(ui.visuals().weak_text_color()),
         );
@@ -40,10 +40,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, fonts: &crate::config::FontSe
         );
         if !state.session.tree_filter.is_empty()
             && ui
-                .add(
-                    egui::Button::new(egui_phosphor::fill::X_CIRCLE)
-                        .fill(egui::Color32::TRANSPARENT),
-                )
+                .add(egui::Button::new(crate::ui::icons::CLEAR).fill(egui::Color32::TRANSPARENT))
                 .on_hover_text("Clear")
                 .clicked()
         {
@@ -55,7 +52,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, fonts: &crate::config::FontSe
     // ── Bones ──────────────────────────────────────────────────────────
     section_header_counted(
         ui,
-        egui_phosphor::fill::BONE,
+        crate::ui::icons::BONE,
         "Bones",
         Some(state.doc.skeleton.bones.len()),
     );
@@ -125,7 +122,7 @@ fn constraints_section(ui: &mut egui::Ui, state: &mut AppState) {
 
     section_header_counted(
         ui,
-        egui_phosphor::fill::LINK,
+        crate::ui::icons::CONSTRAINT,
         "Constraints",
         Some(state.doc.skeleton.constraints.len()),
     );
@@ -349,9 +346,9 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
         state.session.locked_bones.insert(bone_id, new);
     }
     let lock_icon = if locked {
-        egui_phosphor::regular::LOCK
+        crate::ui::icons::LOCKED
     } else {
-        egui_phosphor::regular::LOCK_OPEN
+        crate::ui::icons::UNLOCKED
     };
     ui.painter().text(
         vis_rect.center(),
@@ -383,9 +380,9 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
             ui.data_mut(|d| d.insert_temp(id, is_open));
         }
         let icon = if is_open {
-            egui_phosphor::regular::CARET_DOWN
+            crate::ui::icons::CARET_DOWN
         } else {
-            egui_phosphor::regular::CARET_RIGHT
+            crate::ui::icons::CARET_RIGHT
         };
         let c = if toggle_resp.hovered() {
             ui.visuals().strong_text_color()
@@ -408,7 +405,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
     ui.painter().text(
         egui::pos2(cx + 8.0, rect.center().y),
         egui::Align2::CENTER_CENTER,
-        egui_phosphor::regular::BONE,
+        crate::ui::icons::BONE,
         egui::FontId::proportional(12.0),
         bone_tint(&state.doc.skeleton, bone_id).gamma_multiply(if is_selected {
             1.0
@@ -480,7 +477,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
                 ui,
                 state,
                 Row {
-                    icon: egui_phosphor::fill::CIRCLE_DASHED,
+                    icon: crate::ui::icons::SLOT,
                     label: slot_name,
                     tint: None,
                     depth: depth + 2,
@@ -666,9 +663,9 @@ fn visibility_dot(
         ui.visuals().warn_fg_color
     };
     let glyph = if visible {
-        egui_phosphor::fill::CIRCLE
+        crate::ui::icons::DOT_ON
     } else {
-        egui_phosphor::regular::CIRCLE
+        crate::ui::icons::DOT_OFF
     };
     ui.painter().text(
         dot_rect.center(),
@@ -763,32 +760,32 @@ fn selectable_row(ui: &mut egui::Ui, state: &mut AppState, row: Row<'_>) -> egui
 fn attachment_glyph(attachment: &Attachment) -> (&'static str, &'static str, egui::Color32) {
     match attachment {
         Attachment::Region(_) => (
-            egui_phosphor::fill::IMAGE_SQUARE,
+            crate::ui::icons::IMAGE,
             "image",
             egui::Color32::from_rgb(126, 176, 224),
         ),
         Attachment::Mesh(_) => (
-            egui_phosphor::fill::POLYGON,
+            crate::ui::icons::MESH,
             "mesh",
             egui::Color32::from_rgb(140, 200, 150),
         ),
         Attachment::Clipping(_) => (
-            egui_phosphor::fill::SCISSORS,
+            crate::ui::icons::CLIP,
             "clip",
             egui::Color32::from_rgb(200, 160, 220),
         ),
         Attachment::Path(_) => (
-            egui_phosphor::fill::PATH,
+            crate::ui::icons::PATH,
             "path",
             egui::Color32::from_rgb(220, 190, 120),
         ),
         Attachment::BoundingBox(_) => (
-            egui_phosphor::fill::BOUNDING_BOX,
+            crate::ui::icons::HITBOX,
             "hitbox",
             egui::Color32::from_rgb(230, 140, 105),
         ),
         Attachment::Point(_) => (
-            egui_phosphor::fill::CROSSHAIR_SIMPLE,
+            crate::ui::icons::POINT,
             "point",
             egui::Color32::from_rgb(124, 227, 139),
         ),
@@ -809,22 +806,22 @@ fn row_text_size(ui: &egui::Ui) -> f32 {
 fn constraint_glyph(constraint: &Constraint) -> (&'static str, &'static str, egui::Color32) {
     match constraint {
         Constraint::Ik(_) => (
-            egui_phosphor::fill::TREE_STRUCTURE,
+            crate::ui::icons::IK,
             "IK",
             egui::Color32::from_rgb(240, 170, 90),
         ),
         Constraint::Transform(_) => (
-            egui_phosphor::fill::ARROWS_LEFT_RIGHT,
+            crate::ui::icons::TRANSFORM_CONSTRAINT,
             "transform",
             egui::Color32::from_rgb(150, 190, 240),
         ),
         Constraint::Physics(_) => (
-            egui_phosphor::fill::WIND,
+            crate::ui::icons::PHYSICS,
             "physics",
             egui::Color32::from_rgb(160, 220, 230),
         ),
         Constraint::Path(_) => (
-            egui_phosphor::fill::PATH,
+            crate::ui::icons::PATH,
             "path",
             egui::Color32::from_rgb(220, 190, 120),
         ),
