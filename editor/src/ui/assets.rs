@@ -86,6 +86,13 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
             {
                 open_sheet_dialog(state);
             }
+            if ui
+                .add_enabled(setup, egui::Button::new(egui_phosphor::regular::STACK))
+                .on_hover_text("Import a layered PSD as a rig")
+                .clicked()
+            {
+                open_psd_dialog(state);
+            }
         });
     });
     ui.separator();
@@ -366,6 +373,43 @@ fn open_sheet_dialog(state: &mut AppState) {
     // A stale preview from a previous sheet would show the wrong picture.
     state.session.thumbnails.remove("atlas_preview");
     state.session.pending_atlas = Some(pending);
+}
+
+/// Pick a PSD and stage it for import (T-302).
+fn open_psd_dialog(state: &mut AppState) {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Photoshop", &["psd", "psb"])
+        .pick_file()
+    else {
+        return;
+    };
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            state
+                .session
+                .set_status(format!("Could not read {}: {e}", path.display()));
+            return;
+        }
+    };
+    // The tree is read up front so the modal can show the document before
+    // committing to anything — and so an unreadable file fails here, with the
+    // file name still in hand, rather than inside the import.
+    let nodes = match ankhimate_formats::psd::layer_tree(&bytes) {
+        Ok(nodes) => nodes,
+        Err(e) => {
+            state.session.set_status(format!("{}: {e}", path.display()));
+            return;
+        }
+    };
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("psd")
+        .to_string();
+    let mut pending = crate::ui::psd_import::PendingPsd::new(name, bytes, nodes);
+    pending.source_path = Some(path.to_string_lossy().into_owned());
+    state.session.pending_psd = Some(pending);
 }
 
 /// Compare every asset against its source file and record what differs.

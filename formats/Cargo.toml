@@ -12,9 +12,10 @@ glam = { version = "0.33.1", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+# PSD import (T-302) crops layers and re-encodes them as PNG.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 thiserror = "2.0"
+psd = "0.3.5"
 
 [dev-dependencies]
 tempfile = "3"
-# The sample generator draws its own art rather than shipping binary assets.
-image = { version = "0.25.10", default-features = false, features = ["png"] }

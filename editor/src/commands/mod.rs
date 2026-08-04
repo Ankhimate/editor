@@ -22,6 +22,7 @@ pub mod constraint_cmds;
 pub mod event_cmds;
 pub mod key_cmds;
 pub mod mesh_cmds;
+pub mod psd_cmds;
 pub mod skin_cmds;
 pub mod slot_cmds;
 pub mod weight_cmds;

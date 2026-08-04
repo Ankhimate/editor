@@ -3,6 +3,7 @@ pub mod atlas;
 pub mod canvas;
 pub mod draw_order;
 pub mod inspector;
+pub mod psd_import;
 pub mod skins;
 pub mod startup;
 pub mod timeline;

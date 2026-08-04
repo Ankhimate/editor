@@ -40,6 +40,12 @@ pub struct Document {
     /// library outlives any one attachment that samples it.
     pub assets: AssetDb,
     pub meta: DocumentMeta,
+    /// Asset name → the PSD layer path it came from (T-302).
+    ///
+    /// Kept so a re-import can tell "this is the same arm, redrawn" from "this
+    /// is a new layer". Undoable state, because an import writes it and undo has
+    /// to take it back.
+    pub psd_layer_paths: std::collections::HashMap<String, String>,
 }
 
 impl Document {
@@ -50,6 +56,7 @@ impl Document {
             animations: SlotMap::with_key(),
             assets: AssetDb::new(),
             meta: DocumentMeta::default(),
+            psd_layer_paths: std::collections::HashMap::new(),
         }
     }
 

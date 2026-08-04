@@ -622,6 +622,7 @@ impl eframe::App for AnkhimateApp {
 
         // ── Spritesheet slicer (T-305) ───────────────────────────────────
         crate::ui::atlas::ui(ctx, &mut self.state);
+        crate::ui::psd_import::ui(ctx, &mut self.state);
 
         // ── Import summary (T-303) ───────────────────────────────────────
         // A conversion that quietly drops half a rig is worse than one that

@@ -1171,6 +1171,7 @@ mod tests {
         let loaded = ankhimate_formats::from_json(&json).expect("deserialize");
         let mut reopened = AppState::default();
         reopened.replace_document(Document {
+            psd_layer_paths: Default::default(),
             skeleton: loaded.skeleton,
             animations: loaded.animations,
             assets: loaded.assets,
@@ -1830,6 +1831,7 @@ mod tests {
 
         let mut reopened = AppState::default();
         reopened.replace_document(Document {
+            psd_layer_paths: Default::default(),
             skeleton: loaded.skeleton,
             animations: loaded.animations,
             assets: loaded.assets,

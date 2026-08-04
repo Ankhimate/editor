@@ -18,6 +18,7 @@
 pub mod container;
 pub mod convert;
 pub mod migrate;
+pub mod psd;
 pub mod schema;
 
 use std::path::Path;
