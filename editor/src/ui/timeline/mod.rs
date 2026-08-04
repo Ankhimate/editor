@@ -34,8 +34,10 @@ pub const ROW_H: f32 = 20.0;
 pub const RULER_H: f32 = 24.0;
 
 const MIN_DIVIDER: f32 = 90.0;
-const MIN_PX_PER_SEC: f32 = 12.0;
-const MAX_PX_PER_SEC: f32 = 1400.0;
+const MIN_PX_PER_SEC: f32 = 4.0;
+/// 100 px per frame at 60 fps. The old ceiling of 1400 was about 47 px/f at 30,
+/// which is not enough to separate two keys a frame apart on a long clip.
+const MAX_PX_PER_SEC: f32 = 6000.0;
 
 /// Which view the sheet is showing.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -70,7 +72,7 @@ impl Layout {
 }
 
 /// Persisted view state (zoom, scroll, divider, mode). UI-only.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct ViewState {
     pub px_per_sec: f32,
     pub scroll_sec: f32,
@@ -78,6 +80,12 @@ pub struct ViewState {
     pub mode: SheetMode,
     /// Vertical scroll offset (px) shared by tree and sheet.
     pub scroll_y: f32,
+    /// Rows shown on their own, keyed by [`VisibleRow::solo_id`].
+    ///
+    /// Empty means "show everything" rather than "show nothing": a solo set that
+    /// emptied itself into a blank sheet would be a trap, and the last row
+    /// un-soloed is the commonest way to empty it.
+    pub soloed: std::collections::BTreeSet<u64>,
 }
 
 impl Default for ViewState {
@@ -88,6 +96,7 @@ impl Default for ViewState {
             divider_w: 168.0,
             mode: SheetMode::Dopesheet,
             scroll_y: 0.0,
+            soloed: Default::default(),
         }
     }
 }
@@ -148,15 +157,24 @@ fn panel(ui: &mut egui::Ui, state: &mut AppState, mode: SheetMode) {
     let body = ui.available_rect_before_wrap();
     let sheet_x0_now = body.left() + view.divider_w;
     if ui.rect_contains_pointer(body) {
-        let (dy, dx, modifiers, pointer_x) = ui.ctx().input(|i| {
+        let (dy, dx, modifiers, pointer_x, zoom) = ui.ctx().input(|i| {
             (
                 i.smooth_scroll_delta.y,
                 i.smooth_scroll_delta.x,
                 i.modifiers,
                 i.pointer.hover_pos().map(|p| p.x),
+                i.zoom_delta(),
             )
         });
-        if modifiers.ctrl && dy != 0.0 {
+        // A trackpad pinch arrives as a zoom gesture, not as ctrl+wheel, so it
+        // needs its own path or the gesture does nothing at all.
+        if (zoom - 1.0).abs() > 1e-4 {
+            let px = pointer_x.unwrap_or(sheet_x0_now);
+            let time_at_cursor = view.scroll_sec + (px - sheet_x0_now) / view.px_per_sec;
+            let new_pps = (view.px_per_sec * zoom).clamp(MIN_PX_PER_SEC, MAX_PX_PER_SEC);
+            view.scroll_sec = (time_at_cursor - (px - sheet_x0_now) / new_pps).max(0.0);
+            view.px_per_sec = new_pps;
+        } else if modifiers.ctrl && dy != 0.0 {
             // Zoom, keeping the time under the cursor fixed.
             let px = pointer_x.unwrap_or(sheet_x0_now);
             let time_at_cursor = view.scroll_sec + (px - sheet_x0_now) / view.px_per_sec;
@@ -249,6 +267,23 @@ fn header(ui: &mut egui::Ui, state: &mut AppState, view: &mut ViewState) {
                 .size(11.5),
         );
 
+        // Soloing is a mode with no other exit: the dots are per row, and a rig
+        // with sixty of them makes "which one did I click" a real question.
+        if !view.soloed.is_empty() {
+            let count = view.soloed.len();
+            if ui
+                .button(
+                    egui::RichText::new(format!("{} solo {count}", egui_phosphor::fill::CIRCLE))
+                        .color(ui.visuals().selection.bg_fill)
+                        .size(11.0),
+                )
+                .on_hover_text("Showing only some rows — click to show everything")
+                .clicked()
+            {
+                view.soloed.clear();
+            }
+        }
+
         group_gap(ui);
         transport::ui(ui, state);
 
@@ -269,9 +304,24 @@ fn header(ui: &mut egui::Ui, state: &mut AppState, view: &mut ViewState) {
         {
             view.px_per_sec = (view.px_per_sec * 1.4).clamp(MIN_PX_PER_SEC, MAX_PX_PER_SEC);
         }
-        let frame_px = view.px_per_sec / state.doc.meta.fps.max(1) as f32;
+        // Typed as well as dragged: "line these two up at 40 px per frame" is a
+        // thing animators say, and hunting for it with a wheel is not an answer.
+        let fps = state.doc.meta.fps.max(1) as f32;
+        let mut frame_px = view.px_per_sec / fps;
         if ui
-            .button(format!("{frame_px:.0} px/f"))
+            .add(
+                egui::DragValue::new(&mut frame_px)
+                    .speed(0.1)
+                    .range(MIN_PX_PER_SEC / fps..=MAX_PX_PER_SEC / fps)
+                    .suffix(" px/f"),
+            )
+            .on_hover_text("Pixels per frame — drag or type")
+            .changed()
+        {
+            view.px_per_sec = (frame_px * fps).clamp(MIN_PX_PER_SEC, MAX_PX_PER_SEC);
+        }
+        if ui
+            .button(egui_phosphor::regular::ARROWS_OUT_LINE_HORIZONTAL)
             .on_hover_text("Fit the clip to the view")
             .clicked()
         {

@@ -41,8 +41,9 @@ pub fn ui(
 
     let mut y = rect.top() - view.scroll_y;
     let mut toggle: Option<u64> = None;
+    let mut solo_toggle: Option<(u64, bool)> = None;
 
-    for (i, row) in rows.iter().enumerate() {
+    for row in rows.iter() {
         let row_rect =
             egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(rect.width(), ROW_H));
         // Cull rows scrolled out of view.
@@ -51,10 +52,11 @@ pub fn ui(
             continue;
         }
 
-        // Alternating band.
-        if i % 2 == 1 {
-            painter.rect_filled(row_rect, 0.0, band_color(&visuals));
-        }
+        painter.rect_filled(
+            row_rect,
+            0.0,
+            band_color(&visuals, matches!(row, VisibleRow::Group { .. })),
+        );
 
         match row {
             VisibleRow::Group { data, folded, .. } => {
@@ -109,7 +111,9 @@ pub fn ui(
                 );
             }
             VisibleRow::Property { data, .. } => {
-                let color = if data.read_only {
+                let color = if !row.is_soloed(&view.soloed) {
+                    visuals.weak_text_color().gamma_multiply(0.5)
+                } else if data.read_only {
                     visuals.weak_text_color()
                 } else {
                     visuals.text_color()
@@ -131,7 +135,45 @@ pub fn ui(
             }
         }
 
+        // Solo dot, right-aligned. Filled when this row is the one being shown.
+        let dot_rect =
+            egui::Rect::from_min_size(egui::pos2(rect.right() - 16.0, y), egui::vec2(14.0, ROW_H));
+        let dot = ui.interact(
+            dot_rect,
+            ui.id().with(("tl_solo", row.solo_id())),
+            egui::Sense::click(),
+        );
+        let on = view.soloed.contains(&row.solo_id());
+        if dot.clicked() {
+            solo_toggle = Some((row.solo_id(), !on));
+        }
+        painter.text(
+            dot_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            if on {
+                egui_phosphor::fill::CIRCLE
+            } else {
+                egui_phosphor::regular::CIRCLE
+            },
+            egui::FontId::proportional(8.0),
+            if on {
+                visuals.selection.bg_fill
+            } else if dot.hovered() {
+                visuals.strong_text_color()
+            } else {
+                visuals.weak_text_color().gamma_multiply(0.6)
+            },
+        );
+
         y += ROW_H;
+    }
+
+    if let Some((id, on)) = solo_toggle {
+        if on {
+            view.soloed.insert(id);
+        } else {
+            view.soloed.remove(&id);
+        }
     }
 
     if let Some(id) = toggle {
@@ -165,11 +207,22 @@ fn property_tint(label: &str, fallback: egui::Color32) -> egui::Color32 {
     }
 }
 
-/// Subtle alternating band, a touch lighter than the panel.
-pub fn band_color(visuals: &egui::Visuals) -> egui::Color32 {
-    if visuals.dark_mode {
-        visuals.faint_bg_color.linear_multiply(1.6)
+/// Row background, by what the row *is* rather than by whether it is odd.
+///
+/// Zebra striping made a group header and the property under it look the same
+/// whenever they happened to land on the same parity, which is exactly the
+/// distinction the panel exists to draw. A header is a heading and its
+/// properties are its contents; two tones say so on every row, every time.
+pub fn band_color(visuals: &egui::Visuals, group: bool) -> egui::Color32 {
+    if group {
+        if visuals.dark_mode {
+            visuals.faint_bg_color.linear_multiply(2.1)
+        } else {
+            visuals.faint_bg_color.linear_multiply(0.9)
+        }
+    } else if visuals.dark_mode {
+        visuals.faint_bg_color.linear_multiply(0.85)
     } else {
-        visuals.faint_bg_color
+        visuals.faint_bg_color.linear_multiply(1.4)
     }
 }

@@ -142,7 +142,43 @@ pub enum VisibleRow<'a> {
     /// A group header row (bone/slot name).
     Group { data: &'a Group, folded: bool },
     /// A property row under a group.
-    Property { data: &'a PropertyRow },
+    Property {
+        data: &'a PropertyRow,
+        /// The group this row sits under, so soloing a group can carry to its
+        /// properties without a second lookup.
+        group_id: u64,
+    },
+}
+
+impl VisibleRow<'_> {
+    /// A stable key for solo state.
+    ///
+    /// Groups and properties share one namespace: `fold_id` comes from a slotmap
+    /// key and `stable_id` from a key mixed with a property tag, so a collision
+    /// would need a slotmap index to equal another one times sixteen plus a tag —
+    /// possible in principle, which is why groups are tagged apart here.
+    pub fn solo_id(&self) -> u64 {
+        match self {
+            VisibleRow::Group { data, .. } => data.fold_id ^ 0xA11_0000_0000_0000,
+            VisibleRow::Property { data, .. } => data.addr.stable_id(),
+        }
+    }
+
+    /// Is this row shown, given the solo set? An empty set shows everything.
+    pub fn is_soloed(&self, soloed: &std::collections::BTreeSet<u64>) -> bool {
+        if soloed.is_empty() {
+            return true;
+        }
+        match self {
+            VisibleRow::Group { .. } => soloed.contains(&self.solo_id()),
+            // A property is shown when it is soloed itself, or when its whole
+            // group is: "show me this bone" has to mean all of its channels.
+            VisibleRow::Property { data, group_id } => {
+                soloed.contains(&data.addr.stable_id())
+                    || soloed.contains(&(group_id ^ 0xA11_0000_0000_0000))
+            }
+        }
+    }
 }
 
 impl TimelineModel {
@@ -158,7 +194,10 @@ impl TimelineModel {
             });
             if !folded {
                 for row in &group.rows {
-                    out.push(VisibleRow::Property { data: row });
+                    out.push(VisibleRow::Property {
+                        data: row,
+                        group_id: group.fold_id,
+                    });
                 }
             }
         }
@@ -412,5 +451,112 @@ fn read_only_row(label: &'static str, keys: impl Iterator<Item = (f32, Interp)>)
         keys: infos,
         channels: Vec::new(),
         read_only: true,
+    }
+}
+
+#[cfg(test)]
+mod solo_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn property(addr: TimelineAddr) -> PropertyRow {
+        PropertyRow {
+            label: "rotate",
+            icon: "",
+            addr,
+            keys: Vec::new(),
+            channels: Vec::new(),
+            read_only: false,
+        }
+    }
+
+    fn slot_addr(n: u64) -> TimelineAddr {
+        use ankhimate_core::slotmap::KeyData;
+        TimelineAddr::SlotColor {
+            slot: SlotId::from(KeyData::from_ffi(n)),
+        }
+    }
+
+    /// The empty set is "show everything", not "show nothing". Un-soloing the
+    /// last row is the commonest way to empty it, and a blank sheet there would
+    /// read as the clip having lost its keys.
+    #[test]
+    fn an_empty_solo_set_shows_every_row() {
+        let row = property(slot_addr(1));
+        let visible = VisibleRow::Property {
+            data: &row,
+            group_id: 7,
+        };
+        assert!(visible.is_soloed(&BTreeSet::new()));
+    }
+
+    #[test]
+    fn soloing_one_row_hides_its_siblings() {
+        let (a, b) = (property(slot_addr(1)), property(slot_addr(2)));
+        let (va, vb) = (
+            VisibleRow::Property {
+                data: &a,
+                group_id: 7,
+            },
+            VisibleRow::Property {
+                data: &b,
+                group_id: 7,
+            },
+        );
+        let mut soloed = BTreeSet::new();
+        soloed.insert(va.solo_id());
+        assert!(va.is_soloed(&soloed));
+        assert!(!vb.is_soloed(&soloed), "a sibling stayed visible");
+    }
+
+    /// "Show me this bone" has to mean all of its channels, or soloing a group
+    /// would show a header with nothing under it.
+    #[test]
+    fn soloing_a_group_carries_to_its_properties() {
+        let row = property(slot_addr(1));
+        let group = Group {
+            label: "arm".into(),
+            icon: "",
+            tint: None,
+            rows: Vec::new(),
+            fold_id: 7,
+            summary_times: Vec::new(),
+        };
+        let header = VisibleRow::Group {
+            data: &group,
+            folded: false,
+        };
+        let child = VisibleRow::Property {
+            data: &row,
+            group_id: 7,
+        };
+        let mut soloed = BTreeSet::new();
+        soloed.insert(header.solo_id());
+        assert!(header.is_soloed(&soloed));
+        assert!(child.is_soloed(&soloed));
+    }
+
+    /// Groups and properties share one id space, so a group's key is tagged
+    /// apart from any property's.
+    #[test]
+    fn group_and_property_ids_do_not_collide() {
+        let row = property(slot_addr(7));
+        let group = Group {
+            label: "arm".into(),
+            icon: "",
+            tint: None,
+            rows: Vec::new(),
+            fold_id: 7,
+            summary_times: Vec::new(),
+        };
+        let header = VisibleRow::Group {
+            data: &group,
+            folded: false,
+        };
+        let child = VisibleRow::Property {
+            data: &row,
+            group_id: 7,
+        };
+        assert_ne!(header.solo_id(), child.solo_id());
     }
 }

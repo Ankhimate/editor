@@ -39,7 +39,7 @@ pub fn ui(
     state: &mut AppState,
     anim: AnimationId,
     model: &TimelineModel,
-    _view: &ViewState,
+    view: &ViewState,
     layout: &Layout,
     rect: egui::Rect,
 ) {
@@ -73,6 +73,9 @@ pub fn ui(
     let mut lo = f32::INFINITY;
     let mut hi = f32::NEG_INFINITY;
     for row in &rows {
+        if !row.is_soloed(&view.soloed) {
+            continue;
+        }
         if let VisibleRow::Property { data, .. } = row
             && !data.read_only
         {
@@ -113,6 +116,11 @@ pub fn ui(
     let mut interp_edit: Option<InterpEdit> = None;
 
     for row in &rows {
+        // Soloing is a display filter, so it applies to the curves and not to
+        // the row list — the row stays visible so you can un-solo it.
+        if !row.is_soloed(&view.soloed) {
+            continue;
+        }
         let VisibleRow::Property { data, .. } = row else {
             continue;
         };

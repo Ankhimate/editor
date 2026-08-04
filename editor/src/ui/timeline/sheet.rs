@@ -115,9 +115,15 @@ pub fn ui(
             y += ROW_H;
             continue;
         }
-        if i % 2 == 1 {
-            painter.rect_filled(row_rect, 0.0, band_color(&visuals));
-        }
+        painter.rect_filled(
+            row_rect,
+            0.0,
+            band_color(&visuals, matches!(row, VisibleRow::Group { .. })),
+        );
+        // A row filtered out by soloing keeps its keys on screen but greyed:
+        // hiding them outright would make the dopesheet lie about what the clip
+        // contains, which is the one thing it is for.
+        let shown = row.is_soloed(&view.soloed);
 
         match row {
             VisibleRow::Group { data, folded, .. } => {
@@ -154,11 +160,14 @@ pub fn ui(
                         center,
                         k.interp,
                         selected,
-                        data.read_only,
+                        data.read_only || !shown,
                         &visuals,
                     );
 
-                    if data.read_only {
+                    // A greyed row is not editable either: dragging a key you
+                    // cannot properly see is how keys end up somewhere nobody
+                    // meant to put them.
+                    if data.read_only || !shown {
                         continue;
                     }
                     key_positions.push((kref.clone(), center));
