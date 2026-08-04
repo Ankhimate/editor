@@ -167,23 +167,23 @@ fn region_corners(
 }
 
 /// The animated deform offsets for a slot's attachment, if the clip has any.
-fn mesh_deform<'a>(
-    state: &'a AppState,
-    slot: SlotId,
-    attachment: &Option<String>,
-) -> Option<&'a Vec<glam::Vec2>> {
-    let name = attachment.as_ref()?;
-    state.pose.deforms.get(&(slot, name.clone()))
+fn mesh_deform(state: &AppState, slot: SlotId) -> Option<&Vec<glam::Vec2>> {
+    let name = state.pose.attachment_name(&state.doc.skeleton, slot)?;
+    state.pose.deforms.get(&(slot, name.to_string()))
 }
 
 /// Build the textured draw for a slot — a quad for a region, a triangle list for
 /// a mesh — or `None` if anything it needs is missing.
 fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
     let slot = state.doc.skeleton.slots.get(slot_id)?;
-    let attachment = state
-        .doc
-        .skeleton
-        .resolve_slot_many(&state.session.skin_stack(), slot_id)?;
+    // Through the pose, not the slot: an attachment timeline writes the name it
+    // shows into the pose, and reading the slot directly draws the setup pose for
+    // the whole clip.
+    let attachment =
+        state
+            .doc
+            .skeleton
+            .resolve_posed(&state.session.skin_stack(), &state.pose, slot_id)?;
 
     // Hidden slots draw nothing at all (T-505) — distinct from alpha 0, which
     // still costs a draw call and still blends.
@@ -249,7 +249,7 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
             // Deform offsets are applied to the setup vertex *before* skinning
             // (T-404): the shape is authored in local space, then the bones move
             // it. Skinning first would rotate the offsets with the bone.
-            let deform = mesh_deform(state, slot_id, &slot.attachment);
+            let deform = mesh_deform(state, slot_id);
             let vertices = mesh
                 .setup_vertices
                 .iter()
@@ -1406,10 +1406,11 @@ pub fn render_bones(
     let mut sprite_draws: Vec<SpriteDraw> = Vec::new();
     for &slot_id in &state.pose.draw_order {
         // A clip starts here and runs until its end slot.
-        if let Some(Attachment::Clipping(c)) = state
-            .doc
-            .skeleton
-            .resolve_slot_many(&state.session.skin_stack(), slot_id)
+        if let Some(Attachment::Clipping(c)) =
+            state
+                .doc
+                .skeleton
+                .resolve_posed(&state.session.skin_stack(), &state.pose, slot_id)
         {
             let end = c.end_slot.as_ref().and_then(|name| {
                 state

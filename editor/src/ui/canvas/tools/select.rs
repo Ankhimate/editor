@@ -489,13 +489,20 @@ fn pick_attachment(
         if state.pose.slot_visible.get(slot_id) == Some(&false) {
             continue;
         }
-        let Some(name) = slot.attachment.as_deref() else {
+        // The name the pose is showing, so clicking a swapped-in attachment
+        // selects that one rather than whatever setup happens to name.
+        let Some(name) = state
+            .pose
+            .attachment_name(&state.doc.skeleton, slot_id)
+            .map(str::to_string)
+        else {
             continue;
         };
-        let Some(attachment) = state
-            .doc
-            .skeleton
-            .resolve_slot_many(&state.session.skin_stack(), slot_id)
+        let Some(attachment) =
+            state
+                .doc
+                .skeleton
+                .resolve_posed(&state.session.skin_stack(), &state.pose, slot_id)
         else {
             continue;
         };
@@ -537,7 +544,7 @@ fn pick_attachment(
             Attachment::Clipping(_) | Attachment::Path(_) | Attachment::Point(_) => false,
         };
         if hit {
-            return Some((slot_id, name.to_string(), slot.bone));
+            return Some((slot_id, name, slot.bone));
         }
     }
     None

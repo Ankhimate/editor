@@ -204,6 +204,23 @@ impl Skeleton {
         self.resolve_many(active, slot, name)
     }
 
+    /// Resolve the attachment a slot is showing **in a pose**, so an attachment
+    /// timeline is honoured.
+    ///
+    /// [`Self::resolve_slot_many`] answers from the setup pose. That is the right
+    /// answer while authoring the rig and the wrong one while playing a clip, and
+    /// the two are easy to confuse because they agree until the first attachment
+    /// key.
+    pub fn resolve_posed(
+        &self,
+        active: &[SkinId],
+        pose: &crate::pose::Pose,
+        slot: SlotId,
+    ) -> Option<&Attachment> {
+        let name = pose.attachment_name(self, slot)?;
+        self.resolve_many(active, slot, name)
+    }
+
     /// Insert a skin and return its id.
     pub fn add_skin(&mut self, skin: Skin) -> SkinId {
         self.skins.insert(skin)
@@ -767,5 +784,80 @@ mod tests {
             Attachment::Clipping(ClippingAttachment::default()),
         );
         assert!(skel.resolve_many(&[], slot, "art").is_some());
+    }
+}
+
+#[cfg(test)]
+mod posed_resolution_tests {
+    use super::*;
+    use crate::animation::{Animation, Key, Timeline};
+    use crate::attachment::{Rect, RegionAttachment};
+    use crate::math::Transform;
+    use crate::slot::Slot;
+
+    fn region(texture: &str) -> Attachment {
+        Attachment::Region(RegionAttachment {
+            texture: texture.to_string(),
+            local_offset: glam::Vec2::ZERO,
+            local_rotation: 0.0,
+            local_scale: glam::Vec2::ONE,
+            width: 10.0,
+            height: 10.0,
+            uv_rect: Rect::default(),
+            pivot: glam::Vec2::splat(0.5),
+            sequence: None,
+        })
+    }
+
+    /// An attachment timeline writes the name into the pose, never into the
+    /// skeleton. Anything that resolves off the slot shows the setup pose for the
+    /// whole clip — which is a mouth that never changes shape.
+    #[test]
+    fn resolve_posed_follows_an_attachment_timeline() {
+        let mut skel = Skeleton::new();
+        let bone = skel.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 1.0,
+            local_transform: Transform::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let slot = skel.add_slot(Slot {
+            attachment: Some("smile".into()),
+            ..Slot::new("mouth".to_string(), bone)
+        });
+        let skin = skel.default_skin;
+        skel.skins[skin].set(slot, "smile", region("smile"));
+        skel.skins[skin].set(slot, "grind", region("grind"));
+
+        let mut anim = Animation::new("portal", 3.0);
+        anim.timelines.push(Timeline::SlotAttachment {
+            slot,
+            keys: vec![Key::stepped(0.9, Some("grind".to_string()))],
+        });
+
+        let mut pose = crate::pose::Pose::new();
+        let texture =
+            |pose: &crate::pose::Pose, skel: &Skeleton| match skel.resolve_posed(&[], pose, slot) {
+                Some(Attachment::Region(r)) => r.texture.clone(),
+                _ => "none".to_string(),
+            };
+
+        // Before the first key the setup attachment stands.
+        crate::pose::evaluate(&skel, &[(&anim, 0.0, 1.0)], &mut pose);
+        assert_eq!(texture(&pose, &skel), "smile");
+
+        crate::pose::evaluate(&skel, &[(&anim, 1.5, 1.0)], &mut pose);
+        assert_eq!(texture(&pose, &skel), "grind");
+
+        // The skeleton itself never moved, which is exactly why reading it
+        // directly is wrong.
+        assert_eq!(skel.slots[slot].attachment.as_deref(), Some("smile"));
+        assert_eq!(
+            skel.resolve_slot_many(&[], slot)
+                .map(|a| matches!(a, Attachment::Region(r) if r.texture == "smile")),
+            Some(true)
+        );
     }
 }
