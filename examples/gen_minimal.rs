@@ -90,6 +90,7 @@ fn build() -> (
                 h: 1.0,
             },
             pivot: glam::Vec2::splat(0.5),
+            sequence: None,
         }),
     );
 

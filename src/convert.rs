@@ -16,7 +16,7 @@ use ankhimate_core::animation as anim;
 use ankhimate_core::assets::{AssetDb, ImageAsset};
 use ankhimate_core::attachment as att;
 use ankhimate_core::constraints::{Constraint, IkConstraint, TransformConstraint};
-use ankhimate_core::ids::{AnimationId, BoneId, ConstraintId, SlotId};
+use ankhimate_core::ids::{AnimationId, BoneId, ConstraintId, SkinId, SlotId};
 use ankhimate_core::math::Transform;
 use ankhimate_core::skeleton::{Bone, Skeleton};
 use ankhimate_core::skin::Skin;
@@ -234,6 +234,12 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
             schema::Skin {
                 name: skin.name.clone(),
                 entries,
+                bones: skin.bones.iter().map(|b| bone_name(*b)).collect(),
+                constraints: skin
+                    .constraints
+                    .iter()
+                    .map(|c| constraint_name(*c))
+                    .collect(),
                 extra: Default::default(),
             }
         })
@@ -364,6 +370,9 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                     int_value: e.int_value,
                     float_value: e.float_value,
                     string_value: e.string_value.clone(),
+                    audio: e.audio.clone(),
+                    volume: e.volume,
+                    balance: e.balance,
                 })
                 .collect(),
             extra: Default::default(),
@@ -412,6 +421,90 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
     }
 }
 
+/// Weights out: bone ids become names, which is what makes a file survive a
+/// re-import (ADR 0004).
+fn weights_to_schema(
+    skeleton: &Skeleton,
+    weights: &[Vec<att::VertexWeight>],
+) -> Vec<Vec<(String, f32)>> {
+    weights
+        .iter()
+        .map(|vertex| {
+            vertex
+                .iter()
+                .map(|w| {
+                    let name = skeleton
+                        .bones
+                        .get(w.bone)
+                        .map(|b| b.name.clone())
+                        .unwrap_or_default();
+                    (name, w.weight)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Weights in. A weight naming a bone that is not in the file is dropped rather
+/// than defaulted onto the root: a silently reparented influence is far harder to
+/// spot than a missing one.
+fn weights_from_schema(
+    weights: &[Vec<(String, f32)>],
+    bone_ids: &HashMap<String, BoneId>,
+) -> Vec<Vec<att::VertexWeight>> {
+    weights
+        .iter()
+        .map(|vertex| {
+            vertex
+                .iter()
+                .filter_map(|(name, weight)| {
+                    bone_ids.get(name).map(|&bone| att::VertexWeight {
+                        bone,
+                        weight: *weight,
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn sequence_to_schema(sequence: &att::Sequence) -> schema::Sequence {
+    schema::Sequence {
+        frames: sequence.frames.clone(),
+        fps: sequence.fps,
+        mode: match sequence.mode {
+            att::SequenceMode::Hold => "hold",
+            att::SequenceMode::Once => "once",
+            att::SequenceMode::Loop => "loop",
+            att::SequenceMode::PingPong => "ping_pong",
+            att::SequenceMode::OnceReverse => "once_reverse",
+            att::SequenceMode::LoopReverse => "loop_reverse",
+            att::SequenceMode::PingPongReverse => "ping_pong_reverse",
+        }
+        .to_string(),
+        setup_index: sequence.setup_index,
+    }
+}
+
+fn sequence_from_schema(sequence: &schema::Sequence) -> att::Sequence {
+    att::Sequence {
+        frames: sequence.frames.clone(),
+        fps: sequence.fps,
+        // An unknown mode holds rather than erroring: a newer file should still
+        // open, showing one frame instead of nothing.
+        mode: match sequence.mode.as_str() {
+            "once" => att::SequenceMode::Once,
+            "loop" => att::SequenceMode::Loop,
+            "ping_pong" => att::SequenceMode::PingPong,
+            "once_reverse" => att::SequenceMode::OnceReverse,
+            "loop_reverse" => att::SequenceMode::LoopReverse,
+            "ping_pong_reverse" => att::SequenceMode::PingPongReverse,
+            _ => att::SequenceMode::Hold,
+        },
+        setup_index: sequence.setup_index,
+    }
+}
+
 fn attachment_to_schema(skeleton: &Skeleton, attachment: &att::Attachment) -> schema::Attachment {
     match attachment {
         att::Attachment::Region(r) => schema::Attachment::Region(schema::Region {
@@ -426,6 +519,7 @@ fn attachment_to_schema(skeleton: &Skeleton, attachment: &att::Attachment) -> sc
             uv: [r.uv_rect.x, r.uv_rect.y, r.uv_rect.w, r.uv_rect.h],
             pivot_x: r.pivot.x,
             pivot_y: r.pivot.y,
+            sequence: r.sequence.as_ref().map(sequence_to_schema),
             extra: Default::default(),
         }),
         att::Attachment::Clipping(c) => schema::Attachment::Clipping(schema::Clipping {
@@ -445,23 +539,25 @@ fn attachment_to_schema(skeleton: &Skeleton, attachment: &att::Attachment) -> sc
             uvs: flatten_vec2(&m.uvs),
             triangles: m.triangles.iter().flat_map(|t| *t).collect(),
             edges: m.edges.iter().flat_map(|e| *e).collect(),
-            weights: m
-                .weights
-                .iter()
-                .map(|vertex| {
-                    vertex
-                        .iter()
-                        .map(|w| {
-                            let name = skeleton
-                                .bones
-                                .get(w.bone)
-                                .map(|b| b.name.clone())
-                                .unwrap_or_default();
-                            (name, w.weight)
-                        })
-                        .collect()
-                })
-                .collect(),
+            weights: weights_to_schema(skeleton, &m.weights),
+            linked: m.linked.as_ref().map(|l| schema::LinkedMesh {
+                skin: l.skin.clone(),
+                slot: l.slot.clone(),
+                attachment: l.attachment.clone(),
+                inherit_deform: l.inherit_deform,
+            }),
+            sequence: m.sequence.as_ref().map(sequence_to_schema),
+            extra: Default::default(),
+        }),
+        att::Attachment::BoundingBox(b) => schema::Attachment::BoundingBox(schema::BoundingBox {
+            vertices: flatten_vec2(&b.vertices),
+            weights: weights_to_schema(skeleton, &b.weights),
+            extra: Default::default(),
+        }),
+        att::Attachment::Point(p) => schema::Attachment::Point(schema::Point {
+            x: p.position.x,
+            y: p.position.y,
+            rotation: p.rotation.to_degrees(),
             extra: Default::default(),
         }),
     }
@@ -702,6 +798,9 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
     }
 
     // Skins.
+    // A skin's constraint list is resolved after the constraints themselves are
+    // read, since a name is only an id once its constraint exists.
+    let mut skin_constraint_names: Vec<(SkinId, Vec<String>)> = Vec::new();
     for s in &project.skins {
         let mut skin = Skin::new(&s.name);
         for entry in &s.entries {
@@ -715,7 +814,14 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
                 attachment_from_schema(&entry.attachment, &bone_ids),
             );
         }
+        for name in &s.bones {
+            match bone_ids.get(name) {
+                Some(&id) => skin.bones.push(id),
+                None => report.dangling("skin bone", name),
+            }
+        }
         let id = skeleton.skins.insert(skin);
+        skin_constraint_names.push((id, s.constraints.clone()));
         if s.name == project.default_skin {
             skeleton.default_skin = id;
         }
@@ -851,6 +957,20 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
         }
     }
 
+    // Now that constraints have ids, hand each skin the ones it owns.
+    for (skin, names) in skin_constraint_names {
+        for name in &names {
+            match constraint_ids.get(name) {
+                Some(&id) => {
+                    if let Some(skin) = skeleton.skins.get_mut(skin) {
+                        skin.constraints.push(id);
+                    }
+                }
+                None => report.dangling("skin constraint", name),
+            }
+        }
+    }
+
     // Animations.
     let mut animations = SlotMap::with_key();
     for a in &project.animations {
@@ -874,6 +994,9 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
                     int_value: e.int_value,
                     float_value: e.float_value,
                     string_value: e.string_value.clone(),
+                    audio: e.audio.clone(),
+                    volume: e.volume,
+                    balance: e.balance,
                 })
                 .collect(),
             looping: a.looping,
@@ -909,6 +1032,7 @@ fn attachment_from_schema(
                 h: r.uv[3],
             },
             pivot: glam::vec2(r.pivot_x, r.pivot_y),
+            sequence: r.sequence.as_ref().map(sequence_from_schema),
         }),
         schema::Attachment::Clipping(c) => att::Attachment::Clipping(att::ClippingAttachment {
             vertices: unflatten_vec2(&c.vertices),
@@ -929,23 +1053,26 @@ fn attachment_from_schema(
                 .map(|c| [c[0], c[1], c[2]])
                 .collect(),
             edges: m.edges.chunks_exact(2).map(|c| [c[0], c[1]]).collect(),
-            weights: m
-                .weights
-                .iter()
-                .map(|vertex| {
-                    vertex
-                        .iter()
-                        .filter_map(|(name, weight)| {
-                            bone_ids.get(name).map(|&bone| att::VertexWeight {
-                                bone,
-                                weight: *weight,
-                            })
-                        })
-                        .collect()
-                })
-                .collect(),
+            weights: weights_from_schema(&m.weights, bone_ids),
             ffd_keyframes: Vec::new(),
             inverse_bind_matrices: Default::default(),
+            linked: m.linked.as_ref().map(|l| att::LinkedMesh {
+                skin: l.skin.clone(),
+                slot: l.slot.clone(),
+                attachment: l.attachment.clone(),
+                inherit_deform: l.inherit_deform,
+            }),
+            sequence: m.sequence.as_ref().map(sequence_from_schema),
+        }),
+        schema::Attachment::BoundingBox(b) => {
+            att::Attachment::BoundingBox(att::BoundingBoxAttachment {
+                vertices: unflatten_vec2(&b.vertices),
+                weights: weights_from_schema(&b.weights, bone_ids),
+            })
+        }
+        schema::Attachment::Point(p) => att::Attachment::Point(att::PointAttachment {
+            position: glam::vec2(p.x, p.y),
+            rotation: p.rotation.to_radians(),
         }),
     }
 }
