@@ -569,6 +569,16 @@ pub fn sample_angle_degrees(keys: &[Key<f32>], time: f32, hint: &mut usize) -> O
 /// Sample a stepped (non-interpolatable) timeline at `time`: the value of the
 /// last key at or before `time`.
 pub fn sample_stepped<T: Clone>(keys: &[Key<T>], time: f32, hint: &mut usize) -> Option<T> {
+    // Before the first key there is nothing to hold yet, so the setup value
+    // stands. `None` says so; the caller has already seeded setup.
+    //
+    // This is where a stepped timeline differs from a blended one. Holding the
+    // first key backwards would mean a mouth keyed to change at 0.9s wears that
+    // shape from frame zero, and a draw-order key at 2s reorders the whole clip
+    // before it.
+    if keys.first().is_some_and(|k| time < k.time) {
+        return None;
+    }
     match locate(keys, time, hint) {
         Span::Empty => None,
         Span::Hold(i) => Some(keys[i].value.clone()),
@@ -972,5 +982,41 @@ mod tests {
         assert!(events_in_window(&empty, 0.0, 5.0, true).is_empty());
         let zero = clip_with_events(&[0.5], 0.0);
         assert!(events_in_window(&zero, 0.0, 5.0, true).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod stepped_tests {
+    use super::*;
+
+    #[test]
+    fn a_stepped_timeline_holds_setup_before_its_first_key() {
+        let keys = vec![
+            Key::stepped(0.9, "grind".to_string()),
+            Key::stepped(2.2, "smile".to_string()),
+        ];
+        let mut hint = 0;
+        assert_eq!(
+            sample_stepped(&keys, 0.0, &mut hint),
+            None,
+            "before the first key the setup attachment stands"
+        );
+        assert_eq!(sample_stepped(&keys, 0.89, &mut hint), None);
+        assert_eq!(
+            sample_stepped(&keys, 0.9, &mut hint).as_deref(),
+            Some("grind")
+        );
+        assert_eq!(
+            sample_stepped(&keys, 3.0, &mut hint).as_deref(),
+            Some("smile"),
+            "after the last key it holds"
+        );
+    }
+
+    #[test]
+    fn a_key_at_zero_applies_from_the_first_frame() {
+        let keys = vec![Key::stepped(0.0, 7u32)];
+        let mut hint = 0;
+        assert_eq!(sample_stepped(&keys, 0.0, &mut hint), Some(7));
     }
 }

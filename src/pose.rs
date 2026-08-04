@@ -67,6 +67,19 @@ impl Pose {
     }
 
     /// World affine of a bone, or identity when the bone is not in this pose.
+    /// The attachment name a slot is showing, **animation included**.
+    ///
+    /// An attachment timeline writes here, not into the skeleton, so anything
+    /// that reads `slot.attachment` directly shows the setup pose forever: a
+    /// mouth that never changes shape, a hoverboard that never appears. Every
+    /// draw and every hit test goes through this.
+    pub fn attachment_name<'a>(&'a self, skel: &'a Skeleton, slot: SlotId) -> Option<&'a str> {
+        match self.slot_attachments.get(slot) {
+            Some(animated) => animated.as_deref(),
+            None => skel.slots.get(slot)?.attachment.as_deref(),
+        }
+    }
+
     pub fn world(&self, bone: BoneId) -> Affine2 {
         self.worlds.get(bone).copied().unwrap_or(Affine2::IDENTITY)
     }
