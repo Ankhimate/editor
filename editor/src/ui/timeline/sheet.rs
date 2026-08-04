@@ -54,6 +54,9 @@ struct BoxSelect {
     start: egui::Pos2,
 }
 
+// Eight parameters, all of them distinct things the panel needs and none of
+// which group into a struct that would mean anything on its own.
+#[allow(clippy::too_many_arguments)]
 pub fn ui(
     ui: &mut egui::Ui,
     state: &mut AppState,
@@ -62,6 +65,7 @@ pub fn ui(
     view: &mut ViewState,
     layout: &Layout,
     rect: egui::Rect,
+    style: super::Style<'_>,
 ) {
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals().clone();
@@ -155,6 +159,9 @@ pub fn ui(
                         index: k.index,
                     };
                     let selected = selection.contains(&kref);
+                    // Keys wear their channel's colour, the same one the graph
+                    // plots that channel in — a green diamond and a green curve
+                    // being the same thing is the whole point of unifying them.
                     draw_key(
                         &painter,
                         center,
@@ -162,6 +169,7 @@ pub fn ui(
                         selected,
                         data.read_only || !shown,
                         &visuals,
+                        style.theme.channel_color(data.label),
                     );
 
                     // A greyed row is not editable either: dragging a key you
@@ -363,13 +371,14 @@ fn draw_key(
     selected: bool,
     read_only: bool,
     visuals: &egui::Visuals,
+    channel: egui::Color32,
 ) {
     let fill = if selected {
         visuals.selection.bg_fill
     } else if read_only {
         visuals.weak_text_color()
     } else {
-        egui::Color32::from_rgb(230, 200, 120)
+        channel
     };
     let stroke = egui::Stroke::new(1.0, visuals.extreme_bg_color);
     match interp {

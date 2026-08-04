@@ -5,7 +5,13 @@ use super::{Layout, sheet};
 use crate::app_state::AppState;
 use eframe::egui;
 
-pub fn ui(ui: &mut egui::Ui, state: &mut AppState, layout: &Layout, rect: egui::Rect) {
+pub fn ui(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    layout: &Layout,
+    rect: egui::Rect,
+    style: super::Style<'_>,
+) {
     ui.allocate_rect(rect, egui::Sense::hover());
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals();
@@ -56,7 +62,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, layout: &Layout, rect: egui::
                 egui::pos2(x + 3.0, rect.top() + 2.0),
                 egui::Align2::LEFT_TOP,
                 text,
-                egui::FontId::proportional(10.0),
+                egui::FontId::proportional(style.text - 1.0),
                 tick,
             );
         }

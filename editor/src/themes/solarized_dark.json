@@ -16,5 +16,10 @@
   "hitbox_fill": "#cb4b1622",
   "point_marker": "#859900",
   "outline_hover": "#eee8d5b4",
-  "outline_selected": "#b58900ff"
+  "outline_selected": "#b58900ff",
+  "channel_translate": "#268bd2",
+  "channel_rotate": "#859900",
+  "channel_scale": "#b58900",
+  "channel_shear": "#dc322f",
+  "event_marker": "#cb4b16"
 }

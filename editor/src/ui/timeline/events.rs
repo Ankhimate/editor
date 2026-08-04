@@ -19,7 +19,13 @@ pub const LANE_HEIGHT: f32 = 18.0;
 /// How close to a marker a click has to land to grab it.
 const MARKER_HIT: f32 = 7.0;
 
-pub fn ui(ui: &mut egui::Ui, state: &mut AppState, layout: &Layout, rect: egui::Rect) {
+pub fn ui(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    layout: &Layout,
+    rect: egui::Rect,
+    style: super::Style<'_>,
+) {
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals();
     painter.rect_filled(rect, 0.0, visuals.faint_bg_color.gamma_multiply(0.5));
@@ -32,7 +38,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, layout: &Layout, rect: egui::
         egui::pos2(rect.left() + 8.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         "events",
-        egui::FontId::proportional(10.5),
+        egui::FontId::proportional(style.text - 0.5),
         visuals.weak_text_color(),
     );
 
@@ -54,7 +60,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, layout: &Layout, rect: egui::
         ui.id().with("event_lane"),
         egui::Sense::click_and_drag(),
     );
-    let color = egui::Color32::from_rgb(230, 170, 70);
+    let color = style.theme.event_marker();
 
     // ── Draw ─────────────────────────────────────────────────────────────
     for (index, time, name) in &events {

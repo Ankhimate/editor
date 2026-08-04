@@ -136,14 +136,14 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                 egui::Frame::NONE
                     .inner_margin(egui::Margin::same(4))
                     .show(ui, |ui| {
-                        timeline::dopesheet(ui, self.state);
+                        timeline::dopesheet(ui, self.state, self.theme, self.fonts);
                     });
             }
             Tab::Graph => {
                 egui::Frame::NONE
                     .inner_margin(egui::Margin::same(4))
                     .show(ui, |ui| {
-                        timeline::graph_view(ui, self.state);
+                        timeline::graph_view(ui, self.state, self.theme, self.fonts);
                     });
             }
             Tab::DrawOrder => {
@@ -183,7 +183,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             }
             Tab::Events => {
                 egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
-                    events::ui(ui, self.state);
+                    events::ui(ui, self.state, self.theme);
                 });
             }
             Tab::Constraints => {

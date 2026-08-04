@@ -101,9 +101,26 @@ impl Default for ViewState {
     }
 }
 
+/// Everything the timeline paints itself with: colours by channel, and one text
+/// size for a panel that draws sixty rows of its own labels.
+#[derive(Clone, Copy)]
+pub struct Style<'a> {
+    pub theme: &'a crate::theme::Theme,
+    pub text: f32,
+}
+
 /// The dopesheet pane.
-pub fn dopesheet(ui: &mut egui::Ui, state: &mut AppState) {
-    panel(ui, state, SheetMode::Dopesheet)
+pub fn dopesheet(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    theme: &crate::theme::Theme,
+    fonts: &crate::config::FontSettings,
+) {
+    let style = Style {
+        theme,
+        text: fonts.for_area(crate::config::Area::Timeline),
+    };
+    panel(ui, state, SheetMode::Dopesheet, style)
 }
 
 /// The graph pane.
@@ -111,15 +128,20 @@ pub fn dopesheet(ui: &mut egui::Ui, state: &mut AppState) {
 /// A separate pane rather than a toggle inside one panel: they answer different
 /// questions — *when* does something happen versus *how* does it get there — and
 /// an animator wants both on screen at once, which a toggle makes impossible.
-pub fn graph_view(ui: &mut egui::Ui, state: &mut AppState) {
-    panel(ui, state, SheetMode::Graph)
+pub fn graph_view(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    theme: &crate::theme::Theme,
+    fonts: &crate::config::FontSettings,
+) {
+    let style = Style {
+        theme,
+        text: fonts.for_area(crate::config::Area::Timeline),
+    };
+    panel(ui, state, SheetMode::Graph, style)
 }
 
-pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
-    panel(ui, state, SheetMode::Dopesheet)
-}
-
-fn panel(ui: &mut egui::Ui, state: &mut AppState, mode: SheetMode) {
+fn panel(ui: &mut egui::Ui, state: &mut AppState, mode: SheetMode, style: Style<'_>) {
     // Setup mode has no playhead semantics (the viewport shows the setup pose
     // whatever the timeline says), so the panel collapses to an invitation
     // rather than showing a dopesheet that cannot drive anything (T-207).
@@ -206,7 +228,7 @@ fn panel(ui: &mut egui::Ui, state: &mut AppState, mode: SheetMode) {
 
     // ── Ruler across the sheet ───────────────────────────────────────────
     let ruler_rect = egui::Rect::from_min_size(body.min, egui::vec2(body.width(), RULER_H));
-    ruler::ui(ui, state, &layout, ruler_rect);
+    ruler::ui(ui, state, &layout, ruler_rect, style);
 
     // ── Event lane, directly under the ruler (T-506) ─────────────────────
     // Events belong to the clip rather than to any bone, so they get a lane of
@@ -215,7 +237,7 @@ fn panel(ui: &mut egui::Ui, state: &mut AppState, mode: SheetMode) {
         egui::pos2(body.left(), ruler_rect.bottom()),
         egui::vec2(body.width(), events::LANE_HEIGHT),
     );
-    events::ui(ui, state, &layout, event_rect);
+    events::ui(ui, state, &layout, event_rect, style);
 
     // ── Body: tree | divider | sheet ─────────────────────────────────────
     let body_rect =
@@ -226,13 +248,15 @@ fn panel(ui: &mut egui::Ui, state: &mut AppState, mode: SheetMode) {
     );
     let sheet_rect = egui::Rect::from_min_max(egui::pos2(sheet_x0, body_rect.min.y), body_rect.max);
 
-    tree::ui(ui, state, &model, &mut view, tree_rect);
+    tree::ui(ui, state, &model, &mut view, tree_rect, style);
 
     match view.mode {
-        SheetMode::Dopesheet => {
-            sheet::ui(ui, state, anim_id, &model, &mut view, &layout, sheet_rect)
-        }
-        SheetMode::Graph => graph::ui(ui, state, anim_id, &model, &view, &layout, sheet_rect),
+        SheetMode::Dopesheet => sheet::ui(
+            ui, state, anim_id, &model, &mut view, &layout, sheet_rect, style,
+        ),
+        SheetMode::Graph => graph::ui(
+            ui, state, anim_id, &model, &view, &layout, sheet_rect, style,
+        ),
     }
 
     // Draggable divider between tree and sheet.

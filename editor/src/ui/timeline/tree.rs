@@ -9,6 +9,12 @@ use super::{ROW_H, ViewState};
 use crate::app_state::AppState;
 use eframe::egui;
 
+/// Gap between a row's icon and its label.
+///
+/// Not zero and not the default word spacing: the glyphs are drawn by hand at a
+/// fixed x, so nothing else puts space there.
+const ICON_GAP: f32 = 17.0;
+
 /// Read a group's fold state from egui memory.
 pub fn is_folded(ui: &egui::Ui, fold_id: u64) -> bool {
     ui.ctx()
@@ -29,6 +35,7 @@ pub fn ui(
     model: &TimelineModel,
     view: &mut ViewState,
     rect: egui::Rect,
+    style: super::Style<'_>,
 ) {
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals().clone();
@@ -95,18 +102,20 @@ pub fn ui(
                     })
                     .unwrap_or_else(|| visuals.weak_text_color());
                 painter.text(
-                    egui::pos2(rect.left() + 20.0, y + ROW_H / 2.0),
+                    egui::pos2(rect.left() + 22.0, y + ROW_H / 2.0),
                     egui::Align2::LEFT_CENTER,
                     data.icon,
-                    egui::FontId::proportional(12.0),
+                    egui::FontId::proportional(style.text + 0.5),
                     tint,
                 );
-                // Group label.
+                // Group label. The gap after the icon is deliberate: glyph and
+                // word ran together, and at a glance the pair read as one long
+                // unfamiliar word rather than as an icon and a name.
                 painter.text(
-                    egui::pos2(rect.left() + 36.0, y + ROW_H / 2.0),
+                    egui::pos2(rect.left() + 22.0 + ICON_GAP, y + ROW_H / 2.0),
                     egui::Align2::LEFT_CENTER,
                     &data.label,
-                    egui::FontId::proportional(12.0),
+                    egui::FontId::proportional(style.text + 0.5),
                     visuals.strong_text_color(),
                 );
             }
@@ -118,18 +127,24 @@ pub fn ui(
                 } else {
                     visuals.text_color()
                 };
+                // The channel's own colour, the same one the graph plots it in.
+                let icon_color = if data.read_only || !row.is_soloed(&view.soloed) {
+                    color
+                } else {
+                    style.theme.channel_color(data.label)
+                };
                 painter.text(
-                    egui::pos2(rect.left() + 40.0, y + ROW_H / 2.0),
+                    egui::pos2(rect.left() + 42.0, y + ROW_H / 2.0),
                     egui::Align2::LEFT_CENTER,
                     data.icon,
-                    egui::FontId::proportional(11.0),
-                    property_tint(data.label, color),
+                    egui::FontId::proportional(style.text),
+                    icon_color,
                 );
                 painter.text(
-                    egui::pos2(rect.left() + 56.0, y + ROW_H / 2.0),
+                    egui::pos2(rect.left() + 42.0 + ICON_GAP, y + ROW_H / 2.0),
                     egui::Align2::LEFT_CENTER,
                     data.label,
-                    egui::FontId::proportional(11.0),
+                    egui::FontId::proportional(style.text),
                     color,
                 );
             }
@@ -188,23 +203,6 @@ pub fn ui(
 
     // Suppress unused warning in builds where state is not read yet.
     let _ = state;
-}
-
-/// The hue for a property glyph.
-///
-/// The same hues the graph plots those channels in, so a green `rotate` row and
-/// a green curve are recognisably the same thing. Read-only rows keep the text
-/// colour: they have no curve to match.
-fn property_tint(label: &str, fallback: egui::Color32) -> egui::Color32 {
-    match label {
-        "translate" => egui::Color32::from_rgb(110, 160, 230),
-        "rotate" => egui::Color32::from_rgb(110, 200, 110),
-        "scale" => egui::Color32::from_rgb(220, 160, 90),
-        "shear" => egui::Color32::from_rgb(190, 140, 220),
-        "color" => egui::Color32::from_rgb(220, 120, 150),
-        "attachment" => egui::Color32::from_rgb(126, 176, 224),
-        _ => fallback,
-    }
 }
 
 /// Row background, by what the row *is* rather than by whether it is odd.

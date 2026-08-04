@@ -23,7 +23,7 @@ use eframe::egui;
 /// Width of the icon-and-label column, so every value field starts at the same x.
 const LABEL_W: f32 = 92.0;
 
-pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
+pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::Theme) {
     let Some(anim_id) = state.session.active_animation else {
         empty_note(ui, "No animation selected", "");
         return;
@@ -59,10 +59,10 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         return;
     }
 
-    list(ui, state, &events);
+    list(ui, state, &events, theme);
     ui.add_space(6.0);
     ui.separator();
-    form(ui, state, anim_id, &events);
+    form(ui, state, anim_id, &events, theme);
 }
 
 fn toolbar(ui: &mut egui::Ui, state: &mut AppState, anim: AnimationId, events: &[EventKey]) {
@@ -123,7 +123,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut AppState, anim: AnimationId, events: &
 }
 
 /// The event list: time, name, and a hint of the payload.
-fn list(ui: &mut egui::Ui, state: &mut AppState, events: &[EventKey]) {
+fn list(ui: &mut egui::Ui, state: &mut AppState, events: &[EventKey], theme: &crate::theme::Theme) {
     egui::ScrollArea::vertical()
         .id_salt("event_list")
         .max_height(160.0)
@@ -164,7 +164,8 @@ fn list(ui: &mut egui::Ui, state: &mut AppState, events: &[EventKey]) {
                         egui_phosphor::fill::SPEAKER_HIGH
                     },
                     egui::FontId::proportional(11.0),
-                    text_color.gamma_multiply(0.7),
+                    // The same colour the timeline lane marks events in.
+                    theme.event_marker(),
                 );
                 // Time in a fixed column so the names line up under each other.
                 ui.painter().text(
@@ -218,7 +219,13 @@ fn payload_hint(event: &EventKey) -> String {
 }
 
 /// The properties of the selected event.
-fn form(ui: &mut egui::Ui, state: &mut AppState, anim: AnimationId, events: &[EventKey]) {
+fn form(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    anim: AnimationId,
+    events: &[EventKey],
+    theme: &crate::theme::Theme,
+) {
     let Some(index) = state.session.selected_event else {
         ui.add_space(8.0);
         ui.vertical_centered(|ui| {
@@ -241,7 +248,7 @@ fn form(ui: &mut egui::Ui, state: &mut AppState, anim: AnimationId, events: &[Ev
         ui.label(
             egui::RichText::new(egui_phosphor::fill::FLAG)
                 .size(13.0)
-                .color(ui.visuals().selection.bg_fill),
+                .color(theme.event_marker()),
         );
         ui.label(egui::RichText::new("Event").strong().size(12.0));
         let mut name = event.name.clone();

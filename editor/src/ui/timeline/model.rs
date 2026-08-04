@@ -33,6 +33,13 @@ pub struct PropertyRow {
     pub channels: Vec<GraphChannel>,
     /// `true` for timelines the dopesheet shows read-only (draw order, ik, deform).
     pub read_only: bool,
+    /// A key unique to this row, for widget ids and solo state.
+    ///
+    /// Not `addr.stable_id()`: read-only rows carry a placeholder address, so
+    /// every one of them hashed to the same value — four `ik mix` rows under
+    /// `scene` all claimed one widget id, and egui reported the clash across the
+    /// whole panel. Assigned from the group and the row's position instead.
+    pub row_id: u64,
 }
 
 /// A plottable scalar channel of a property row.
@@ -104,7 +111,7 @@ impl TimelineModel {
 
         let mut groups = Vec::new();
         for key in order {
-            let rows = buckets.remove(&key).unwrap_or_default();
+            let mut rows = buckets.remove(&key).unwrap_or_default();
             let mut summary: Vec<f32> = rows
                 .iter()
                 .flat_map(|r| r.keys.iter().map(|k| k.time))
@@ -123,6 +130,11 @@ impl TimelineModel {
                 GroupKey::Slot(_) => (egui_phosphor::fill::CIRCLE_DASHED, None),
                 GroupKey::Global => (egui_phosphor::fill::STACK, None),
             };
+            // Stamped here rather than at construction: a row does not know its
+            // own position until the group is assembled.
+            for (index, row) in rows.iter_mut().enumerate() {
+                row.row_id = key.fold_id().rotate_left(17).wrapping_add(index as u64 + 1);
+            }
             groups.push(Group {
                 label: key.label(&bone_name, &slot_name),
                 icon,
@@ -160,7 +172,7 @@ impl VisibleRow<'_> {
     pub fn solo_id(&self) -> u64 {
         match self {
             VisibleRow::Group { data, .. } => data.fold_id ^ 0xA11_0000_0000_0000,
-            VisibleRow::Property { data, .. } => data.addr.stable_id(),
+            VisibleRow::Property { data, .. } => data.row_id,
         }
     }
 
@@ -174,8 +186,7 @@ impl VisibleRow<'_> {
             // A property is shown when it is soloed itself, or when its whole
             // group is: "show me this bone" has to mean all of its channels.
             VisibleRow::Property { data, group_id } => {
-                soloed.contains(&data.addr.stable_id())
-                    || soloed.contains(&(group_id ^ 0xA11_0000_0000_0000))
+                soloed.contains(&data.row_id) || soloed.contains(&(group_id ^ 0xA11_0000_0000_0000))
             }
         }
     }
@@ -295,6 +306,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                     keys: k,
                     channels: ch,
                     read_only: false,
+                    row_id: 0,
                 },
             )
         }
@@ -312,6 +324,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                     keys: k,
                     channels: ch,
                     read_only: false,
+                    row_id: 0,
                 },
             )
         }
@@ -329,6 +342,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                     keys: k,
                     channels: ch,
                     read_only: false,
+                    row_id: 0,
                 },
             )
         }
@@ -346,6 +360,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                     keys: k,
                     channels: ch,
                     read_only: false,
+                    row_id: 0,
                 },
             )
         }
@@ -376,6 +391,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                         values: alpha,
                     }],
                     read_only: false,
+                    row_id: 0,
                 },
             )
         }
@@ -398,6 +414,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                     keys: infos,
                     channels: Vec::new(),
                     read_only: false,
+                    row_id: 0,
                 },
             )
         }
@@ -451,6 +468,7 @@ fn read_only_row(label: &'static str, keys: impl Iterator<Item = (f32, Interp)>)
         keys: infos,
         channels: Vec::new(),
         read_only: true,
+        row_id: 0,
     }
 }
 
@@ -459,7 +477,7 @@ mod solo_tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    fn property(addr: TimelineAddr) -> PropertyRow {
+    fn property(addr: TimelineAddr, row_id: u64) -> PropertyRow {
         PropertyRow {
             label: "rotate",
             icon: "",
@@ -467,6 +485,7 @@ mod solo_tests {
             keys: Vec::new(),
             channels: Vec::new(),
             read_only: false,
+            row_id,
         }
     }
 
@@ -482,7 +501,7 @@ mod solo_tests {
     /// read as the clip having lost its keys.
     #[test]
     fn an_empty_solo_set_shows_every_row() {
-        let row = property(slot_addr(1));
+        let row = property(slot_addr(1), 1);
         let visible = VisibleRow::Property {
             data: &row,
             group_id: 7,
@@ -492,7 +511,7 @@ mod solo_tests {
 
     #[test]
     fn soloing_one_row_hides_its_siblings() {
-        let (a, b) = (property(slot_addr(1)), property(slot_addr(2)));
+        let (a, b) = (property(slot_addr(1), 1), property(slot_addr(2), 2));
         let (va, vb) = (
             VisibleRow::Property {
                 data: &a,
@@ -513,7 +532,7 @@ mod solo_tests {
     /// would show a header with nothing under it.
     #[test]
     fn soloing_a_group_carries_to_its_properties() {
-        let row = property(slot_addr(1));
+        let row = property(slot_addr(1), 1);
         let group = Group {
             label: "arm".into(),
             icon: "",
@@ -538,9 +557,29 @@ mod solo_tests {
 
     /// Groups and properties share one id space, so a group's key is tagged
     /// apart from any property's.
+    /// Read-only rows share one placeholder address, so identity has to come
+    /// from `row_id` — four `ik mix` rows under `scene` hashing alike is exactly
+    /// how egui ended up reporting a widget clash across the whole panel.
+    #[test]
+    fn rows_sharing_an_address_still_have_distinct_ids() {
+        let (a, b) = (property(slot_addr(0), 11), property(slot_addr(0), 12));
+        let (va, vb) = (
+            VisibleRow::Property {
+                data: &a,
+                group_id: 3,
+            },
+            VisibleRow::Property {
+                data: &b,
+                group_id: 3,
+            },
+        );
+        assert_eq!(a.addr.stable_id(), b.addr.stable_id(), "same address");
+        assert_ne!(va.solo_id(), vb.solo_id(), "but distinct rows");
+    }
+
     #[test]
     fn group_and_property_ids_do_not_collide() {
-        let row = property(slot_addr(7));
+        let row = property(slot_addr(7), 7);
         let group = Group {
             label: "arm".into(),
             icon: "",

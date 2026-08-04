@@ -51,6 +51,43 @@ pub struct Theme {
     /// the cursor is still on the piece you just clicked.
     #[serde(default = "default_outline_selected")]
     pub outline_selected: String,
+
+    // ── Animation channels ──────────────────────────────────────────────
+    // One colour per property, shared by the timeline row icon, the graph curve
+    // and its key dots. Colouring the graph by *axis* instead meant a green
+    // curve was "the y one" in one row and "the rotate one" in the next, so the
+    // colour carried no meaning across a panel.
+    #[serde(default = "default_channel_translate")]
+    pub channel_translate: String,
+    #[serde(default = "default_channel_rotate")]
+    pub channel_rotate: String,
+    #[serde(default = "default_channel_scale")]
+    pub channel_scale: String,
+    #[serde(default = "default_channel_shear")]
+    pub channel_shear: String,
+    /// Event markers, in the timeline lane and the event pane.
+    #[serde(default = "default_event_marker")]
+    pub event_marker: String,
+}
+
+fn default_channel_translate() -> String {
+    "#6ea0e6".into()
+}
+
+fn default_channel_rotate() -> String {
+    "#6ec86e".into()
+}
+
+fn default_channel_scale() -> String {
+    "#e0c25a".into()
+}
+
+fn default_channel_shear() -> String {
+    "#e05a5a".into()
+}
+
+fn default_event_marker() -> String {
+    "#e6aa46".into()
 }
 
 fn default_outline_hover() -> String {
@@ -167,6 +204,11 @@ impl Theme {
             ("Point marker", &mut self.point_marker),
             ("Outline (hover)", &mut self.outline_hover),
             ("Outline (selected)", &mut self.outline_selected),
+            ("Channel · translate", &mut self.channel_translate),
+            ("Channel · rotate", &mut self.channel_rotate),
+            ("Channel · scale", &mut self.channel_scale),
+            ("Channel · shear", &mut self.channel_shear),
+            ("Event marker", &mut self.event_marker),
         ]
     }
 
@@ -271,6 +313,27 @@ impl Theme {
 
     pub fn outline_selected(&self) -> Color32 {
         hex_to_color(&self.outline_selected)
+    }
+
+    pub fn event_marker(&self) -> Color32 {
+        hex_to_color(&self.event_marker)
+    }
+
+    /// The colour for an animation channel, by the property's row label.
+    ///
+    /// Keyed on the label because that is what both the tree and the graph
+    /// already have in hand; a shared enum would have to be threaded through the
+    /// model for no gain.
+    pub fn channel_color(&self, property: &str) -> Color32 {
+        match property {
+            "translate" => hex_to_color(&self.channel_translate),
+            "rotate" => hex_to_color(&self.channel_rotate),
+            "scale" => hex_to_color(&self.channel_scale),
+            "shear" => hex_to_color(&self.channel_shear),
+            // Anything else — colour, attachment, the read-only rows — keeps the
+            // panel's text colour rather than borrowing a channel's meaning.
+            _ => Color32::GRAY,
+        }
     }
 
     /// A vertex under the cursor: the selected colour, lifted.

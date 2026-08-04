@@ -26,14 +26,25 @@ use eframe::egui;
 
 const KEY_R: f32 = 4.0;
 
-fn axis_color(axis: usize) -> egui::Color32 {
-    match axis {
-        0 => egui::Color32::from_rgb(220, 90, 80),   // x — red
-        1 => egui::Color32::from_rgb(110, 200, 110), // y — green
-        _ => egui::Color32::from_rgb(110, 160, 230), // single — blue
+/// The colour for one channel: the property's colour, shaded by axis.
+///
+/// Colouring by axis alone — x red, y green — meant a green curve was "the y
+/// one" in one row and "the rotate one" in the next, so the colour carried no
+/// meaning across the panel. Property first; the second axis of a two-channel
+/// property is the same hue, darker, which tells x from y without inventing a
+/// second vocabulary.
+fn channel_color(theme: &crate::theme::Theme, property: &str, axis: usize) -> egui::Color32 {
+    let base = theme.channel_color(property);
+    if axis == 1 {
+        base.gamma_multiply(0.62)
+    } else {
+        base
     }
 }
 
+// Eight parameters, all of them distinct things the panel needs and none of
+// which group into a struct that would mean anything on its own.
+#[allow(clippy::too_many_arguments)]
 pub fn ui(
     ui: &mut egui::Ui,
     state: &mut AppState,
@@ -42,6 +53,7 @@ pub fn ui(
     view: &ViewState,
     layout: &Layout,
     rect: egui::Rect,
+    style: super::Style<'_>,
 ) {
     // Clipped to the sheet: the curve sampler walks every pixel of the plot and
     // the handle interactions allocate their own rects, so without this both
@@ -128,7 +140,7 @@ pub fn ui(
             continue;
         }
         for ch in &data.channels {
-            let color = axis_color(ch.axis);
+            let color = channel_color(style.theme, data.label, ch.axis);
             // Sample the curve across the visible range for a smooth plot.
             draw_channel_curve(
                 &painter, &animation, &data.addr, ch.axis, layout, rect, &val_to_y, color,
