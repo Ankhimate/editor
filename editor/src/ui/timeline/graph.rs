@@ -9,11 +9,14 @@
 //! * drag a key horizontally → change its time (snapped, via `MoveKeys`);
 //! * drag a bezier handle → set that key's `Interp::Bezier` control points.
 //!
+//! A segment's easing lives on the key that **ends** it, so its two handles hang
+//! off the key before it (`out_handle`) and the key itself (`in_handle`), in
+//! normalized 0..1 time/value space against that segment.
+//!
 //! Value editing rebuilds the whole key value (both axes of a vec2) so the
 //! sibling channel is preserved.
 
 use super::model::{TimelineModel, VisibleRow};
-use super::tree::is_folded;
 use super::{Layout, ViewState};
 use crate::app_state::AppState;
 use crate::commands::key_cmds::{AddKey, BoneProperty, KeyRef, KeyValue, MoveKeys, TimelineAddr};
@@ -49,7 +52,18 @@ pub fn ui(
     }
 
     // Gather channels from the unfolded, editable property rows.
-    let folded = |id: u64| is_folded(ui, id);
+    //
+    // Fold state is read into an owned set first: `visible_rows` borrows `ui`
+    // through the predicate, and the row loop below needs `ui` mutably to run
+    // handle interactions.
+    // The predicate closes over the context, not over `ui`: the row loop below
+    // needs `ui` mutably for the handle interactions, and a closure holding `ui`
+    // would still be alive across it.
+    let ctx = ui.ctx().clone();
+    let folded = move |id: u64| -> bool {
+        ctx.memory(|m| m.data.get_temp(egui::Id::new(("tl_fold", id))))
+            .unwrap_or(false)
+    };
     let rows = model.visible_rows(&folded);
 
     // Auto-fit the value range across all shown channels.
@@ -93,6 +107,7 @@ pub fn ui(
     let Some(animation) = animation else { return };
 
     let mut pending: Option<Edit> = None;
+    let mut interp_edit: Option<InterpEdit> = None;
 
     for row in &rows {
         let VisibleRow::Property { data, .. } = row else {
@@ -107,6 +122,15 @@ pub fn ui(
             draw_channel_curve(
                 &painter, &animation, &data.addr, ch.axis, layout, rect, &val_to_y, color,
             );
+
+            // Bezier handles, one pair per segment. Drawn before the key dots
+            // so a handle sitting on top of a key does not hide it.
+            if let Some(edit) = bezier_handles(
+                ui, &painter, &data.addr, &data.keys, &ch.values, layout, rect, &val_to_y, lo, hi,
+                color,
+            ) {
+                interp_edit = Some(edit);
+            }
 
             // Key points, draggable in value (y) and time (x).
             for k in &data.keys {
@@ -165,6 +189,143 @@ pub fn ui(
     if let Some(edit) = pending {
         apply_edit(state, anim, &animation, edit);
     }
+    if let Some(edit) = interp_edit {
+        state.dispatch(Box::new(crate::commands::key_cmds::SetInterp::new(
+            anim,
+            vec![KeyRef {
+                addr: edit.addr,
+                index: edit.index,
+            }],
+            edit.interp,
+        )));
+    }
+}
+
+/// A pending easing change from dragging a handle.
+struct InterpEdit {
+    addr: TimelineAddr,
+    /// The key the easing belongs to — the one that *ends* the segment.
+    index: usize,
+    interp: Interp,
+}
+
+/// Handle radius, and half its grab box.
+const HANDLE_R: f32 = 3.5;
+
+/// A linear segment has no stored handles, so it borrows the ones that describe
+/// a straight line. Grabbing either converts the segment to a bezier without the
+/// curve jumping, which is how every curve editor behaves.
+const LINEAR_OUT: glam::Vec2 = glam::Vec2::new(1.0 / 3.0, 1.0 / 3.0);
+const LINEAR_IN: glam::Vec2 = glam::Vec2::new(2.0 / 3.0, 2.0 / 3.0);
+
+/// Draw and drag both handles of every segment in one channel.
+///
+/// Handles live in normalized 0..1 time/value space against the segment they
+/// belong to, so they are converted to and from graph coordinates here. A
+/// segment whose two keys share a value has no vertical extent to normalize
+/// against; its handle then moves in time only, which is the honest behaviour —
+/// there is no shape to give a flat run.
+#[allow(clippy::too_many_arguments)]
+fn bezier_handles(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    addr: &TimelineAddr,
+    keys: &[super::model::KeyInfo],
+    values: &[f32],
+    layout: &Layout,
+    rect: egui::Rect,
+    val_to_y: &impl Fn(f32) -> f32,
+    lo: f32,
+    hi: f32,
+    color: egui::Color32,
+) -> Option<InterpEdit> {
+    let mut edit = None;
+    for window in 0..keys.len().saturating_sub(1) {
+        let (a, b) = (&keys[window], &keys[window + 1]);
+        // Stepped holds a value: there is no curve between the keys to shape.
+        if matches!(b.interp, Interp::Stepped) {
+            continue;
+        }
+        let (Some(&va), Some(&vb)) = (values.get(a.index), values.get(b.index)) else {
+            continue;
+        };
+        let (out, inn) = match b.interp {
+            Interp::Bezier {
+                out_handle,
+                in_handle,
+            } => (out_handle, in_handle),
+            _ => (LINEAR_OUT, LINEAR_IN),
+        };
+
+        let (dt, dv) = (b.time - a.time, vb - va);
+        let to_screen = |h: glam::Vec2| {
+            egui::pos2(layout.time_to_x(a.time + h.x * dt), val_to_y(va + h.y * dv))
+        };
+        let anchors = [
+            egui::pos2(layout.time_to_x(a.time), val_to_y(va)),
+            egui::pos2(layout.time_to_x(b.time), val_to_y(vb)),
+        ];
+        if anchors[1].x < rect.left() - 40.0 || anchors[0].x > rect.right() + 40.0 {
+            continue;
+        }
+
+        for (which, handle) in [(0usize, out), (1usize, inn)] {
+            let pos = to_screen(handle);
+            let stem = anchors[which];
+            painter.line_segment(
+                [stem, pos],
+                egui::Stroke::new(1.0, color.gamma_multiply(0.45)),
+            );
+            painter.circle_filled(pos, HANDLE_R, color.gamma_multiply(0.8));
+
+            let hit = egui::Rect::from_center_size(pos, egui::vec2(12.0, 12.0));
+            let response = ui.interact(
+                hit,
+                ui.id()
+                    .with(("graph_handle", addr.stable_id(), b.index, which)),
+                egui::Sense::drag(),
+            );
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            }
+            let Some(p) = response
+                .dragged()
+                .then(|| response.interact_pointer_pos())
+                .flatten()
+            else {
+                continue;
+            };
+            // Back to normalized space. Time is clamped to the segment: a handle
+            // outside it produces a curve that doubles back in time, which is not
+            // a function of t and cannot be sampled.
+            let nx = if dt.abs() < 1e-6 {
+                0.0
+            } else {
+                ((layout.x_to_time(p.x) - a.time) / dt).clamp(0.0, 1.0)
+            };
+            let value = lo + (rect.bottom() - p.y) / rect.height().max(1.0) * (hi - lo);
+            let ny = if dv.abs() < 1e-6 {
+                handle.y
+            } else {
+                (value - va) / dv
+            };
+            let moved = glam::vec2(nx, ny);
+            let (out, inn) = if which == 0 {
+                (moved, inn)
+            } else {
+                (out, moved)
+            };
+            edit = Some(InterpEdit {
+                addr: addr.clone(),
+                index: b.index,
+                interp: Interp::Bezier {
+                    out_handle: out,
+                    in_handle: inn,
+                },
+            });
+        }
+    }
+    edit
 }
 
 /// A pending key edit from a graph drag.

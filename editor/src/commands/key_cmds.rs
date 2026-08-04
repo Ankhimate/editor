@@ -623,6 +623,19 @@ impl EditCommand for SetInterp {
         "Set Interpolation"
     }
 
+    /// Merge consecutive edits to the same keys, so dragging a bezier handle in
+    /// the graph is one undo step rather than one per pixel of mouse travel.
+    fn merge(&mut self, next: &dyn EditCommand) -> bool {
+        let Some(other) = next.as_any().downcast_ref::<SetInterp>() else {
+            return false;
+        };
+        if other.anim != self.anim || other.refs != self.refs {
+            return false;
+        }
+        self.interp = other.interp;
+        true
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
