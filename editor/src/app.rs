@@ -199,6 +199,20 @@ impl eframe::App for AnkhimateApp {
                     i.key_pressed(egui::Key::W),
                 )
             });
+            // Visibility filters. Bare digits rather than a modifier: these get
+            // flipped constantly while rigging, and a chord is a chord too many.
+            let (hide_art, hide_bones) = ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Num1),
+                    i.key_pressed(egui::Key::Num2),
+                )
+            });
+            if hide_art {
+                self.state.session.show_artwork = !self.state.session.show_artwork;
+            }
+            if hide_bones {
+                self.state.session.show_bones = !self.state.session.show_bones;
+            }
             if tab {
                 self.state.toggle_work_mode();
             }

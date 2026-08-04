@@ -175,6 +175,9 @@ fn mesh_deform(state: &AppState, slot: SlotId) -> Option<&Vec<glam::Vec2>> {
 /// Build the textured draw for a slot — a quad for a region, a triangle list for
 /// a mesh — or `None` if anything it needs is missing.
 fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
+    if !state.session.show_artwork {
+        return None;
+    }
     let slot = state.doc.skeleton.slots.get(slot_id)?;
     // Through the pose, not the slot: an attachment timeline writes the name it
     // shows into the pose, and reading the slot directly draws the setup pose for
@@ -586,6 +589,9 @@ pub fn render_bones(
     let mut mesh_draws = Vec::new();
 
     for (bone_id, bone) in state.doc.skeleton.bones.iter() {
+        if !state.session.show_bones {
+            break;
+        }
         let is_selected = state.session.is_bone_selected(bone_id);
         let is_hovered = state.session.hovered_bone == Some(bone_id);
 
@@ -1086,7 +1092,9 @@ pub fn render_bones(
     }
 
     // Artwork outlines, under the gizmos so a handle is never hidden by a line.
-    crate::ui::canvas::outline::draw(&painter, rect, state, theme);
+    if state.session.show_artwork {
+        crate::ui::canvas::outline::draw(&painter, rect, state, theme);
+    }
 
     // Draw Transform Gizmos for the selected bone
     if let Some(selected_id) = state.session.active_bone()

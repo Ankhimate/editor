@@ -232,6 +232,15 @@ pub struct Session {
 
     /// A spritesheet waiting to be sliced (T-305). Cancelling drops it.
     pub pending_atlas: Option<crate::ui::atlas::PendingAtlas>,
+    /// Draw the artwork. Off leaves the rig on its own, which is how you check
+    /// a pose you cannot see for the art covering it.
+    pub show_artwork: bool,
+    /// Draw bones and their handles. Off is for judging the art without a
+    /// skeleton drawn across it.
+    ///
+    /// Both also gate picking: something you cannot see must not be clickable, or
+    /// hiding it only half works and the half that remains is the confusing one.
+    pub show_bones: bool,
     /// The attachment under the cursor, if any: `(slot, attachment name)`.
     ///
     /// Hover has to be its own state rather than recomputed at paint time — the
@@ -320,6 +329,8 @@ impl Session {
             trace_refined: false,
             pending_trace: None,
             pending_atlas: None,
+            show_artwork: true,
+            show_bones: true,
             hovered_attachment: None,
             silhouettes: std::collections::HashMap::new(),
             atlas_drag: None,
@@ -584,5 +595,50 @@ mod tests {
         assert!(s.has_previews());
         s.clear_previews();
         assert!(!s.has_previews());
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+
+    #[test]
+    fn both_layers_start_visible() {
+        let skel = ankhimate_core::skeleton::Skeleton::new();
+        let s = Session::new(skel.default_skin);
+        assert!(s.show_artwork);
+        assert!(s.show_bones);
+    }
+
+    /// Selecting art must not drag its bone along, or every transform moves the
+    /// bone and everything else hanging off it.
+    #[test]
+    fn selecting_an_attachment_leaves_the_bone_alone() {
+        use ankhimate_core::skeleton::{Bone, Skeleton};
+        use ankhimate_core::slot::Slot;
+
+        let mut skel = Skeleton::new();
+        let bone = skel.add_bone(Bone {
+            name: "arm".into(),
+            parent: None,
+            length: 10.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let slot = skel.add_slot(Slot::new("art".to_string(), bone));
+
+        let mut s = Session::new(skel.default_skin);
+        s.select_bone(Some(bone));
+        assert_eq!(s.edit_target, EditTarget::Bone);
+
+        s.select_attachment(slot, "art", bone);
+        assert!(s.selected_bones.is_empty(), "the bone came along uninvited");
+        assert_eq!(s.edit_target, EditTarget::Attachment);
+        assert_eq!(s.active_slot(), Some(slot));
+
+        // And back: clicking a bone returns the gizmo to the bone.
+        s.select_bone(Some(bone));
+        assert_eq!(s.edit_target, EditTarget::Bone);
     }
 }

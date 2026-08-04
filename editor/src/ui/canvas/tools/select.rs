@@ -164,20 +164,30 @@ fn update_attachment_mode(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2
         ctx.ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
 
-    let under_cursor = mouse_screen
-        .filter(|_| ctx.response.hovered())
-        .and_then(|mouse_p| {
-            let world = ctx
-                .state
-                .session
-                .camera
-                .screen_to_world(mouse_p, viewport_size);
-            pick_attachment(ctx.state, world)
-        });
+    // Bones first, and they win. Artwork covers most of the viewport, so letting
+    // it answer first meant that once you selected a piece of art every bone
+    // underneath it became unclickable — a one-way door out of bone editing.
+    update_hover_state(ctx);
+    let under_cursor = if ctx.state.session.hovered_bone.is_some() {
+        None
+    } else {
+        mouse_screen
+            .filter(|_| ctx.response.hovered())
+            .and_then(|mouse_p| {
+                let world = ctx
+                    .state
+                    .session
+                    .camera
+                    .screen_to_world(mouse_p, viewport_size);
+                pick_attachment(ctx.state, world)
+            })
+    };
     ctx.state.session.hovered_attachment = under_cursor
         .as_ref()
         .map(|(slot, name, _)| (*slot, name.clone()));
-    if under_cursor.is_some() && ctx.state.session.hovered_gizmo == G::None {
+    if ctx.state.session.hovered_gizmo == G::None
+        && (under_cursor.is_some() || ctx.state.session.hovered_bone.is_some())
+    {
         ctx.ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
@@ -192,6 +202,8 @@ fn update_attachment_mode(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2
                         .screen_to_world(mouse_p, viewport_size),
                 );
             }
+        } else if let Some(bone) = ctx.state.session.hovered_bone {
+            ctx.state.session.select_bone(Some(bone));
         } else if let Some((slot, name, bone)) = under_cursor {
             let already = matches!(
                 &ctx.state.session.selection,
@@ -215,11 +227,8 @@ fn update_attachment_mode(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2
                 ctx.state.session.select_attachment(slot, name, bone);
             }
         } else {
-            // Clicking empty space still selects bones, so leaving attachment
-            // mode does not require a trip to the panel.
-            update_hover_state(ctx);
-            let hovered = ctx.state.session.hovered_bone;
-            ctx.state.session.select_bone(hovered);
+            // Empty space clears the selection, the same as it does for bones.
+            ctx.state.session.select_bone(None);
         }
     }
 }
@@ -529,6 +538,11 @@ fn pick_attachment(
     ankhimate_core::ids::BoneId,
 )> {
     use ankhimate_core::attachment::Attachment;
+
+    // Same rule as bones: hidden art is not clickable.
+    if !state.session.show_artwork {
+        return None;
+    }
 
     let inside = |a: glam::Vec2, b: glam::Vec2, c: glam::Vec2| {
         let sign = |p: glam::Vec2, q: glam::Vec2, r: glam::Vec2| (q - p).perp_dot(r - p);

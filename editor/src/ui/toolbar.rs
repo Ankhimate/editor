@@ -127,6 +127,41 @@ pub fn ui(
         ui.add(egui::Separator::default().vertical().shrink(6.0));
         ui.add_space(6.0);
 
+        // ── Visibility filters ─────────────────────────────────────────
+        // Toggles rather than a menu: on a dense rig these get flipped every few
+        // seconds, and a menu makes that four clicks instead of one.
+        for (icon, tooltip, flag) in [
+            (
+                egui_phosphor::regular::IMAGE_SQUARE,
+                "Show artwork (1)",
+                &mut state.session.show_artwork,
+            ),
+            (
+                egui_phosphor::regular::BONE,
+                "Show bones (2)",
+                &mut state.session.show_bones,
+            ),
+        ] {
+            let on = *flag;
+            let button = egui::Button::new(egui::RichText::new(icon).size(15.0).color(if on {
+                theme.primary()
+            } else {
+                ui.visuals().weak_text_color()
+            }))
+            .fill(if on {
+                ui.visuals().faint_bg_color
+            } else {
+                egui::Color32::TRANSPARENT
+            });
+            if ui.add(button).on_hover_text(tooltip).clicked() {
+                *flag = !on;
+            }
+        }
+
+        ui.add_space(6.0);
+        ui.add(egui::Separator::default().vertical().shrink(6.0));
+        ui.add_space(6.0);
+
         // ── Undo / Redo ────────────────────────────────────────────────
         let can_undo = state.history.can_undo();
         let can_redo = state.history.can_redo();

@@ -50,6 +50,12 @@ pub fn hit_test_bone(
 /// Shared logic to update hover state for all tools
 pub fn update_hover_state(ctx: &mut ToolContext) {
     ctx.state.session.hovered_bone = None;
+    // A hidden bone is not on screen to click. Half-hiding it — invisible but
+    // still stealing clicks from the art underneath — is worse than not hiding
+    // it at all.
+    if !ctx.state.session.show_bones {
+        return;
+    }
     if ctx.response.hovered()
         && let Some(mouse_pos) = ctx.ui.input(|i| i.pointer.hover_pos())
     {

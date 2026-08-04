@@ -212,14 +212,44 @@ pub fn silhouette(image: &image::RgbaImage, alpha_threshold: u8) -> Vec<Vec<Vec2
     if !mask.iter().any(|solid| *solid) {
         return Vec::new();
     }
-    // Half a pixel: below that the simplification is invisible at any sane zoom,
-    // above it the outline starts cutting corners off the art.
-    let tolerance = 0.5;
+    // Marching squares walks texel edges, so a raw contour is a staircase — every
+    // diagonal comes out as steps, and zoomed in it reads as a rendering fault
+    // rather than as the shape of the art.
+    //
+    // Simplify first to drop the steps, then round the remaining corners. Doing
+    // it the other way round smooths the staircase into a wobble and then keeps
+    // the wobble.
+    let tolerance = 1.5;
     find_contours(&mask, width, height)
         .into_iter()
-        .map(|c| simplify(&c, tolerance))
+        .map(|c| chaikin(&simplify(&c, tolerance), 2))
         .filter(|c| c.len() >= 3)
         .collect()
+}
+
+/// Corner-cutting subdivision: replace each corner with the points a quarter and
+/// three quarters along its edges.
+///
+/// Two passes take a simplified staircase to something that reads as a curve
+/// without pulling the line far off the pixels — the limit shape stays inside
+/// the original polygon's convex corners, so the outline never swells past the
+/// art it is describing.
+fn chaikin(points: &[Vec2], passes: usize) -> Vec<Vec2> {
+    let mut current = points.to_vec();
+    for _ in 0..passes {
+        if current.len() < 3 {
+            break;
+        }
+        let mut next = Vec::with_capacity(current.len() * 2);
+        for i in 0..current.len() {
+            let a = current[i];
+            let b = current[(i + 1) % current.len()];
+            next.push(a.lerp(b, 0.25));
+            next.push(a.lerp(b, 0.75));
+        }
+        current = next;
+    }
+    current
 }
 
 pub fn trace(image: &image::RgbaImage, options: TraceOptions) -> Option<Traced> {
@@ -847,12 +877,14 @@ mod tests {
         let max_x = xs.iter().cloned().fold(f32::MIN, f32::max);
         let min_y = ys.iter().cloned().fold(f32::MAX, f32::min);
         let max_y = ys.iter().cloned().fold(f32::MIN, f32::max);
-        assert!((min_x - 5.0).abs() < 1.0, "left edge at {min_x}");
-        assert!((max_x - 15.0).abs() < 1.0, "right edge at {max_x}");
-        assert!((min_y - 5.0).abs() < 1.0, "top edge at {min_y}");
-        assert!((max_y - 15.0).abs() < 1.0, "bottom edge at {max_y}");
-        // A rectangle needs four corners and should not cost forty.
-        assert!(contours[0].len() <= 8, "{} points", contours[0].len());
+        // Corner rounding pulls the extremes in by a fraction of a pixel; the
+        // outline must still sit on the art, not float around it.
+        assert!((min_x - 5.0).abs() < 1.5, "left edge at {min_x}");
+        assert!((max_x - 15.0).abs() < 1.5, "right edge at {max_x}");
+        assert!((min_y - 5.0).abs() < 1.5, "top edge at {min_y}");
+        assert!((max_y - 15.0).abs() < 1.5, "bottom edge at {max_y}");
+        // Two smoothing passes over four corners, not a point per texel.
+        assert!(contours[0].len() <= 32, "{} points", contours[0].len());
     }
 
     /// Holes are the reason to trace rather than draw a bounding box: goggles,
