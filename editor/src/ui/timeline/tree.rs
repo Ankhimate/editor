@@ -83,9 +83,25 @@ pub fn ui(
                     egui::FontId::proportional(11.0),
                     visuals.weak_text_color(),
                 );
-                // Group label.
+                // Group icon, tinted with the bone's group colour (T-505) so a
+                // limb reads as one thing down the whole panel.
+                let tint = data
+                    .tint
+                    .map(|[r, g, b, _]| {
+                        let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8;
+                        egui::Color32::from_rgb(to_u8(r), to_u8(g), to_u8(b))
+                    })
+                    .unwrap_or_else(|| visuals.weak_text_color());
                 painter.text(
                     egui::pos2(rect.left() + 20.0, y + ROW_H / 2.0),
+                    egui::Align2::LEFT_CENTER,
+                    data.icon,
+                    egui::FontId::proportional(12.0),
+                    tint,
+                );
+                // Group label.
+                painter.text(
+                    egui::pos2(rect.left() + 36.0, y + ROW_H / 2.0),
                     egui::Align2::LEFT_CENTER,
                     &data.label,
                     egui::FontId::proportional(12.0),
@@ -93,16 +109,24 @@ pub fn ui(
                 );
             }
             VisibleRow::Property { data, .. } => {
+                let color = if data.read_only {
+                    visuals.weak_text_color()
+                } else {
+                    visuals.text_color()
+                };
                 painter.text(
-                    egui::pos2(rect.left() + 34.0, y + ROW_H / 2.0),
+                    egui::pos2(rect.left() + 40.0, y + ROW_H / 2.0),
+                    egui::Align2::LEFT_CENTER,
+                    data.icon,
+                    egui::FontId::proportional(11.0),
+                    property_tint(data.label, color),
+                );
+                painter.text(
+                    egui::pos2(rect.left() + 56.0, y + ROW_H / 2.0),
                     egui::Align2::LEFT_CENTER,
                     data.label,
                     egui::FontId::proportional(11.0),
-                    if data.read_only {
-                        visuals.weak_text_color()
-                    } else {
-                        visuals.text_color()
-                    },
+                    color,
                 );
             }
         }
@@ -122,6 +146,23 @@ pub fn ui(
 
     // Suppress unused warning in builds where state is not read yet.
     let _ = state;
+}
+
+/// The hue for a property glyph.
+///
+/// The same hues the graph plots those channels in, so a green `rotate` row and
+/// a green curve are recognisably the same thing. Read-only rows keep the text
+/// colour: they have no curve to match.
+fn property_tint(label: &str, fallback: egui::Color32) -> egui::Color32 {
+    match label {
+        "translate" => egui::Color32::from_rgb(110, 160, 230),
+        "rotate" => egui::Color32::from_rgb(110, 200, 110),
+        "scale" => egui::Color32::from_rgb(220, 160, 90),
+        "shear" => egui::Color32::from_rgb(190, 140, 220),
+        "color" => egui::Color32::from_rgb(220, 120, 150),
+        "attachment" => egui::Color32::from_rgb(126, 176, 224),
+        _ => fallback,
+    }
 }
 
 /// Subtle alternating band, a touch lighter than the panel.

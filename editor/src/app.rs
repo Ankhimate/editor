@@ -115,6 +115,7 @@ impl AnkhimateApp {
         let skins = tiles.insert_pane(Tab::Skins);
         let tree = tiles.insert_pane(Tab::Hierarchy);
         let timeline = tiles.insert_pane(Tab::Timeline);
+        let graph = tiles.insert_pane(Tab::Graph);
         let animations = tiles.insert_pane(Tab::Animations);
         let events = tiles.insert_pane(Tab::Events);
         let constraints = tiles.insert_pane(Tab::Constraints);
@@ -130,7 +131,7 @@ impl AnkhimateApp {
         // Animations and events share a tile with the timeline: all three answer
         // "what is in this clip", and the timeline is where you already are when
         // that question comes up.
-        let timeline_group = vec![timeline, animations, events];
+        let timeline_group = vec![timeline, graph, animations, events];
         let tree_tab = tiles.insert_tab_tile(vec![tree]);
         let timeline_tab = tiles.insert_tab_tile(timeline_group);
 

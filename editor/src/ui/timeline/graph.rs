@@ -43,7 +43,10 @@ pub fn ui(
     layout: &Layout,
     rect: egui::Rect,
 ) {
-    let painter = ui.painter_at(rect);
+    // Clipped to the sheet: the curve sampler walks every pixel of the plot and
+    // the handle interactions allocate their own rects, so without this both
+    // spill left over the row names.
+    let painter = ui.painter_at(rect).with_clip_rect(rect);
     let visuals = ui.visuals().clone();
     painter.rect_filled(rect, 0.0, visuals.extreme_bg_color);
 
@@ -126,8 +129,8 @@ pub fn ui(
             // Bezier handles, one pair per segment. Drawn before the key dots
             // so a handle sitting on top of a key does not hide it.
             if let Some(edit) = bezier_handles(
-                ui, &painter, &data.addr, &data.keys, &ch.values, layout, rect, &val_to_y, lo, hi,
-                color,
+                ui, &painter, &data.addr, ch.axis, &data.keys, &ch.values, layout, rect, &val_to_y,
+                lo, hi, color,
             ) {
                 interp_edit = Some(edit);
             }
@@ -152,6 +155,9 @@ pub fn ui(
 
                 let hit =
                     egui::Rect::from_center_size(center, egui::vec2(KEY_R * 3.0, KEY_R * 3.0));
+                if center.x < rect.left() {
+                    continue;
+                }
                 let resp = ui.interact(
                     hit,
                     ui.id()
@@ -230,6 +236,7 @@ fn bezier_handles(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
     addr: &TimelineAddr,
+    axis: usize,
     keys: &[super::model::KeyInfo],
     values: &[f32],
     layout: &Layout,
@@ -279,10 +286,15 @@ fn bezier_handles(
             painter.circle_filled(pos, HANDLE_R, color.gamma_multiply(0.8));
 
             let hit = egui::Rect::from_center_size(pos, egui::vec2(12.0, 12.0));
+            // A handle whose grab box hangs over the row names would steal
+            // clicks meant for the tree.
+            if !rect.intersects(hit) || hit.center().x < rect.left() {
+                continue;
+            }
             let response = ui.interact(
                 hit,
                 ui.id()
-                    .with(("graph_handle", addr.stable_id(), b.index, which)),
+                    .with(("graph_handle", addr.stable_id(), axis, b.index, which)),
                 egui::Sense::drag(),
             );
             if response.hovered() {

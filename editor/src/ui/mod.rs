@@ -24,6 +24,7 @@ pub enum Tab {
     Inspector,
     Hierarchy,
     Timeline,
+    Graph,
     DrawOrder,
     Assets,
     Skins,
@@ -38,11 +39,12 @@ impl Tab {
     /// One list rather than a menu that has to be edited whenever a pane is
     /// added — a View menu missing the pane you are looking for is worse than no
     /// View menu, because it reads as "that panel does not exist".
-    pub const ALL: [Tab; 10] = [
+    pub const ALL: [Tab; 11] = [
         Tab::Canvas,
         Tab::Hierarchy,
         Tab::Inspector,
         Tab::Timeline,
+        Tab::Graph,
         Tab::Animations,
         Tab::Events,
         Tab::Constraints,
@@ -56,7 +58,8 @@ impl Tab {
             Tab::Canvas => "Viewport",
             Tab::Inspector => "Properties",
             Tab::Hierarchy => "Hierarchy",
-            Tab::Timeline => "Timeline",
+            Tab::Timeline => "Dopesheet",
+            Tab::Graph => "Graph",
             Tab::DrawOrder => "Draw Order",
             Tab::Assets => "Assets",
             Tab::Skins => "Skins",
@@ -72,6 +75,7 @@ impl Tab {
             Tab::Inspector => egui_phosphor::fill::SLIDERS,
             Tab::Hierarchy => egui_phosphor::fill::TREE_STRUCTURE,
             Tab::Timeline => egui_phosphor::fill::FILM_STRIP,
+            Tab::Graph => egui_phosphor::fill::CHART_LINE,
             Tab::DrawOrder => egui_phosphor::fill::STACK,
             Tab::Assets => egui_phosphor::fill::IMAGES,
             Tab::Skins => egui_phosphor::fill::T_SHIRT,
@@ -121,7 +125,14 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                 egui::Frame::NONE
                     .inner_margin(egui::Margin::same(4))
                     .show(ui, |ui| {
-                        timeline::ui(ui, self.state);
+                        timeline::dopesheet(ui, self.state);
+                    });
+            }
+            Tab::Graph => {
+                egui::Frame::NONE
+                    .inner_margin(egui::Margin::same(4))
+                    .show(ui, |ui| {
+                        timeline::graph_view(ui, self.state);
                     });
             }
             Tab::DrawOrder => {

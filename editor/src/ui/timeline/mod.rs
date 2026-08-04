@@ -92,7 +92,25 @@ impl Default for ViewState {
     }
 }
 
+/// The dopesheet pane.
+pub fn dopesheet(ui: &mut egui::Ui, state: &mut AppState) {
+    panel(ui, state, SheetMode::Dopesheet)
+}
+
+/// The graph pane.
+///
+/// A separate pane rather than a toggle inside one panel: they answer different
+/// questions — *when* does something happen versus *how* does it get there — and
+/// an animator wants both on screen at once, which a toggle makes impossible.
+pub fn graph_view(ui: &mut egui::Ui, state: &mut AppState) {
+    panel(ui, state, SheetMode::Graph)
+}
+
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
+    panel(ui, state, SheetMode::Dopesheet)
+}
+
+fn panel(ui: &mut egui::Ui, state: &mut AppState, mode: SheetMode) {
     // Setup mode has no playhead semantics (the viewport shows the setup pose
     // whatever the timeline says), so the panel collapses to an invitation
     // rather than showing a dopesheet that cannot drive anything (T-207).
@@ -106,13 +124,17 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     }
     let anim_id = state.session.active_animation.unwrap();
 
-    let view_id = ui.id().with("tl_view");
+    // One shared view state, keyed on the context rather than on the pane: the
+    // dopesheet and the graph scroll and zoom together, which is the whole point
+    // of having them side by side.
+    let view_id = egui::Id::new("tl_view");
     let mut view: ViewState = ui
         .ctx()
         .memory(|m| m.data.get_temp(view_id))
         .unwrap_or_default();
+    view.mode = mode;
 
-    // ── Header: clip + transport + mode toggle ───────────────────────────
+    // ── Header: transport and view controls ──────────────────────────────
     header(ui, state, &mut view);
     ui.separator();
 
@@ -142,13 +164,17 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
             let new_pps = (view.px_per_sec * factor).clamp(MIN_PX_PER_SEC, MAX_PX_PER_SEC);
             view.scroll_sec = (time_at_cursor - (px - sheet_x0_now) / new_pps).max(0.0);
             view.px_per_sec = new_pps;
-        } else {
-            // Plain wheel scrolls time. Vertical wheel maps to horizontal because
-            // most mice have no horizontal wheel; a real hwheel (dx) also works.
+        } else if modifiers.shift || dx != 0.0 {
+            // Shift-wheel, or a real horizontal wheel, scrolls time.
             let scroll = if dx != 0.0 { dx } else { dy };
             if scroll != 0.0 {
                 view.scroll_sec = (view.scroll_sec - scroll / view.px_per_sec).max(0.0);
             }
+        } else if dy != 0.0 {
+            // Plain wheel scrolls the rows. It used to scroll *time*, which left
+            // the row list with no way to move at all — on a rig with sixty rows
+            // everything below the fold was unreachable.
+            view.scroll_y = (view.scroll_y - dy).max(0.0);
         }
     }
 
@@ -198,36 +224,37 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
 }
 
 /// The header row above the ruler.
+///
+/// Grouped rather than a single run of buttons: transport, then what is being
+/// keyed, then zoom. The clip picker used to live here and does not any more —
+/// choosing which animation to work on is the Animations pane's job, and having
+/// it in two places meant two things to keep in sync and one more control
+/// between the user and the play button.
 fn header(ui: &mut egui::Ui, state: &mut AppState, view: &mut ViewState) {
     ui.horizontal(|ui| {
-        pick_clip_combo(ui, state);
-        if ui
-            .button(egui_phosphor::regular::PLUS)
-            .on_hover_text("New animation")
-            .clicked()
-        {
-            create_clip(state);
-        }
-        clip_menu(ui, state);
-        ui.separator();
-        transport::ui(ui, state);
-        ui.separator();
-        // Dopesheet / Graph toggle.
-        if ui
-            .selectable_label(view.mode == SheetMode::Dopesheet, "Dopesheet")
-            .clicked()
-        {
-            view.mode = SheetMode::Dopesheet;
-        }
-        if ui
-            .selectable_label(view.mode == SheetMode::Graph, "Graph")
-            .clicked()
-        {
-            view.mode = SheetMode::Graph;
-        }
+        ui.spacing_mut().item_spacing.x = 3.0;
+        ui.add_space(2.0);
 
-        ui.separator();
-        // Zoom controls — reliable regardless of wheel focus.
+        // The clip's name, as a label. Read-only on purpose: it says what you are
+        // editing without being a third place to change it.
+        let name = state
+            .session
+            .active_animation
+            .and_then(|id| state.doc.animations.get(id))
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+        ui.label(
+            egui::RichText::new(format!("{} {name}", egui_phosphor::fill::FILM_SLATE))
+                .strong()
+                .size(11.5),
+        );
+
+        group_gap(ui);
+        transport::ui(ui, state);
+
+        group_gap(ui);
+        // Zoom, at the end where it is out of the way of the controls used every
+        // few seconds.
         if ui
             .button(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS)
             .on_hover_text("Zoom out (Ctrl+scroll)")
@@ -242,16 +269,25 @@ fn header(ui: &mut egui::Ui, state: &mut AppState, view: &mut ViewState) {
         {
             view.px_per_sec = (view.px_per_sec * 1.4).clamp(MIN_PX_PER_SEC, MAX_PX_PER_SEC);
         }
-        // Percentage readout doubles as a fit-to-clip button.
         let frame_px = view.px_per_sec / state.doc.meta.fps.max(1) as f32;
         if ui
-            .button(format!("{frame_px:.0}px/f"))
-            .on_hover_text("Fit clip to view")
+            .button(format!("{frame_px:.0} px/f"))
+            .on_hover_text("Fit the clip to the view")
             .clicked()
         {
             fit_to_clip(state, view);
         }
     });
+}
+
+/// The space between two groups of controls.
+///
+/// A separator plus symmetric padding, in one place, so the groups do not drift
+/// apart as controls are added and removed.
+fn group_gap(ui: &mut egui::Ui) {
+    ui.add_space(6.0);
+    ui.add(egui::Separator::default().vertical().shrink(4.0));
+    ui.add_space(6.0);
 }
 
 /// Set zoom + scroll so the whole active clip fills the sheet width.
@@ -396,106 +432,7 @@ fn create_clip(state: &mut AppState) {
     state.set_work_mode(crate::session::WorkMode::Animate);
 }
 
-/// Manage the active clip: rename, duration, loop, duplicate, delete (T-208).
-///
-/// A menu rather than a modal — every action here is one click deep and
-/// undoable, so a dialog would only add ceremony.
-fn clip_menu(ui: &mut egui::Ui, state: &mut AppState) {
-    use crate::commands::key_cmds::{
-        DeleteAnimation, DuplicateAnimation, RenameAnimation, SetAnimationMeta,
-    };
-
-    let Some(anim_id) = state.session.active_animation else {
-        return;
-    };
-    let Some(anim) = state.doc.animations.get(anim_id) else {
-        return;
-    };
-    let (name, duration, looping) = (anim.name.clone(), anim.duration, anim.looping);
-    let fps = state.doc.meta.fps.max(1) as f32;
-
-    // Collected inside the menu, applied after it closes: dispatching mid-menu
-    // would borrow `state` while the closure still holds it.
-    let mut rename: Option<String> = None;
-    let mut meta: Option<(f32, bool)> = None;
-    let mut duplicate = false;
-    let mut delete = false;
-
-    ui.menu_button(egui_phosphor::regular::DOTS_THREE, |ui| {
-        ui.set_min_width(220.0);
-
-        ui.horizontal(|ui| {
-            ui.label("Name");
-            let mut edited = name.clone();
-            if ui
-                .add(egui::TextEdit::singleline(&mut edited).desired_width(140.0))
-                .lost_focus()
-                && edited != name
-                && !edited.trim().is_empty()
-            {
-                rename = Some(edited.trim().to_string());
-            }
-        });
-
-        // Duration is authored in frames — that is the unit the dopesheet, the
-        // ruler and the user all think in; seconds are the storage detail.
-        ui.horizontal(|ui| {
-            ui.label("Frames");
-            let mut frames = (duration * fps).round().max(1.0);
-            if ui
-                .add(
-                    egui::DragValue::new(&mut frames)
-                        .range(1.0..=100_000.0)
-                        .speed(1.0),
-                )
-                .on_hover_text("Shortening keeps keys past the end — they are flagged, not deleted")
-                .changed()
-            {
-                meta = Some((frames / fps, looping));
-            }
-        });
-
-        let mut loop_flag = looping;
-        if ui
-            .checkbox(&mut loop_flag, "Loops")
-            .on_hover_text("Authoring intent, carried to the runtime")
-            .changed()
-        {
-            meta = Some((duration, loop_flag));
-        }
-
-        ui.separator();
-        if ui.button("Duplicate").clicked() {
-            duplicate = true;
-            ui.close();
-        }
-        if ui.button("Delete").clicked() {
-            delete = true;
-            ui.close();
-        }
-    });
-
-    if let Some(new_name) = rename {
-        state.dispatch(Box::new(RenameAnimation::new(anim_id, new_name)));
-    }
-    if let Some((duration, looping)) = meta {
-        state.dispatch(Box::new(SetAnimationMeta::new(anim_id, duration, looping)));
-    }
-    if duplicate {
-        state.dispatch(Box::new(DuplicateAnimation::new(anim_id)));
-        // Select the copy: duplicating is how you start a variation, so that is
-        // what you want to be editing.
-        if let Some((id, _)) = state.doc.animations.iter().last() {
-            state.session.active_animation = Some(id);
-            state.set_playhead(0.0);
-        }
-    }
-    if delete {
-        state.dispatch(Box::new(DeleteAnimation::new(anim_id)));
-        state.session.active_animation = state.doc.animations.iter().next().map(|(id, _)| id);
-        state.set_playhead(0.0);
-        if state.session.active_animation.is_none() {
-            state.set_work_mode(crate::session::WorkMode::Setup);
-        }
-    }
-}
+// The clip menu that used to live here — rename, duplicate, delete, duration —
+// moved to the Animations pane. Managing clips and scrubbing one are different
+// jobs, and a menu that did both meant the same command reachable from two
+// places, each with its own idea of what was selected.

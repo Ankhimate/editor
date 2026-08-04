@@ -23,6 +23,9 @@ pub struct KeyInfo {
 /// A property row (e.g. `rotate`) under a target group.
 pub struct PropertyRow {
     pub label: &'static str,
+    /// Glyph for the property kind. In a sixty-row list the word is the slowest
+    /// way to find "the rotate one".
+    pub icon: &'static str,
     pub addr: TimelineAddr,
     pub keys: Vec<KeyInfo>,
     /// Scalar channels this property plots in the graph: `[(name, values)]`,
@@ -43,6 +46,10 @@ pub struct GraphChannel {
 /// A target group (one bone or one slot) with its property rows.
 pub struct Group {
     pub label: String,
+    /// Icon and tint for the row, so a bone row and a slot row are told apart
+    /// without reading either name.
+    pub icon: &'static str,
+    pub tint: Option<[f32; 4]>,
     pub rows: Vec<PropertyRow>,
     /// A stable key for fold state in egui memory.
     pub fold_id: u64,
@@ -105,8 +112,21 @@ impl TimelineModel {
             summary.sort_by(f32::total_cmp);
             summary.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
 
+            let (icon, tint) = match key {
+                GroupKey::Bone(b) => (
+                    egui_phosphor::fill::BONE,
+                    Some(crate::ui::canvas::renderer::group_color(
+                        &state.doc.skeleton,
+                        b,
+                    )),
+                ),
+                GroupKey::Slot(_) => (egui_phosphor::fill::CIRCLE_DASHED, None),
+                GroupKey::Global => (egui_phosphor::fill::STACK, None),
+            };
             groups.push(Group {
                 label: key.label(&bone_name, &slot_name),
+                icon,
+                tint,
                 rows,
                 fold_id: key.fold_id(),
                 summary_times: summary,
@@ -228,6 +248,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Bone(*bone),
                 PropertyRow {
                     label: "translate",
+                    icon: egui_phosphor::fill::ARROWS_OUT_CARDINAL,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Translate,
@@ -244,6 +265,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Bone(*bone),
                 PropertyRow {
                     label: "rotate",
+                    icon: egui_phosphor::fill::ARROW_CLOCKWISE,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Rotate,
@@ -260,6 +282,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Bone(*bone),
                 PropertyRow {
                     label: "scale",
+                    icon: egui_phosphor::fill::CORNERS_OUT,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Scale,
@@ -276,6 +299,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Bone(*bone),
                 PropertyRow {
                     label: "shear",
+                    icon: egui_phosphor::fill::PARALLELOGRAM,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Shear,
@@ -305,6 +329,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Slot(*slot),
                 PropertyRow {
                     label: "color",
+                    icon: egui_phosphor::fill::PALETTE,
                     addr: TimelineAddr::SlotColor { slot: *slot },
                     keys: infos,
                     channels: vec![GraphChannel {
@@ -329,6 +354,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 GroupKey::Slot(*slot),
                 PropertyRow {
                     label: "attachment",
+                    icon: egui_phosphor::fill::IMAGE_SQUARE,
                     addr: TimelineAddr::SlotAttachment { slot: *slot },
                     keys: infos,
                     channels: Vec::new(),
@@ -364,6 +390,9 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
     }
 }
 
+/// A row the timeline can show but not edit — constraint mixes, deform, draw
+/// order. They share one glyph because what matters about them here is that they
+/// are *not* editable, not which kind they are.
 fn read_only_row(label: &'static str, keys: impl Iterator<Item = (f32, Interp)>) -> PropertyRow {
     let infos = keys
         .enumerate()
@@ -375,6 +404,7 @@ fn read_only_row(label: &'static str, keys: impl Iterator<Item = (f32, Interp)>)
         .collect();
     PropertyRow {
         label,
+        icon: egui_phosphor::fill::LOCK_SIMPLE,
         // A harmless placeholder addr; read-only rows are not edited here.
         addr: TimelineAddr::SlotColor {
             slot: Default::default(),
