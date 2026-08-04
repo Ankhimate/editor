@@ -1,4 +1,4 @@
-﻿use crate::app_state::AppState;
+use crate::app_state::AppState;
 use crate::theme;
 use crate::ui::{AppBehavior, Tab};
 use eframe::egui;
@@ -78,8 +78,34 @@ impl AnkhimateApp {
     }
 }
 
-impl Default for AnkhimateApp {
-    fn default() -> Self {
+impl AnkhimateApp {
+    /// The tile id of a pane, if it is still in the tree at all.
+    fn find_pane(&self, tab: crate::ui::Tab) -> Option<egui_tiles::TileId> {
+        self.tree.tiles.iter().find_map(|(id, tile)| match tile {
+            egui_tiles::Tile::Pane(pane) if *pane == tab => Some(*id),
+            _ => None,
+        })
+    }
+
+    /// Put a pane back into the layout.
+    ///
+    /// Dropped next to whatever is at the root rather than restored to its
+    /// original neighbour: the tree has been rearranged by hand since, and
+    /// guessing where it "should" go would fight the arrangement the user made.
+    fn add_pane(&mut self, tab: crate::ui::Tab) {
+        let pane = self.tree.tiles.insert_pane(tab);
+        match self.tree.root() {
+            Some(root) => {
+                let tab_tile = self.tree.tiles.insert_tab_tile(vec![pane]);
+                let new_root = self.tree.tiles.insert_horizontal_tile(vec![root, tab_tile]);
+                self.tree.root = Some(new_root);
+            }
+            None => self.tree.root = Some(pane),
+        }
+    }
+
+    /// The starting arrangement, also used by View → Reset Layout.
+    fn default_layout() -> Tree<Tab> {
         let mut tiles = Tiles::default();
 
         let canvas = tiles.insert_pane(Tab::Canvas);
@@ -105,10 +131,14 @@ impl Default for AnkhimateApp {
         let center_row = tiles.insert_horizontal_tile(vec![canvas_tab, right]);
         let root = tiles.insert_vertical_tile(vec![center_row, timeline_tab]);
 
-        let tree = Tree::new("ankhimate_tree", root, tiles);
+        Tree::new("ankhimate_tree", root, tiles)
+    }
+}
 
+impl Default for AnkhimateApp {
+    fn default() -> Self {
         Self {
-            tree,
+            tree: Self::default_layout(),
             theme: theme::Theme::default(),
             available_themes: vec![theme::Theme::default()],
             state: AppState::default(),
@@ -485,6 +515,65 @@ impl eframe::App for AnkhimateApp {
                                 }
                             });
 
+                            // ── View menu ────────────────────────────────
+                            // Panels are dockable, which means they are also
+                            // closable, which means there has to be a way back.
+                            // Before this, closing a panel lost it until the
+                            // layout was reset by hand.
+                            ui.menu_button("View", |ui| {
+                                ui.set_min_width(210.0);
+                                for tab in crate::ui::Tab::ALL {
+                                    let found = self.find_pane(tab);
+                                    let mut on = found.is_some_and(|id| self.tree.is_visible(id));
+                                    let label = format!("{}  {}", tab.icon(), tab.title());
+                                    if ui.checkbox(&mut on, label).clicked() {
+                                        match found {
+                                            Some(id) => self.tree.set_visible(id, on),
+                                            // The pane was removed from the tree
+                                            // entirely rather than hidden, so
+                                            // ticking it has to put one back.
+                                            None => self.add_pane(tab),
+                                        }
+                                    }
+                                }
+                                ui.separator();
+                                // Layer toggles live here too: they are "what is
+                                // drawn", the same question the panel list asks.
+                                ui.checkbox(
+                                    &mut self.state.session.show_artwork,
+                                    format!(
+                                        "{}  Artwork",
+                                        egui_phosphor::fill::IMAGE_SQUARE
+                                    ),
+                                );
+                                ui.checkbox(
+                                    &mut self.state.session.show_bones,
+                                    format!("{}  Bones", egui_phosphor::fill::BONE),
+                                );
+                                if !self.state.session.hidden_slots.is_empty() {
+                                    let hidden = self.state.session.hidden_slots.len();
+                                    if ui
+                                        .button(format!("Show {hidden} hidden slot(s)"))
+                                        .on_hover_text(
+                                            "Clear every per-slot hide set in the hierarchy",
+                                        )
+                                        .clicked()
+                                    {
+                                        self.state.session.hidden_slots.clear();
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui
+                                    .button("Reset Layout")
+                                    .on_hover_text("Put every panel back where it started")
+                                    .clicked()
+                                {
+                                    self.tree = Self::default_layout();
+                                    ui.close();
+                                }
+                            });
+
                             // ── Pose menu (T-211) ────────────────────────
                             // Acts on the selection, or the whole rig when
                             // nothing is selected.
@@ -769,6 +858,61 @@ impl AnkhimateApp {
             }
             FileOutcome::Cancelled => {}
             FileOutcome::Error(msg) => self.status = Some(msg),
+        }
+    }
+}
+
+#[cfg(test)]
+mod view_menu_tests {
+    use super::*;
+    use crate::ui::Tab;
+
+    #[test]
+    fn the_default_layout_holds_every_pane() {
+        let app = AnkhimateApp::default();
+        for tab in Tab::ALL {
+            assert!(
+                app.find_pane(tab).is_some(),
+                "{tab:?} is missing from the default layout, so View could not show it"
+            );
+        }
+    }
+
+    #[test]
+    fn hiding_a_pane_keeps_its_place_in_the_tree() {
+        let mut app = AnkhimateApp::default();
+        let id = app.find_pane(Tab::Assets).unwrap();
+        app.tree.set_visible(id, false);
+        assert!(!app.tree.is_visible(id));
+        // Still findable, so ticking the box again shows the same pane rather
+        // than grafting a second copy on.
+        assert_eq!(app.find_pane(Tab::Assets), Some(id));
+        app.tree.set_visible(id, true);
+        assert!(app.tree.is_visible(id));
+    }
+
+    /// A pane dragged out of the tree entirely has no tile to un-hide, so the
+    /// menu has to be able to build a new one.
+    #[test]
+    fn a_removed_pane_can_be_added_back() {
+        let mut app = AnkhimateApp::default();
+        let id = app.find_pane(Tab::Skins).unwrap();
+        app.tree.remove_recursively(id);
+        assert_eq!(app.find_pane(Tab::Skins), None);
+
+        app.add_pane(Tab::Skins);
+        let restored = app.find_pane(Tab::Skins).expect("pane came back");
+        assert!(app.tree.is_visible(restored));
+    }
+
+    #[test]
+    fn reset_layout_restores_everything() {
+        let mut app = AnkhimateApp::default();
+        let id = app.find_pane(Tab::Timeline).unwrap();
+        app.tree.remove_recursively(id);
+        app.tree = AnkhimateApp::default_layout();
+        for tab in Tab::ALL {
+            assert!(app.find_pane(tab).is_some(), "{tab:?} did not come back");
         }
     }
 }

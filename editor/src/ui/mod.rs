@@ -15,7 +15,7 @@ pub mod uv;
 use eframe::egui;
 use egui_tiles::{Behavior, TileId, UiResponse};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
     Canvas,
     Inspector,
@@ -24,6 +24,47 @@ pub enum Tab {
     DrawOrder,
     Assets,
     Skins,
+}
+
+impl Tab {
+    /// Every pane, in the order the View menu lists them.
+    ///
+    /// One list rather than a menu that has to be edited whenever a pane is
+    /// added — a View menu missing the pane you are looking for is worse than no
+    /// View menu, because it reads as "that panel does not exist".
+    pub const ALL: [Tab; 7] = [
+        Tab::Canvas,
+        Tab::Hierarchy,
+        Tab::Inspector,
+        Tab::Timeline,
+        Tab::Assets,
+        Tab::DrawOrder,
+        Tab::Skins,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Tab::Canvas => "Viewport",
+            Tab::Inspector => "Properties",
+            Tab::Hierarchy => "Hierarchy",
+            Tab::Timeline => "Timeline",
+            Tab::DrawOrder => "Draw Order",
+            Tab::Assets => "Assets",
+            Tab::Skins => "Skins",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Tab::Canvas => egui_phosphor::fill::MONITOR,
+            Tab::Inspector => egui_phosphor::fill::SLIDERS,
+            Tab::Hierarchy => egui_phosphor::fill::TREE_STRUCTURE,
+            Tab::Timeline => egui_phosphor::fill::FILM_STRIP,
+            Tab::DrawOrder => egui_phosphor::fill::STACK,
+            Tab::Assets => egui_phosphor::fill::IMAGES,
+            Tab::Skins => egui_phosphor::fill::T_SHIRT,
+        }
+    }
 }
 
 pub struct AppBehavior<'a> {
@@ -98,15 +139,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
     }
 
     fn tab_title_for_pane(&mut self, pane: &Tab) -> egui::WidgetText {
-        match pane {
-            Tab::Canvas => "Viewport".into(),
-            Tab::Inspector => "Properties".into(),
-            Tab::Hierarchy => "Hierarchy".into(),
-            Tab::Timeline => "Timeline".into(),
-            Tab::DrawOrder => "Draw Order".into(),
-            Tab::Assets => "Assets".into(),
-            Tab::Skins => "Skins".into(),
-        }
+        pane.title().into()
     }
 
     fn drag_preview_color(&self, visuals: &egui::Visuals) -> egui::Color32 {
