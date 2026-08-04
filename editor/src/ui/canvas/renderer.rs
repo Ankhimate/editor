@@ -1085,6 +1085,9 @@ pub fn render_bones(
         }
     }
 
+    // Artwork outlines, under the gizmos so a handle is never hidden by a line.
+    crate::ui::canvas::outline::draw(&painter, rect, state, theme);
+
     // Draw Transform Gizmos for the selected bone
     if let Some(selected_id) = state.session.active_bone()
         && state.doc.skeleton.bones.contains_key(selected_id)

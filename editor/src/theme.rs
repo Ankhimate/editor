@@ -41,6 +41,24 @@ pub struct Theme {
     /// Cross and heading tick of a point attachment.
     #[serde(default = "default_point_marker")]
     pub point_marker: String,
+
+    // ── Artwork outlines (T-708) ────────────────────────────────────────
+    /// Silhouette of the artwork under the cursor.
+    #[serde(default = "default_outline_hover")]
+    pub outline_hover: String,
+    /// Silhouette of the selected artwork. Must read as *chosen* next to the
+    /// hover colour, not merely brighter, or the two are indistinguishable while
+    /// the cursor is still on the piece you just clicked.
+    #[serde(default = "default_outline_selected")]
+    pub outline_selected: String,
+}
+
+fn default_outline_hover() -> String {
+    "#ffffffb4".into()
+}
+
+fn default_outline_selected() -> String {
+    "#ffc83cff".into()
 }
 
 fn default_hitbox_outline() -> String {
@@ -146,6 +164,14 @@ impl Theme {
 
     pub fn point_marker(&self) -> Color32 {
         hex_to_color(&self.point_marker)
+    }
+
+    pub fn outline_hover(&self) -> Color32 {
+        hex_to_color(&self.outline_hover)
+    }
+
+    pub fn outline_selected(&self) -> Color32 {
+        hex_to_color(&self.outline_selected)
     }
 
     /// A vertex under the cursor: the selected colour, lifted.

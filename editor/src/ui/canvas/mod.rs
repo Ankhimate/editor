@@ -1,4 +1,5 @@
 pub mod camera;
+pub mod outline;
 pub mod overlays;
 pub mod renderer;
 pub mod tools;
@@ -86,6 +87,8 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
     // 4. Render artwork + bones. Textures are decoded first because the upload
     // needs `&mut state` while the render pass reads it immutably.
     let uploads = renderer::prepare_textures(state);
+    // Traced before painting, because painting only reads.
+    outline::warm_cache(state);
     renderer::render_bones(ui, rect, state, theme, uploads);
 
     // 5. Draw UI Overlays (Zoom Bar)

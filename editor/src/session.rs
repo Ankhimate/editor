@@ -232,6 +232,18 @@ pub struct Session {
 
     /// A spritesheet waiting to be sliced (T-305). Cancelling drops it.
     pub pending_atlas: Option<crate::ui::atlas::PendingAtlas>,
+    /// The attachment under the cursor, if any: `(slot, attachment name)`.
+    ///
+    /// Hover has to be its own state rather than recomputed at paint time — the
+    /// pick walks the draw order and tests every triangle, and doing that twice a
+    /// frame to draw one outline is work for nothing.
+    pub hovered_attachment: Option<(SlotId, String)>,
+    /// Artwork outlines in pixel space, cached per asset name.
+    ///
+    /// Contour extraction decodes the image and walks every boundary, which is
+    /// far too much to redo per frame. Keyed by asset rather than by attachment
+    /// so two attachments sharing art share the work.
+    pub silhouettes: std::collections::HashMap<String, Vec<Vec<glam::Vec2>>>,
     /// What a drag on the spritesheet preview is doing (T-305).
     pub atlas_drag: Option<crate::ui::atlas::AtlasDrag>,
     /// A PSD staged for import (T-302).
@@ -308,6 +320,8 @@ impl Session {
             trace_refined: false,
             pending_trace: None,
             pending_atlas: None,
+            hovered_attachment: None,
+            silhouettes: std::collections::HashMap::new(),
             atlas_drag: None,
             pending_psd: None,
             physics_dt: None,
@@ -369,11 +383,19 @@ impl Session {
     /// Replace the selection with a single bone (a plain click).
     /// Focus an attachment, and its slot with it — the inspector's attachment
     /// section reads the slot, and the canvas gizmos follow the slot's bone.
-    pub fn select_attachment(&mut self, slot: SlotId, name: impl Into<String>, bone: BoneId) {
+    /// Focus one attachment, and *only* that attachment.
+    ///
+    /// Deliberately clears the bone selection and switches the transform gizmo to
+    /// attachment editing. Selecting a piece of art used to select its bone as
+    /// well, which meant every drag moved the bone and everything else hanging
+    /// off it — there was no way to nudge one image without disturbing its
+    /// siblings. `bone` is still taken because the caller has it in hand and the
+    /// breadcrumb walks up from the slot.
+    pub fn select_attachment(&mut self, slot: SlotId, name: impl Into<String>, _bone: BoneId) {
         self.selected_slots.clear();
         self.selected_slots.push(slot);
         self.selected_bones.clear();
-        self.selected_bones.push(bone);
+        self.edit_target = EditTarget::Attachment;
         self.selection = Some(Selection::Attachment {
             slot,
             name: name.into(),
@@ -390,6 +412,10 @@ impl Session {
         self.selected_bones.clear();
         if let Some(bone) = bone {
             self.selected_bones.push(bone);
+            // Picking a bone means you want to move the bone. The counterpart of
+            // `select_attachment` switching the other way, so the gizmo always
+            // acts on the thing you just clicked.
+            self.edit_target = EditTarget::Bone;
         }
     }
 

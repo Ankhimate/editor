@@ -14,5 +14,7 @@
   "mesh_vertex_selected": "#b58900",
   "hitbox_outline": "#cb4b16c8",
   "hitbox_fill": "#cb4b1622",
-  "point_marker": "#859900"
+  "point_marker": "#859900",
+  "outline_hover": "#eee8d5b4",
+  "outline_selected": "#b58900ff"
 }

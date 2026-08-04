@@ -196,6 +196,32 @@ pub struct Traced {
 /// Returns `None` when nothing clears the alpha threshold — a fully transparent
 /// image has no shape, and producing an empty mesh would just move the failure
 /// somewhere less obvious.
+/// The artwork's outline in pixel coordinates: the silhouette plus every hole.
+///
+/// The same contour walk auto-tracing uses, stopped one step earlier — no
+/// padding, no uniform spacing, only enough simplification to keep a 2048px
+/// piece from costing thousands of line segments per frame. Tracing shapes a
+/// mesh; this draws what the pixels actually cover, so the two must not share a
+/// tolerance.
+pub fn silhouette(image: &image::RgbaImage, alpha_threshold: u8) -> Vec<Vec<Vec2>> {
+    let (width, height) = (image.width() as usize, image.height() as usize);
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+    let mask: Vec<bool> = image.pixels().map(|p| p.0[3] >= alpha_threshold).collect();
+    if !mask.iter().any(|solid| *solid) {
+        return Vec::new();
+    }
+    // Half a pixel: below that the simplification is invisible at any sane zoom,
+    // above it the outline starts cutting corners off the art.
+    let tolerance = 0.5;
+    find_contours(&mask, width, height)
+        .into_iter()
+        .map(|c| simplify(&c, tolerance))
+        .filter(|c| c.len() >= 3)
+        .collect()
+}
+
 pub fn trace(image: &image::RgbaImage, options: TraceOptions) -> Option<Traced> {
     let (width, height) = (image.width() as usize, image.height() as usize);
     if width == 0 || height == 0 {
@@ -799,6 +825,53 @@ pub fn nearest_edge(mesh: &MeshAttachment, point: Vec2) -> Option<(usize, usize,
 mod tests {
     use super::*;
     use ankhimate_core::attachment::{Rect, RegionAttachment};
+
+    fn solid_rect(w: u32, h: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> image::RgbaImage {
+        let mut img = image::RgbaImage::new(w, h);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                img.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn a_silhouette_hugs_the_opaque_pixels() {
+        let img = solid_rect(20, 20, 5, 5, 15, 15);
+        let contours = silhouette(&img, 8);
+        assert_eq!(contours.len(), 1);
+        let xs: Vec<f32> = contours[0].iter().map(|p| p.x).collect();
+        let ys: Vec<f32> = contours[0].iter().map(|p| p.y).collect();
+        let min_x = xs.iter().cloned().fold(f32::MAX, f32::min);
+        let max_x = xs.iter().cloned().fold(f32::MIN, f32::max);
+        let min_y = ys.iter().cloned().fold(f32::MAX, f32::min);
+        let max_y = ys.iter().cloned().fold(f32::MIN, f32::max);
+        assert!((min_x - 5.0).abs() < 1.0, "left edge at {min_x}");
+        assert!((max_x - 15.0).abs() < 1.0, "right edge at {max_x}");
+        assert!((min_y - 5.0).abs() < 1.0, "top edge at {min_y}");
+        assert!((max_y - 15.0).abs() < 1.0, "bottom edge at {max_y}");
+        // A rectangle needs four corners and should not cost forty.
+        assert!(contours[0].len() <= 8, "{} points", contours[0].len());
+    }
+
+    /// Holes are the reason to trace rather than draw a bounding box: goggles,
+    /// a belt buckle, the gap inside a curled tail.
+    #[test]
+    fn a_hole_gets_its_own_contour() {
+        let mut img = solid_rect(20, 20, 2, 2, 18, 18);
+        for y in 8..12 {
+            for x in 8..12 {
+                img.put_pixel(x, y, image::Rgba([0, 0, 0, 0]));
+            }
+        }
+        assert_eq!(silhouette(&img, 8).len(), 2, "outer boundary plus the hole");
+    }
+
+    #[test]
+    fn a_fully_transparent_image_has_no_outline() {
+        assert!(silhouette(&image::RgbaImage::new(8, 8), 8).is_empty());
+    }
 
     fn quad_mesh() -> MeshAttachment {
         let region = RegionAttachment {

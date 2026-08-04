@@ -154,7 +154,7 @@ fn update_attachment_mode(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2
         return;
     }
 
-    // Hover: the pivot crosshair is the only handle.
+    // Hover: the pivot crosshair, and the art itself.
     ctx.state.session.hovered_gizmo = G::None;
     let pivot = attachment_pivot_screen(ctx, viewport_size);
     if let (Some(mouse_p), Some(pivot)) = (mouse_screen, pivot)
@@ -162,6 +162,23 @@ fn update_attachment_mode(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2
     {
         ctx.state.session.hovered_gizmo = G::TranslateFree;
         ctx.ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+
+    let under_cursor = mouse_screen
+        .filter(|_| ctx.response.hovered())
+        .and_then(|mouse_p| {
+            let world = ctx
+                .state
+                .session
+                .camera
+                .screen_to_world(mouse_p, viewport_size);
+            pick_attachment(ctx.state, world)
+        });
+    ctx.state.session.hovered_attachment = under_cursor
+        .as_ref()
+        .map(|(slot, name, _)| (*slot, name.clone()));
+    if under_cursor.is_some() && ctx.state.session.hovered_gizmo == G::None {
+        ctx.ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
     if ctx.response.hovered() && ctx.ui.input(|i| i.pointer.primary_pressed()) {
@@ -175,9 +192,31 @@ fn update_attachment_mode(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2
                         .screen_to_world(mouse_p, viewport_size),
                 );
             }
+        } else if let Some((slot, name, bone)) = under_cursor {
+            let already = matches!(
+                &ctx.state.session.selection,
+                Some(crate::session::Selection::Attachment { slot: s, name: n })
+                    if *s == slot && *n == name
+            );
+            if already {
+                // Clicking the piece you already have starts moving it. Making
+                // the pivot crosshair the only grab point meant hunting for a
+                // 12-pixel dot before you could nudge anything.
+                ctx.state.session.dragging_gizmo = G::TranslateFree;
+                if let Some(mouse_p) = mouse_screen {
+                    ctx.state.session.drag_start_world_pos = Some(
+                        ctx.state
+                            .session
+                            .camera
+                            .screen_to_world(mouse_p, viewport_size),
+                    );
+                }
+            } else {
+                ctx.state.session.select_attachment(slot, name, bone);
+            }
         } else {
-            // Clicking away still selects bones, so leaving attachment mode does
-            // not require a trip to the panel.
+            // Clicking empty space still selects bones, so leaving attachment
+            // mode does not require a trip to the panel.
             update_hover_state(ctx);
             let hovered = ctx.state.session.hovered_bone;
             ctx.state.session.select_bone(hovered);
@@ -415,6 +454,24 @@ impl CanvasTool for SelectTool {
         } else {
             ctx.ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
+
+        // The artwork under the cursor, so the renderer can outline it. Skipped
+        // while a bone is hovered: two things highlighted at once reads as
+        // neither, and the bone is what a click would take.
+        ctx.state.session.hovered_attachment = match (
+            ctx.state.session.hovered_bone,
+            ctx.response.hovered().then_some(mouse_screen).flatten(),
+        ) {
+            (None, Some(mouse_p)) => {
+                let world = ctx
+                    .state
+                    .session
+                    .camera
+                    .screen_to_world(mouse_p, viewport_size);
+                pick_attachment(ctx.state, world).map(|(slot, name, _)| (slot, name))
+            }
+            _ => None,
+        };
 
         // Handle Click / Start Drag
         if ctx.response.hovered() && ctx.ui.input(|i| i.pointer.primary_pressed()) {
