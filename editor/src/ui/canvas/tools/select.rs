@@ -557,7 +557,9 @@ fn pick_attachment(
             continue;
         };
         // Hidden slots are not clickable — they are not on screen to click.
-        if state.pose.slot_visible.get(slot_id) == Some(&false) {
+        if state.pose.slot_visible.get(slot_id) == Some(&false)
+            || state.session.hidden_slots.contains(&slot_id)
+        {
             continue;
         }
         // The name the pose is showing, so clicking a swapped-in attachment

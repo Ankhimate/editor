@@ -85,163 +85,81 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
 
     ui.add_space(8.0);
 
-    // ── Draw Order / Slots ─────────────────────────────────────────────
-    ui.horizontal(|ui| {
-        section_header_counted(
-            ui,
-            egui_phosphor::fill::STACK,
-            "Draw Order",
-            Some(state.doc.skeleton.draw_order.len()),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Creating a slot is structural: Setup mode only, and via a command
-            // so it is undoable (it used to poke the skeleton directly).
-            let setup = state.session.can_edit_structure();
-            let can_add = setup && state.session.active_bone().is_some();
-            let btn = ui.add_enabled(
-                can_add,
-                egui::Button::new(
-                    egui::RichText::new(format!("{} Add", egui_phosphor::regular::PLUS)).size(11.0),
-                )
-                .min_size(egui::vec2(0.0, 20.0)),
-            );
-            let btn = if !setup {
-                btn.on_hover_text("Switch to Setup mode to add slots (Tab)")
-            } else if !can_add {
-                btn.on_hover_text("Select a bone first to add a slot")
-            } else {
-                btn
-            };
-            if btn.clicked()
-                && let Some(bone_id) = state.session.active_bone()
-            {
-                let name = format!("Slot {}", state.doc.skeleton.slots.len() + 1);
-                if state.dispatch(Box::new(crate::commands::slot_cmds::CreateSlot::new(
-                    name, bone_id,
-                ))) && let Some(&id) = state.doc.skeleton.draw_order.last()
-                {
-                    state.session.select_slot(Some(id));
-                }
-            }
-        });
-    });
+    constraints_section(ui, state);
+}
 
-    if state.doc.skeleton.draw_order.is_empty() {
-        ui.add_space(8.0);
+/// Every constraint in the rig, grouped under one heading.
+///
+/// The bone rows list the constraints acting on *that* bone, which answers "why
+/// is this bone moving on its own". This answers the other question — "where is
+/// the IK in this rig" — and a rig with fifteen constraints scattered across
+/// sixty bones cannot answer it any other way.
+fn constraints_section(ui: &mut egui::Ui, state: &mut AppState) {
+    let needle = state.session.tree_filter.to_lowercase();
+    let rows: Vec<(
+        ConstraintId,
+        String,
+        &'static str,
+        &'static str,
+        egui::Color32,
+    )> = state
+        .doc
+        .skeleton
+        .constraint_order
+        .iter()
+        .filter_map(|id| {
+            let c = state.doc.skeleton.constraints.get(*id)?;
+            let name = c.name().to_string();
+            if !needle.is_empty() && !name.to_lowercase().contains(&needle) {
+                return None;
+            }
+            let (icon, kind, hue) = constraint_glyph(c);
+            Some((*id, name, icon, kind, hue))
+        })
+        .collect();
+
+    section_header_counted(
+        ui,
+        egui_phosphor::fill::LINK,
+        "Constraints",
+        Some(state.doc.skeleton.constraints.len()),
+    );
+    if rows.is_empty() {
+        ui.add_space(4.0);
         ui.vertical_centered(|ui| {
             ui.label(
-                egui::RichText::new("No slots yet")
-                    .size(11.0)
-                    .color(ui.visuals().weak_text_color()),
+                egui::RichText::new(if state.doc.skeleton.constraints.is_empty() {
+                    "No constraints"
+                } else {
+                    "None match the filter"
+                })
+                .size(10.5)
+                .color(ui.visuals().weak_text_color()),
             );
         });
         return;
     }
-
-    let mut move_up = None;
-    let mut move_down = None;
-
-    for (i, &slot_id) in state.doc.skeleton.draw_order.iter().enumerate() {
-        if let Some(slot) = state.doc.skeleton.slots.get(slot_id) {
-            let is_selected = state.session.active_slot() == Some(slot_id);
-            let row_height = 24.0;
-
-            let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(ui.available_width(), row_height),
-                egui::Sense::click(),
-            );
-
-            if is_selected {
-                ui.painter().rect_filled(
-                    rect,
-                    0.0,
-                    ui.visuals().selection.bg_fill.linear_multiply(0.3),
-                );
-            } else if response.hovered() {
-                ui.painter()
-                    .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
-            }
-
-            if response.clicked() {
-                state.session.select_slot(Some(slot_id));
-            }
-
-            let text_color = if is_selected {
-                ui.visuals().selection.bg_fill
-            } else {
-                ui.visuals().text_color()
-            };
-
-            let arrow_w = 16.0;
-            let up_rect = egui::Rect::from_min_size(rect.min, egui::vec2(arrow_w, row_height));
-            let dn_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.min.x + arrow_w, rect.min.y),
-                egui::vec2(arrow_w, row_height),
-            );
-
-            let up_resp = ui.interact(up_rect, ui.id().with(("up", i)), egui::Sense::click());
-            let dn_resp = ui.interact(dn_rect, ui.id().with(("dn", i)), egui::Sense::click());
-            if up_resp.clicked() {
-                move_up = Some(i);
-            }
-            if dn_resp.clicked() {
-                move_down = Some(i);
-            }
-
-            let arrow_color = ui.visuals().weak_text_color();
-            ui.painter().text(
-                up_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                egui_phosphor::regular::CARET_UP,
-                egui::FontId::proportional(10.0),
-                arrow_color,
-            );
-            ui.painter().text(
-                dn_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                egui_phosphor::regular::CARET_DOWN,
-                egui::FontId::proportional(10.0),
-                arrow_color,
-            );
-
-            let icon_x = rect.min.x + arrow_w * 2.0 + 6.0;
-            ui.painter().text(
-                egui::pos2(icon_x, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                egui_phosphor::regular::CIRCLE_DASHED,
-                egui::FontId::proportional(12.0),
-                text_color.gamma_multiply(0.6),
-            );
-            ui.painter().text(
-                egui::pos2(icon_x + 16.0, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                &slot.name,
-                egui::FontId::proportional(13.0),
-                text_color,
-            );
+    for (id, name, icon, kind, hue) in rows {
+        let clicked = selectable_row(
+            ui,
+            state,
+            Row {
+                icon,
+                label: name,
+                tint: Some(hue),
+                depth: 1,
+                selection: Selection::Constraint(id),
+                detail: kind.to_string(),
+                toggle: None,
+            },
+        )
+        .clicked();
+        if clicked {
+            state.session.select_constraint(id);
         }
-    }
-
-    // Reordering goes through the router like every other edit (T-207): the
-    // setup stack in Setup mode, a draw-order key in Animate mode. It used to
-    // swap the vector in place, which was neither undoable nor animatable.
-    let swap = match (move_up, move_down) {
-        (Some(i), _) if i > 0 => Some((i, i - 1)),
-        (_, Some(i)) if i + 1 < state.doc.skeleton.draw_order.len() => Some((i, i + 1)),
-        _ => None,
-    };
-    if let Some((a, b)) = swap {
-        // Indices address the list this panel drew, which is the setup order.
-        let mut order = state.doc.skeleton.draw_order.clone();
-        order.swap(a, b);
-        state.commit_draw_order(order);
     }
 }
 
-/// A section title, optionally with how many rows are under it.
-///
-/// The count is what tells you a section is empty because the rig has none of
-/// that thing, rather than because a filter hid them all.
 fn section_header_counted(ui: &mut egui::Ui, icon: &str, label: &str, count: Option<usize>) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -416,7 +334,10 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
     // Lock padlock in the left gutter — click toggles (T-206). A locked bone
     // ignores viewport drags and auto-key (enforced in `commit_bone_pose`).
     let locked = state.session.is_bone_locked(bone_id);
-    let vis_rect = egui::Rect::from_min_size(rect.min, egui::vec2(24.0, row_height));
+    let vis_rect = egui::Rect::from_min_size(
+        rect.min + egui::vec2(8.0, 0.0),
+        egui::vec2(GUTTER - 8.0, row_height),
+    );
     let lock_resp = ui.interact(vis_rect, id.with("lock"), egui::Sense::click());
     if lock_resp.clicked() {
         let new = !locked;
@@ -440,37 +361,13 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
     );
     ui.painter().line_segment(
         [
-            egui::pos2(rect.min.x + 24.0, rect.min.y),
-            egui::pos2(rect.min.x + 24.0, rect.max.y),
+            egui::pos2(rect.min.x + GUTTER, rect.min.y),
+            egui::pos2(rect.min.x + GUTTER, rect.max.y),
         ],
         egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
     );
 
-    let indent_w = 14.0;
-    let start_x = rect.min.x + 24.0 + 4.0;
-    let guide_color = ui.visuals().widgets.noninteractive.bg_stroke.color;
-
-    for d in 0..depth {
-        let x = start_x + (d as f32) * indent_w + indent_w / 2.0;
-        ui.painter().line_segment(
-            [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
-            egui::Stroke::new(1.0, guide_color),
-        );
-    }
-    if depth > 0 {
-        let px = start_x + (depth as f32 - 1.0) * indent_w + indent_w / 2.0;
-        let mx = start_x + (depth as f32) * indent_w + indent_w / 2.0;
-        ui.painter().line_segment(
-            [
-                egui::pos2(px, rect.center().y),
-                egui::pos2(mx, rect.center().y),
-            ],
-            egui::Stroke::new(1.0, guide_color),
-        );
-    }
-
-    let indent = indent_w * (depth as f32);
-    let mut cx = start_x + indent;
+    let mut cx = depth_guides(ui, rect, depth);
 
     if !children.is_empty() {
         let toggle_rect =
@@ -498,7 +395,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
             c,
         );
     }
-    cx += 14.0;
+    cx += INDENT;
 
     // The bone glyph carries the bone's colour — inherited from the nearest
     // coloured ancestor (T-505), so a limb reads as one group at a glance. In a
@@ -578,12 +475,13 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
                 ui,
                 state,
                 Row {
-                    icon: egui_phosphor::regular::CIRCLE_DASHED,
+                    icon: egui_phosphor::fill::CIRCLE_DASHED,
                     label: slot_name,
                     tint: None,
                     depth: depth + 2,
                     selection: Selection::Slot(slot_id),
                     detail: String::new(),
+                    toggle: Some(VisibilityToggle::Slot(slot_id)),
                 },
             )
             .clicked();
@@ -619,6 +517,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
                         // missing from the canvas.
                         tint: Some(if shown { hue } else { hue.gamma_multiply(0.4) }),
                         depth: depth + 3,
+                        toggle: None,
                         selection: Selection::Attachment {
                             slot: slot_id,
                             name: name.clone(),
@@ -664,6 +563,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
                     depth: depth + 2,
                     selection: Selection::Constraint(id),
                     detail: kind.to_string(),
+                    toggle: None,
                 },
             )
             .clicked();
@@ -695,9 +595,90 @@ struct Row<'a> {
     /// Shown to the right in a dimmer colour: the attachment's kind, a
     /// constraint's target, and so on.
     detail: String,
+    /// What the eye in the left gutter toggles, if anything.
+    toggle: Option<VisibilityToggle>,
+}
+
+/// What a row's visibility dot hides.
+///
+/// Session state, never the document: hiding a slot to see what is behind it is
+/// a way of looking, not an edit, and it must not land on the undo stack or in
+/// the saved file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VisibilityToggle {
+    Slot(SlotId),
 }
 
 /// Draw one row and report whether it was clicked.
+/// Width of the left gutter holding the visibility and lock columns.
+pub const GUTTER: f32 = 24.0;
+/// Horizontal step per level of nesting.
+pub const INDENT: f32 = 14.0;
+
+/// Draw the tree lines for a row at `depth`, and return where its icon starts.
+///
+/// Shared by every row type. Bone rows used to draw these and nothing else did,
+/// so a slot sat at some arbitrary indent with no line connecting it to the bone
+/// it belongs to — the hierarchy simply stopped being drawn halfway down.
+fn depth_guides(ui: &egui::Ui, rect: egui::Rect, depth: usize) -> f32 {
+    let start_x = rect.min.x + GUTTER + 4.0;
+    let guide = ui.visuals().widgets.noninteractive.bg_stroke.color;
+    for d in 0..depth {
+        let x = start_x + d as f32 * INDENT + INDENT / 2.0;
+        ui.painter().line_segment(
+            [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+            egui::Stroke::new(1.0, guide),
+        );
+    }
+    if depth > 0 {
+        let px = start_x + (depth as f32 - 1.0) * INDENT + INDENT / 2.0;
+        let mx = start_x + depth as f32 * INDENT + INDENT / 2.0;
+        ui.painter().line_segment(
+            [
+                egui::pos2(px, rect.center().y),
+                egui::pos2(mx, rect.center().y),
+            ],
+            egui::Stroke::new(1.0, guide),
+        );
+    }
+    start_x + depth as f32 * INDENT
+}
+
+/// The visibility dot in the left gutter. Returns the rect it drew in.
+fn visibility_dot(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    id: egui::Id,
+    visible: bool,
+) -> (egui::Response, bool) {
+    let dot_rect = egui::Rect::from_min_size(rect.min, egui::vec2(16.0, rect.height()));
+    let response = ui.interact(dot_rect, id, egui::Sense::click());
+    // A filled dot when shown, a hollow ring when hidden: an empty column reads
+    // as "nothing to toggle here", which is exactly wrong for a hidden row.
+    let color = if visible {
+        ui.visuals().weak_text_color()
+    } else {
+        ui.visuals().warn_fg_color
+    };
+    let glyph = if visible {
+        egui_phosphor::fill::CIRCLE
+    } else {
+        egui_phosphor::regular::CIRCLE
+    };
+    ui.painter().text(
+        dot_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        egui::FontId::proportional(9.0),
+        if response.hovered() {
+            ui.visuals().strong_text_color()
+        } else {
+            color
+        },
+    );
+    (response, visible)
+}
+
 fn selectable_row(ui: &mut egui::Ui, state: &mut AppState, row: Row<'_>) -> egui::Response {
     let height = 21.0;
     let (rect, response) = ui.allocate_exact_size(
@@ -728,7 +709,19 @@ fn selectable_row(ui: &mut egui::Ui, state: &mut AppState, row: Row<'_>) -> egui
     } else {
         ui.visuals().text_color()
     };
-    let x = rect.min.x + 6.0 + row.depth as f32 * 12.0;
+    if let Some(VisibilityToggle::Slot(slot)) = row.toggle {
+        let visible = !state.session.hidden_slots.contains(&slot);
+        let id = ui.make_persistent_id(("row_vis", slot, &row.label));
+        let (dot, _) = visibility_dot(ui, rect, id, visible);
+        if dot.clicked() {
+            if visible {
+                state.session.hidden_slots.insert(slot);
+            } else {
+                state.session.hidden_slots.remove(&slot);
+            }
+        }
+    }
+    let x = depth_guides(ui, rect, row.depth);
     ui.painter().text(
         egui::pos2(x, rect.center().y),
         egui::Align2::LEFT_CENTER,
@@ -933,5 +926,35 @@ mod tests {
         assert!(subtree_matches(&state, root, "arm"));
         // The caller lowercases the needle; the haystack is lowercased here.
         assert!(subtree_matches(&state, root, "front-upper"));
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// Every row type shares one grid. Bone rows used to draw guides and nothing
+    /// else did, so a slot sat at an arbitrary indent with no line connecting it
+    /// to the bone it belongs to.
+    #[test]
+    fn indent_is_the_same_step_at_every_depth() {
+        let ctx = egui::Context::default();
+        let mut x_at = Vec::new();
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 21.0));
+                for depth in 0..4 {
+                    x_at.push(depth_guides(ui, rect, depth));
+                }
+            });
+        });
+        assert_eq!(x_at[0], GUTTER + 4.0, "depth 0 clears the gutter");
+        for pair in x_at.windows(2) {
+            assert!(
+                (pair[1] - pair[0] - INDENT).abs() < 1e-4,
+                "step was {}",
+                pair[1] - pair[0]
+            );
+        }
     }
 }

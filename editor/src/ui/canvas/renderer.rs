@@ -193,6 +193,11 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
     if state.pose.slot_visible.get(slot_id) == Some(&false) {
         return None;
     }
+    // Hidden from the tree's visibility column: a way of looking, not a property
+    // of the rig, so it is checked here rather than in the pose.
+    if state.session.hidden_slots.contains(&slot_id) {
+        return None;
+    }
 
     let bone_world = state.pose.worlds.get(slot.bone)?;
     let color = state

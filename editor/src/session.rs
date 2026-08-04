@@ -232,6 +232,13 @@ pub struct Session {
 
     /// A spritesheet waiting to be sliced (T-305). Cancelling drops it.
     pub pending_atlas: Option<crate::ui::atlas::PendingAtlas>,
+    /// Slots hidden from the viewport by the tree's visibility column.
+    ///
+    /// A way of looking, not an edit: it never touches the document, never lands
+    /// on the undo stack, and is not saved. Distinct from `Slot::attachment` being
+    /// `None` (the slot shows nothing) and from a `SlotVisible` key (the
+    /// animation hides it) — both of those are things the rig actually does.
+    pub hidden_slots: std::collections::HashSet<SlotId>,
     /// Substring the hierarchy filters rows by. Empty shows everything.
     ///
     /// A 67-bone rig is not browsable by scrolling. Matching is on the name only
@@ -343,6 +350,7 @@ impl Session {
             trace_refined: false,
             pending_trace: None,
             pending_atlas: None,
+            hidden_slots: std::collections::HashSet::new(),
             tree_filter: String::new(),
             reveal_selection: false,
             show_artwork: true,
