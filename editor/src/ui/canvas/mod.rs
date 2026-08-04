@@ -12,7 +12,12 @@ use tools::select::SelectTool;
 use tools::weight_paint::WeightPaintTool;
 use tools::{CanvasTool, ToolContext};
 
-pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
+pub fn ui(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    theme: &Theme,
+    grid: &crate::config::GridSettings,
+) {
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
 
@@ -82,7 +87,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
     handle_dropped_files(ui, rect, state);
 
     // 3. Draw Grid
-    overlays::draw_grid(ui, rect, state, theme);
+    overlays::draw_grid(ui, rect, state, theme, grid);
 
     // 4. Render artwork + bones. Textures are decoded first because the upload
     // needs `&mut state` while the render pass reads it immutably.

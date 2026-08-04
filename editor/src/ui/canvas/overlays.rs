@@ -160,14 +160,20 @@ pub fn draw_zoom_bar(ui: &mut egui::Ui, canvas_rect: egui::Rect, state: &mut App
 
 // â”€â”€ Grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-pub fn draw_grid(ui: &egui::Ui, rect: egui::Rect, state: &AppState, theme: &crate::theme::Theme) {
+pub fn draw_grid(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    state: &AppState,
+    theme: &crate::theme::Theme,
+    settings: &crate::config::GridSettings,
+) {
     ui.painter().rect_filled(
         rect,
         0.0,
         ui.visuals().extreme_bg_color.linear_multiply(0.5),
     );
 
-    let base_size = 50.0;
+    let base_size = settings.cell.max(1.0);
     let cx = rect.center().x - state.session.camera.position.x * state.session.camera.zoom;
     let cy = rect.center().y + state.session.camera.position.y * state.session.camera.zoom;
 
@@ -180,10 +186,10 @@ pub fn draw_grid(ui: &egui::Ui, rect: egui::Rect, state: &AppState, theme: &crat
     // Below this the checker is visual noise, and the cell count explodes (a 3px
     // cell is ~230k rects on a 1080p viewport, every frame), so stop drawing
     // cells and leave the flat background.
-    const MIN_CELL_PX: f32 = 8.0;
-    if scaled >= MIN_CELL_PX {
+    let min_cell_px = settings.min_cell_px.max(2.0);
+    if settings.show && scaled >= min_cell_px {
         // Fade out as cells approach the noise floor so it does not pop off.
-        let alpha = ((scaled - MIN_CELL_PX) / 8.0).clamp(0.2, 1.0);
+        let alpha = ((scaled - min_cell_px) / 8.0).clamp(0.2, 1.0);
 
         let color_even = theme.grid_color_even().linear_multiply(alpha);
         let color_odd = theme.grid_color_odd().linear_multiply(alpha);

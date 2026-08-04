@@ -5,7 +5,12 @@ use ankhimate_core::constraints::Constraint;
 use ankhimate_core::ids::{BoneId, ConstraintId, SlotId};
 use eframe::egui;
 
-pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
+pub fn ui(ui: &mut egui::Ui, state: &mut AppState, fonts: &crate::config::FontSettings) {
+    let text_size = fonts.for_area(crate::config::Area::Tree);
+    ui.ctx().memory_mut(|m| {
+        m.data
+            .insert_temp(egui::Id::new("tree_text_size"), text_size)
+    });
     // The hierarchy is rig structure, so it is authored in Setup mode only
     // (T-207). Rows stay browsable while animating — selecting a bone to key it
     // is exactly what this panel is for — but the edits are refused, so say so
@@ -733,7 +738,7 @@ fn selectable_row(ui: &mut egui::Ui, state: &mut AppState, row: Row<'_>) -> egui
         egui::pos2(x + 16.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         &row.label,
-        egui::FontId::proportional(12.5),
+        egui::FontId::proportional(row_text_size(ui)),
         text_color,
     );
     if !row.detail.is_empty() {
@@ -788,6 +793,14 @@ fn attachment_glyph(attachment: &Attachment) -> (&'static str, &'static str, egu
             egui::Color32::from_rgb(124, 227, 139),
         ),
     }
+}
+
+/// The tree's configured text size, stashed by [`ui`] so the row painters can
+/// reach it without every helper growing a settings argument.
+fn row_text_size(ui: &egui::Ui) -> f32 {
+    ui.ctx()
+        .memory(|m| m.data.get_temp(egui::Id::new("tree_text_size")))
+        .unwrap_or(12.5)
 }
 
 /// The icon and kind for a constraint. IK and FK-driven constraints get

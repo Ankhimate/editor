@@ -7,6 +7,7 @@ pub mod draw_order;
 pub mod events;
 pub mod inspector;
 pub mod psd_import;
+pub mod settings;
 pub mod skins;
 pub mod slot_editor;
 pub mod startup;
@@ -94,6 +95,11 @@ impl Tab {
 pub struct AppBehavior<'a> {
     pub state: &'a mut crate::app_state::AppState,
     pub theme: &'a crate::theme::Theme,
+    /// Viewport checker settings, which live in `Config` rather than in the
+    /// document: a grid size that travelled in a `.ankh` would fight whoever
+    /// opened it next.
+    pub grid: &'a crate::config::GridSettings,
+    pub fonts: &'a crate::config::FontSettings,
 }
 
 impl<'a> Behavior<Tab> for AppBehavior<'a> {
@@ -102,7 +108,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         let margin = egui::Margin::same(8);
         match pane {
             Tab::Canvas => {
-                canvas::ui(ui, self.state, self.theme);
+                canvas::ui(ui, self.state, self.theme, self.grid);
             }
             Tab::Inspector => {
                 egui::ScrollArea::vertical()
@@ -120,7 +126,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
-                            tree::ui(ui, self.state);
+                            tree::ui(ui, self.state, self.fonts);
                         });
                     });
             }

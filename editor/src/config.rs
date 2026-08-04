@@ -25,6 +25,119 @@ pub struct Config {
     /// Skip the startup window and open straight into an empty document.
     #[serde(default)]
     pub skip_startup: bool,
+    /// Name of the theme to start in, matched against `Theme::label`.
+    #[serde(default)]
+    pub theme_name: Option<String>,
+    #[serde(default)]
+    pub grid: GridSettings,
+    #[serde(default)]
+    pub fonts: FontSettings,
+}
+
+/// The viewport's transparency checker.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GridSettings {
+    /// Cell size in **world units**, not pixels: the checker has to sit still
+    /// relative to the artwork while zooming, or it reads as the texture changing
+    /// rather than as the camera moving.
+    pub cell: f32,
+    /// Below this on-screen size the checker is noise, and the cell count
+    /// explodes — a 3px cell is a quarter of a million rects on a 1080p viewport,
+    /// every frame.
+    pub min_cell_px: f32,
+    pub show: bool,
+}
+
+impl Default for GridSettings {
+    fn default() -> Self {
+        Self {
+            cell: 50.0,
+            min_cell_px: 8.0,
+            show: true,
+        }
+    }
+}
+
+/// Text sizes, per area rather than one global scale.
+///
+/// One slider would not do: the timeline packs sixty rows into a panel and wants
+/// small text, while the inspector is read a field at a time and wants normal
+/// text. Tying them together means one of the two is always wrong.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FontSettings {
+    /// Menus, buttons, and anything without an area of its own.
+    pub ui: f32,
+    /// The hierarchy and the other tree panels.
+    pub tree: f32,
+    /// Inspector labels and values.
+    pub inspector: f32,
+    /// Timeline row names and ruler numbers.
+    pub timeline: f32,
+}
+
+impl Default for FontSettings {
+    fn default() -> Self {
+        Self {
+            ui: 13.0,
+            tree: 12.5,
+            inspector: 12.0,
+            timeline: 11.0,
+        }
+    }
+}
+
+impl FontSettings {
+    /// Clamped to something legible at both ends: below 7 the glyphs stop being
+    /// distinguishable, above 24 a panel holds four rows.
+    pub const MIN: f32 = 7.0;
+    pub const MAX: f32 = 24.0;
+
+    /// Push these sizes into egui's text styles.
+    ///
+    /// The named styles are the ones widgets pick up on their own — `Body` for
+    /// labels, `Button` for buttons, `Small` for the dim secondary text panels
+    /// use. Areas that paint their own text read the numbers directly instead;
+    /// there is no style slot for "the timeline's row names".
+    pub fn apply(&self, ctx: &eframe::egui::Context) {
+        use eframe::egui::{FontFamily, FontId, TextStyle};
+        let ui = self.ui.clamp(Self::MIN, Self::MAX);
+        let mut style = (*ctx.global_style()).clone();
+        style
+            .text_styles
+            .insert(TextStyle::Body, FontId::new(ui, FontFamily::Proportional));
+        style
+            .text_styles
+            .insert(TextStyle::Button, FontId::new(ui, FontFamily::Proportional));
+        style.text_styles.insert(
+            TextStyle::Small,
+            FontId::new((ui - 2.0).max(Self::MIN), FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Monospace,
+            FontId::new(ui - 1.0, FontFamily::Monospace),
+        );
+        ctx.set_global_style(style);
+    }
+
+    /// Size for a panel that paints its own text.
+    pub fn for_area(&self, area: Area) -> f32 {
+        let raw = match area {
+            Area::Ui => self.ui,
+            Area::Tree => self.tree,
+            Area::Inspector => self.inspector,
+            Area::Timeline => self.timeline,
+        };
+        raw.clamp(Self::MIN, Self::MAX)
+    }
+}
+
+/// The panels that size their own text.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Area {
+    Ui,
+    Tree,
+    Inspector,
+    Timeline,
 }
 
 impl Config {
@@ -154,5 +267,43 @@ mod tests {
         let config: Config = serde_json::from_str("{ not json").unwrap_or_default();
         assert!(config.recent_files.is_empty());
         assert!(!config.skip_startup);
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn font_sizes_are_clamped_to_something_legible() {
+        let fonts = FontSettings {
+            ui: 200.0,
+            tree: 0.0,
+            inspector: 12.0,
+            timeline: 11.0,
+        };
+        assert_eq!(fonts.for_area(Area::Ui), FontSettings::MAX);
+        assert_eq!(fonts.for_area(Area::Tree), FontSettings::MIN);
+        assert_eq!(fonts.for_area(Area::Inspector), 12.0);
+    }
+
+    /// The config is written by hand often enough — and by older versions — that
+    /// a missing section must default rather than fail the whole load.
+    #[test]
+    fn an_old_config_without_the_new_sections_still_loads() {
+        let json = r#"{"recent_files":[],"skip_startup":true}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.skip_startup);
+        assert_eq!(config.grid, GridSettings::default());
+        assert_eq!(config.fonts, FontSettings::default());
+        assert_eq!(config.theme_name, None);
+    }
+
+    #[test]
+    fn grid_defaults_are_the_values_the_viewport_used_before() {
+        let grid = GridSettings::default();
+        assert_eq!(grid.cell, 50.0);
+        assert_eq!(grid.min_cell_px, 8.0);
+        assert!(grid.show);
     }
 }

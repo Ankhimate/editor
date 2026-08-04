@@ -17,6 +17,8 @@ pub struct AnkhimateApp {
     config: crate::config::Config,
     /// Is the startup window up? (T-304)
     show_startup: bool,
+    /// Is the settings window up? (T-701)
+    show_settings: bool,
 }
 
 impl AnkhimateApp {
@@ -33,8 +35,18 @@ impl AnkhimateApp {
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Fill);
         cc.egui_ctx.set_fonts(fonts);
 
-        let available_themes = theme::Theme::load_all();
-        let default_theme = available_themes.first().cloned().unwrap_or_default();
+        // User themes join the built-ins here rather than being loaded lazily:
+        // the saved choice may well be one of them, and starting in the wrong
+        // theme for a frame is a visible flash.
+        let available_themes = theme::Theme::load_all_with_user();
+        let saved = crate::config::Config::load();
+        let default_theme = saved
+            .theme_name
+            .as_deref()
+            .and_then(|name| available_themes.iter().find(|t| t.label() == name))
+            .or_else(|| available_themes.first())
+            .cloned()
+            .unwrap_or_default();
 
         default_theme.apply(&cc.egui_ctx);
 
@@ -157,6 +169,7 @@ impl Default for AnkhimateApp {
             status: None,
             config: crate::config::Config::default(),
             show_startup: false,
+            show_settings: false,
         }
     }
 }
@@ -256,6 +269,9 @@ impl eframe::App for AnkhimateApp {
             }
             if hide_bones {
                 self.state.session.show_bones = !self.state.session.show_bones;
+            }
+            if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Comma)) {
+                self.show_settings = !self.show_settings;
             }
             if tab {
                 self.state.toggle_work_mode();
@@ -428,6 +444,16 @@ impl eframe::App for AnkhimateApp {
                                 ui.separator();
                                 if ui.button("Startup Window").clicked() {
                                     self.show_startup = true;
+                                    ui.close();
+                                }
+                                if ui
+                                    .add(
+                                        egui::Button::new("Settings…")
+                                            .shortcut_text("Ctrl+,"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.show_settings = true;
                                     ui.close();
                                 }
                                 if ui.button("Quit").clicked() {
@@ -706,6 +732,11 @@ impl eframe::App for AnkhimateApp {
             });
 
         // ── Toolbar ──────────────────────────────────────────────────────
+        // Text sizes, re-applied each frame so a slider drag is visible while it
+        // is being dragged. `set_style` on unchanged values is a clone and a
+        // pointer swap, not a relayout.
+        self.config.fonts.apply(ctx);
+
         // A tool asked for a pane to be brought forward — double-clicking art
         // opening the slot editor, say. Consumed here, once.
         if let Some(tab) = self.state.session.focus_tab.take() {
@@ -740,6 +771,8 @@ impl eframe::App for AnkhimateApp {
             let mut behavior = AppBehavior {
                 state: &mut self.state,
                 theme: &self.theme,
+                grid: &self.config.grid,
+                fonts: &self.config.fonts,
             };
             self.tree.ui(&mut behavior, ui);
         });
@@ -779,6 +812,23 @@ impl eframe::App for AnkhimateApp {
             if !open {
                 self.state.session.import_summary = None;
             }
+        }
+
+        // ── Settings (T-701) ─────────────────────────────────────────────
+        // Applied live, so the theme is re-applied every frame it is open. Doing
+        // it unconditionally would fight anything else that touches the style.
+        if self.show_settings {
+            let mut open = true;
+            crate::ui::settings::ui(
+                ctx,
+                &mut self.state,
+                &mut self.config,
+                &mut self.theme,
+                &mut self.available_themes,
+                &mut open,
+            );
+            self.theme.apply(ctx);
+            self.show_settings = open;
         }
 
         // ── Startup window (T-304) ───────────────────────────────────────

@@ -85,7 +85,7 @@ fn default_mesh_vertex_selected() -> String {
     "#ffc83c".into()
 }
 
-fn hex_to_color(hex: &str) -> Color32 {
+pub fn hex_to_color(hex: &str) -> Color32 {
     let hex = hex.trim_start_matches('#');
     if hex.len() == 6 || hex.len() == 8 {
         let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
@@ -99,6 +99,27 @@ fn hex_to_color(hex: &str) -> Color32 {
         Color32::from_rgba_unmultiplied(r, g, b, a)
     } else {
         Color32::BLACK
+    }
+}
+
+/// A filename-safe form of a theme name.
+fn slug(name: &str) -> String {
+    let mut out = String::new();
+    let mut last_underscore = false;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_underscore = false;
+        } else if !last_underscore && !out.is_empty() {
+            out.push('_');
+            last_underscore = true;
+        }
+    }
+    let trimmed = out.trim_end_matches('_').to_string();
+    if trimmed.is_empty() {
+        "theme".to_string()
+    } else {
+        trimmed
     }
 }
 
@@ -120,6 +141,84 @@ impl Theme {
 
     pub fn label(&self) -> &str {
         &self.name
+    }
+
+    /// Every colour the settings window can edit, as `(label, field)`.
+    ///
+    /// Hand-listed rather than reflected: the order is the order they are shown
+    /// in, grouped by what they affect, which no derive knows. A field missing
+    /// here is uneditable, so adding one to `Theme` means adding it here too.
+    pub fn editable_colors(&mut self) -> Vec<(&'static str, &mut String)> {
+        vec![
+            ("Accent", &mut self.primary),
+            ("On accent", &mut self.on_primary),
+            ("Panel", &mut self.panel_fill),
+            ("Window", &mut self.window_fill),
+            ("Faint fill", &mut self.faint_bg_color),
+            ("Deep fill", &mut self.extreme_bg_color),
+            ("Grid A", &mut self.grid_color_even),
+            ("Grid B", &mut self.grid_color_odd),
+            ("Origin axes", &mut self.origin_color),
+            ("Mesh edge", &mut self.mesh_edge),
+            ("Mesh vertex", &mut self.mesh_vertex),
+            ("Mesh vertex (selected)", &mut self.mesh_vertex_selected),
+            ("Hitbox outline", &mut self.hitbox_outline),
+            ("Hitbox fill", &mut self.hitbox_fill),
+            ("Point marker", &mut self.point_marker),
+            ("Outline (hover)", &mut self.outline_hover),
+            ("Outline (selected)", &mut self.outline_selected),
+        ]
+    }
+
+    /// Where user themes live: beside the config, one JSON file each.
+    pub fn user_dir() -> Option<std::path::PathBuf> {
+        directories::ProjectDirs::from("", "", "ankhimate")
+            .map(|dirs| dirs.config_dir().join("themes"))
+    }
+
+    /// Write this theme to the user theme directory, returning where it landed.
+    ///
+    /// The filename comes from the name, lowercased with runs of non-alphanumerics
+    /// collapsed to underscores — so "My Theme 2" and "my-theme-2" are the same
+    /// file rather than two entries that look identical in the picker.
+    pub fn save_to_disk(&self) -> std::io::Result<std::path::PathBuf> {
+        let dir = Self::user_dir()
+            .ok_or_else(|| std::io::Error::other("no config directory on this platform"))?;
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}.json", slug(&self.name)));
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        std::fs::write(&path, json)?;
+        Ok(path)
+    }
+
+    /// Built-in themes plus whatever the user has saved.
+    ///
+    /// A user theme with a built-in's name replaces it: editing "Nord" and saving
+    /// should give you your Nord, not two of them.
+    pub fn load_all_with_user() -> Vec<Theme> {
+        let mut all = Self::load_all();
+        let Some(dir) = Self::user_dir() else {
+            return all;
+        };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return all;
+        };
+        for entry in entries.flatten() {
+            if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            // A malformed theme file is skipped rather than fatal: a stray file in
+            // a config directory must not stop the editor from starting.
+            let Some(theme) = std::fs::read_to_string(entry.path())
+                .ok()
+                .and_then(|text| serde_json::from_str::<Theme>(&text).ok())
+            else {
+                continue;
+            };
+            all.retain(|t| t.label() != theme.label());
+            all.push(theme);
+        }
+        all
     }
 
     pub fn primary(&self) -> Color32 {
@@ -274,5 +373,53 @@ mod tests {
             "origin_color":"#00ff00"}"##;
         let theme: Theme = serde_json::from_str(json).unwrap();
         assert_ne!(theme.mesh_vertex(), Color32::BLACK);
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    /// Two names that differ only in punctuation must land on one file, or the
+    /// picker fills with entries that look identical.
+    #[test]
+    fn slugs_collapse_punctuation() {
+        assert_eq!(slug("My Theme 2"), "my_theme_2");
+        assert_eq!(slug("my-theme-2"), "my_theme_2");
+        assert_eq!(slug("  Nord  "), "nord");
+    }
+
+    #[test]
+    fn a_nameless_theme_still_gets_a_filename() {
+        assert_eq!(slug("***"), "theme");
+        assert_eq!(slug(""), "theme");
+    }
+
+    /// Every editable colour has to survive the round trip through the swatch,
+    /// which reads hex and writes hex.
+    #[test]
+    fn editable_colours_are_all_parseable_hex() {
+        let mut theme = Theme::default();
+        for (label, hex) in theme.editable_colors() {
+            let color = hex_to_color(hex);
+            assert!(
+                color != Color32::BLACK || hex.starts_with("#00000"),
+                "{label} did not parse: {hex}"
+            );
+        }
+    }
+
+    /// A theme saved by the settings window has to load back as itself.
+    #[test]
+    fn a_theme_round_trips_through_json() {
+        let theme = Theme {
+            name: "Test".into(),
+            primary: "#123456ff".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&theme).unwrap();
+        let back: Theme = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.label(), "Test");
+        assert_eq!(back.primary, "#123456ff");
     }
 }
