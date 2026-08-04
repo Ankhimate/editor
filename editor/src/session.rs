@@ -232,6 +232,8 @@ pub struct Session {
 
     /// A spritesheet waiting to be sliced (T-305). Cancelling drops it.
     pub pending_atlas: Option<crate::ui::atlas::PendingAtlas>,
+    /// What a drag on the spritesheet preview is doing (T-305).
+    pub atlas_drag: Option<crate::ui::atlas::AtlasDrag>,
     /// A PSD staged for import (T-302).
     pub pending_psd: Option<crate::ui::psd_import::PendingPsd>,
     /// Seconds for the next physics step, set by the frame loop and consumed by
@@ -306,6 +308,7 @@ impl Session {
             trace_refined: false,
             pending_trace: None,
             pending_atlas: None,
+            atlas_drag: None,
             pending_psd: None,
             physics_dt: None,
             simulate_in_setup: false,
