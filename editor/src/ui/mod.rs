@@ -1,7 +1,10 @@
+pub mod animations;
 pub mod assets;
 pub mod atlas;
 pub mod canvas;
+pub mod constraints;
 pub mod draw_order;
+pub mod events;
 pub mod inspector;
 pub mod psd_import;
 pub mod skins;
@@ -24,6 +27,9 @@ pub enum Tab {
     DrawOrder,
     Assets,
     Skins,
+    Animations,
+    Events,
+    Constraints,
 }
 
 impl Tab {
@@ -32,11 +38,14 @@ impl Tab {
     /// One list rather than a menu that has to be edited whenever a pane is
     /// added — a View menu missing the pane you are looking for is worse than no
     /// View menu, because it reads as "that panel does not exist".
-    pub const ALL: [Tab; 7] = [
+    pub const ALL: [Tab; 10] = [
         Tab::Canvas,
         Tab::Hierarchy,
         Tab::Inspector,
         Tab::Timeline,
+        Tab::Animations,
+        Tab::Events,
+        Tab::Constraints,
         Tab::Assets,
         Tab::DrawOrder,
         Tab::Skins,
@@ -51,6 +60,9 @@ impl Tab {
             Tab::DrawOrder => "Draw Order",
             Tab::Assets => "Assets",
             Tab::Skins => "Skins",
+            Tab::Animations => "Animations",
+            Tab::Events => "Events",
+            Tab::Constraints => "Constraints",
         }
     }
 
@@ -63,6 +75,9 @@ impl Tab {
             Tab::DrawOrder => egui_phosphor::fill::STACK,
             Tab::Assets => egui_phosphor::fill::IMAGES,
             Tab::Skins => egui_phosphor::fill::T_SHIRT,
+            Tab::Animations => egui_phosphor::fill::FILM_SLATE,
+            Tab::Events => egui_phosphor::fill::FLAG,
+            Tab::Constraints => egui_phosphor::fill::LINK,
         }
     }
 }
@@ -132,6 +147,21 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             Tab::Skins => {
                 egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
                     skins::ui(ui, self.state);
+                });
+            }
+            Tab::Animations => {
+                egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                    animations::ui(ui, self.state);
+                });
+            }
+            Tab::Events => {
+                egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                    events::ui(ui, self.state);
+                });
+            }
+            Tab::Constraints => {
+                egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                    constraints::ui(ui, self.state);
                 });
             }
         }

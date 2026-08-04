@@ -79,6 +79,68 @@ impl EditCommand for AddTransformConstraint {
 }
 
 /// Delete a constraint, remembering enough to put it back.
+/// Rearrange the order constraints solve in.
+///
+/// Not cosmetic. Spineboy's leg IK runs before its foot IK; swap them and each
+/// foot is aimed against a leg that has not moved yet, which reads as boots at
+/// the wrong angle with no visible cause. The order is rig data, so it goes
+/// through a command like everything else.
+pub struct SetConstraintOrder {
+    order: Vec<ConstraintId>,
+    before: Option<Vec<ConstraintId>>,
+}
+
+impl SetConstraintOrder {
+    pub fn new(order: Vec<ConstraintId>) -> Self {
+        Self {
+            order,
+            before: None,
+        }
+    }
+}
+
+impl EditCommand for SetConstraintOrder {
+    fn apply(&mut self, doc: &mut Document) {
+        if self.before.is_none() {
+            self.before = Some(doc.skeleton.constraint_order.clone());
+        }
+        // Only ids that still exist, and every one exactly once: a stale id from
+        // an undone delete would otherwise resurrect a constraint that is gone.
+        let mut next = Vec::with_capacity(self.order.len());
+        for id in &self.order {
+            if doc.skeleton.constraints.contains_key(*id) && !next.contains(id) {
+                next.push(*id);
+            }
+        }
+        // Anything the caller did not mention keeps its place at the end, so a
+        // constraint added while this command was on the stack is not dropped.
+        for (id, _) in doc.skeleton.constraints.iter() {
+            if !next.contains(&id) {
+                next.push(id);
+            }
+        }
+        doc.skeleton.constraint_order = next;
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let Some(before) = self.before.take() {
+            doc.skeleton.constraint_order = before;
+        }
+    }
+
+    fn label(&self) -> &str {
+        "Reorder Constraints"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 pub struct RemoveConstraint {
     id: ConstraintId,
     removed: Option<Constraint>,
@@ -828,5 +890,89 @@ mod tests {
             panic!("still there");
         };
         assert_eq!(tc.mix_rotate, 1.0, "one undo returns to before the drag");
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+    use crate::commands::History;
+    use ankhimate_core::constraints::IkConstraint;
+    use ankhimate_core::math::Transform;
+    use ankhimate_core::skeleton::Bone;
+
+    fn doc_with_constraints() -> (Document, Vec<ConstraintId>) {
+        let mut doc = Document::new();
+        let bone = doc.skeleton.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 10.0,
+            local_transform: Transform::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let ids = ["a", "b", "c"]
+            .into_iter()
+            .map(|name| {
+                doc.skeleton.add_constraint(Constraint::Ik(IkConstraint {
+                    name: name.into(),
+                    target: bone,
+                    bones: vec![bone],
+                    bend_direction: 1.0,
+                    mix: 1.0,
+                    softness: 0.0,
+                    stretch: false,
+                    stretch_limit: 1.1,
+                }))
+            })
+            .collect();
+        (doc, ids)
+    }
+
+    #[test]
+    fn reordering_round_trips_through_undo() {
+        let (mut doc, ids) = doc_with_constraints();
+        let mut history = History::default();
+        let swapped = vec![ids[2], ids[0], ids[1]];
+        history.push(Box::new(SetConstraintOrder::new(swapped.clone())), &mut doc);
+        assert_eq!(doc.skeleton.constraint_order, swapped);
+
+        history.undo(&mut doc);
+        assert_eq!(doc.skeleton.constraint_order, ids);
+    }
+
+    /// A stale id — from an undone delete, say — must not resurrect a constraint
+    /// that is gone, and a constraint the caller forgot must not vanish.
+    #[test]
+    fn unknown_ids_are_dropped_and_missing_ones_kept() {
+        let (mut doc, ids) = doc_with_constraints();
+        let ghost = doc
+            .skeleton
+            .constraints
+            .insert(Constraint::Ik(IkConstraint {
+                name: "ghost".into(),
+                target: ids
+                    .first()
+                    .map(|_| doc.skeleton.bones.keys().next().unwrap())
+                    .unwrap(),
+                bones: vec![],
+                bend_direction: 1.0,
+                mix: 1.0,
+                softness: 0.0,
+                stretch: false,
+                stretch_limit: 1.1,
+            }));
+        doc.skeleton.constraints.remove(ghost);
+
+        let mut history = History::default();
+        // Mentions a dead id and omits a live one.
+        history.push(
+            Box::new(SetConstraintOrder::new(vec![ghost, ids[1]])),
+            &mut doc,
+        );
+        let order = &doc.skeleton.constraint_order;
+        assert!(!order.contains(&ghost), "a dead constraint came back");
+        assert_eq!(order.len(), 3, "every live constraint is still ordered");
+        assert_eq!(order[0], ids[1], "the requested order is honoured first");
     }
 }
