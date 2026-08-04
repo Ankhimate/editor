@@ -28,6 +28,9 @@ impl AnkhimateApp {
     pub fn with_file(cc: &eframe::CreationContext<'_>, open: Option<std::path::PathBuf>) -> Self {
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        // Filled glyphs for the tree: at 12px an outline icon is mostly gaps,
+        // and sixty of them down a panel read as noise rather than as a list.
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Fill);
         cc.egui_ctx.set_fonts(fonts);
 
         let available_themes = theme::Theme::load_all();

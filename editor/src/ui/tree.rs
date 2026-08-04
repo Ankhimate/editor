@@ -19,8 +19,41 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         ui.add_space(4.0);
     }
 
+    // ── Filter ─────────────────────────────────────────────────────────
+    ui.horizontal(|ui| {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(egui_phosphor::fill::MAGNIFYING_GLASS)
+                .size(12.0)
+                .color(ui.visuals().weak_text_color()),
+        );
+        let width = ui.available_width() - 24.0;
+        ui.add(
+            egui::TextEdit::singleline(&mut state.session.tree_filter)
+                .hint_text("Filter")
+                .desired_width(width.max(40.0)),
+        );
+        if !state.session.tree_filter.is_empty()
+            && ui
+                .add(
+                    egui::Button::new(egui_phosphor::fill::X_CIRCLE)
+                        .fill(egui::Color32::TRANSPARENT),
+                )
+                .on_hover_text("Clear")
+                .clicked()
+        {
+            state.session.tree_filter.clear();
+        }
+    });
+    ui.add_space(2.0);
+
     // ── Bones ──────────────────────────────────────────────────────────
-    section_header(ui, egui_phosphor::regular::BONE, "Bones");
+    section_header_counted(
+        ui,
+        egui_phosphor::fill::BONE,
+        "Bones",
+        Some(state.doc.skeleton.bones.len()),
+    );
 
     let root_bones: Vec<BoneId> = state
         .doc
@@ -54,7 +87,12 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
 
     // ── Draw Order / Slots ─────────────────────────────────────────────
     ui.horizontal(|ui| {
-        section_header(ui, egui_phosphor::regular::STACK, "Draw Order");
+        section_header_counted(
+            ui,
+            egui_phosphor::fill::STACK,
+            "Draw Order",
+            Some(state.doc.skeleton.draw_order.len()),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Creating a slot is structural: Setup mode only, and via a command
             // so it is undoable (it used to poke the skeleton directly).
@@ -200,8 +238,12 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     }
 }
 
-fn section_header(ui: &mut egui::Ui, icon: &str, label: &str) {
-    ui.add_space(2.0);
+/// A section title, optionally with how many rows are under it.
+///
+/// The count is what tells you a section is empty because the rig has none of
+/// that thing, rather than because a filter hid them all.
+fn section_header_counted(ui: &mut egui::Ui, icon: &str, label: &str, count: Option<usize>) {
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(4.0);
         ui.label(
@@ -209,14 +251,76 @@ fn section_header(ui: &mut egui::Ui, icon: &str, label: &str) {
                 .size(12.0)
                 .color(ui.visuals().selection.bg_fill),
         );
-        ui.add_space(2.0);
-        ui.label(egui::RichText::new(label).strong().size(12.0));
+        ui.add_space(3.0);
+        ui.label(
+            egui::RichText::new(label.to_uppercase())
+                .strong()
+                .size(10.5)
+                .color(ui.visuals().strong_text_color()),
+        );
+        if let Some(count) = count {
+            ui.label(
+                egui::RichText::new(count.to_string())
+                    .size(10.0)
+                    .color(ui.visuals().weak_text_color()),
+            );
+        }
     });
+    ui.add_space(2.0);
     ui.separator();
     ui.add_space(2.0);
 }
 
+/// Does this bone, or anything under it, match the filter?
+///
+/// Subtree-aware on purpose: matching only the row itself would hide every match
+/// that happens to live under a parent whose name does not contain the query,
+/// which is most of them.
+fn subtree_matches(state: &AppState, bone_id: BoneId, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let Some(bone) = state.doc.skeleton.bones.get(bone_id) else {
+        return false;
+    };
+    if bone.name.to_lowercase().contains(needle) {
+        return true;
+    }
+    // A slot or attachment hanging off this bone counts as a match too — art is
+    // what people search for at least as often as bones.
+    let slot_match = state
+        .doc
+        .skeleton
+        .slots
+        .iter()
+        .filter(|(_, s)| s.bone == bone_id)
+        .any(|(id, s)| {
+            s.name.to_lowercase().contains(needle)
+                || state.doc.skeleton.skins.iter().any(|(_, skin)| {
+                    skin.names_for_slot(id)
+                        .any(|n| n.to_lowercase().contains(needle))
+                })
+        });
+    if slot_match {
+        return true;
+    }
+    let children: Vec<BoneId> = state
+        .doc
+        .skeleton
+        .bones
+        .iter()
+        .filter_map(|(id, b)| (b.parent == Some(bone_id)).then_some(id))
+        .collect();
+    children
+        .into_iter()
+        .any(|child| subtree_matches(state, child, needle))
+}
+
 fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, depth: usize) {
+    let needle = state.session.tree_filter.to_lowercase();
+    if !subtree_matches(state, bone_id, &needle) {
+        return;
+    }
     let bone_name = match state.doc.skeleton.bones.get(bone_id) {
         Some(b) => b.name.clone(),
         None => return,
@@ -236,7 +340,10 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
         .collect();
 
     let id = ui.make_persistent_id(bone_id);
-    let mut is_open = ui.data_mut(|d| d.get_temp::<bool>(id).unwrap_or(true));
+    // A filter forces every surviving branch open: a match buried in a collapsed
+    // parent is a match nobody can see, which defeats the filter.
+    let mut is_open = needle.is_empty() && ui.data_mut(|d| d.get_temp::<bool>(id).unwrap_or(true))
+        || !needle.is_empty();
     let row_height = 22.0;
 
     let (rect, response) = ui.allocate_exact_size(
@@ -498,7 +605,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
                 let Some(attachment) = state.doc.skeleton.skins[skin].get(slot_id, &name) else {
                     continue;
                 };
-                let (icon, kind) = attachment_glyph(attachment);
+                let (icon, kind, hue) = attachment_glyph(attachment);
                 let shown = active.as_deref() == Some(name.as_str());
                 let clicked = selectable_row(
                     ui,
@@ -506,10 +613,11 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
                     Row {
                         icon,
                         label: name.clone(),
-                        // A hidden attachment is dimmed rather than omitted:
-                        // "the art exists but this slot is not showing it" is a
-                        // common cause of a piece missing from the canvas.
-                        tint: (!shown).then(|| ui.visuals().weak_text_color()),
+                        // A hidden attachment keeps its kind's colour but dimmed
+                        // rather than being omitted: "the art exists, this slot
+                        // is just not showing it" is a common cause of a piece
+                        // missing from the canvas.
+                        tint: Some(if shown { hue } else { hue.gamma_multiply(0.4) }),
                         depth: depth + 3,
                         selection: Selection::Attachment {
                             slot: slot_id,
@@ -525,7 +633,14 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
             }
         }
 
-        let constraints: Vec<(ConstraintId, String, &'static str, &'static str)> = state
+        type ConstraintRow = (
+            ConstraintId,
+            String,
+            &'static str,
+            &'static str,
+            egui::Color32,
+        );
+        let constraints: Vec<ConstraintRow> = state
             .doc
             .skeleton
             .constraint_order
@@ -533,19 +648,19 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
             .filter_map(|id| {
                 let c = state.doc.skeleton.constraints.get(*id)?;
                 c.affected_bones().contains(&bone_id).then(|| {
-                    let (icon, kind) = constraint_glyph(c);
-                    (*id, c.name().to_string(), icon, kind)
+                    let (icon, kind, hue) = constraint_glyph(c);
+                    (*id, c.name().to_string(), icon, kind, hue)
                 })
             })
             .collect();
-        for (id, name, icon, kind) in constraints {
+        for (id, name, icon, kind, hue) in constraints {
             let clicked = selectable_row(
                 ui,
                 state,
                 Row {
                     icon,
                     label: name,
-                    tint: None,
+                    tint: Some(hue),
                     depth: depth + 2,
                     selection: Selection::Constraint(id),
                     detail: kind.to_string(),
@@ -597,10 +712,11 @@ fn selectable_row(ui: &mut egui::Ui, state: &mut AppState, row: Row<'_>) -> egui
             0.0,
             ui.visuals().selection.bg_fill.linear_multiply(0.3),
         );
-        // Scroll the focused row into view, so selecting art on the canvas
-        // actually *shows* you where it lives in the tree.
-        if response.rect.height() > 0.0 {
+        // Reveal once, when something outside the tree made the selection.
+        // Scrolling every frame pinned the panel to the selected row.
+        if state.session.reveal_selection && response.rect.height() > 0.0 {
             ui.scroll_to_rect(rect, None);
+            state.session.reveal_selection = false;
         }
     } else if response.hovered() {
         ui.painter()
@@ -639,27 +755,73 @@ fn selectable_row(ui: &mut egui::Ui, state: &mut AppState, row: Row<'_>) -> egui
     response
 }
 
-/// The icon and one-word kind for an attachment.
-fn attachment_glyph(attachment: &Attachment) -> (&'static str, &'static str) {
+/// The icon, one-word kind, and hue for an attachment.
+///
+/// Filled glyphs: at 12px an outline icon is mostly gaps, and a column of sixty
+/// of them reads as texture rather than as a list of distinct things.
+///
+/// Each kind also gets a hue, because shape alone is not enough at this size —
+/// a mesh and a hitbox are both "an angular outline" until one of them is green.
+fn attachment_glyph(attachment: &Attachment) -> (&'static str, &'static str, egui::Color32) {
     match attachment {
-        Attachment::Region(_) => (egui_phosphor::regular::IMAGE_SQUARE, "image"),
-        Attachment::Mesh(_) => (egui_phosphor::regular::POLYGON, "mesh"),
-        Attachment::Clipping(_) => (egui_phosphor::regular::SCISSORS, "clip"),
-        Attachment::Path(_) => (egui_phosphor::regular::PATH, "path"),
-        Attachment::BoundingBox(_) => (egui_phosphor::regular::BOUNDING_BOX, "hitbox"),
-        Attachment::Point(_) => (egui_phosphor::regular::CROSSHAIR_SIMPLE, "point"),
+        Attachment::Region(_) => (
+            egui_phosphor::fill::IMAGE_SQUARE,
+            "image",
+            egui::Color32::from_rgb(126, 176, 224),
+        ),
+        Attachment::Mesh(_) => (
+            egui_phosphor::fill::POLYGON,
+            "mesh",
+            egui::Color32::from_rgb(140, 200, 150),
+        ),
+        Attachment::Clipping(_) => (
+            egui_phosphor::fill::SCISSORS,
+            "clip",
+            egui::Color32::from_rgb(200, 160, 220),
+        ),
+        Attachment::Path(_) => (
+            egui_phosphor::fill::PATH,
+            "path",
+            egui::Color32::from_rgb(220, 190, 120),
+        ),
+        Attachment::BoundingBox(_) => (
+            egui_phosphor::fill::BOUNDING_BOX,
+            "hitbox",
+            egui::Color32::from_rgb(230, 140, 105),
+        ),
+        Attachment::Point(_) => (
+            egui_phosphor::fill::CROSSHAIR_SIMPLE,
+            "point",
+            egui::Color32::from_rgb(124, 227, 139),
+        ),
     }
 }
 
 /// The icon and kind for a constraint. IK and FK-driven constraints get
 /// *different* glyphs on purpose: "why is this bone moving on its own" is
 /// answered by which kind is attached to it, so the two must not look alike.
-fn constraint_glyph(constraint: &Constraint) -> (&'static str, &'static str) {
+fn constraint_glyph(constraint: &Constraint) -> (&'static str, &'static str, egui::Color32) {
     match constraint {
-        Constraint::Ik(_) => (egui_phosphor::regular::TREE_STRUCTURE, "IK"),
-        Constraint::Transform(_) => (egui_phosphor::regular::ARROWS_LEFT_RIGHT, "transform"),
-        Constraint::Physics(_) => (egui_phosphor::regular::WIND, "physics"),
-        Constraint::Path(_) => (egui_phosphor::regular::PATH, "path"),
+        Constraint::Ik(_) => (
+            egui_phosphor::fill::TREE_STRUCTURE,
+            "IK",
+            egui::Color32::from_rgb(240, 170, 90),
+        ),
+        Constraint::Transform(_) => (
+            egui_phosphor::fill::ARROWS_LEFT_RIGHT,
+            "transform",
+            egui::Color32::from_rgb(150, 190, 240),
+        ),
+        Constraint::Physics(_) => (
+            egui_phosphor::fill::WIND,
+            "physics",
+            egui::Color32::from_rgb(160, 220, 230),
+        ),
+        Constraint::Path(_) => (
+            egui_phosphor::fill::PATH,
+            "path",
+            egui::Color32::from_rgb(220, 190, 120),
+        ),
     }
 }
 
@@ -669,4 +831,107 @@ fn bone_tint(skeleton: &ankhimate_core::skeleton::Skeleton, bone: BoneId) -> egu
     let [r, g, b, _] = crate::ui::canvas::renderer::group_color(skeleton, bone);
     let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8;
     egui::Color32::from_rgb(to_u8(r), to_u8(g), to_u8(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppState;
+    use ankhimate_core::attachment::{Rect, RegionAttachment};
+    use ankhimate_core::skeleton::Bone;
+    use ankhimate_core::slot::Slot;
+
+    fn rig() -> AppState {
+        let mut state = AppState::default();
+        let root = state.doc.skeleton.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 10.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let arm = state.doc.skeleton.add_bone(Bone {
+            name: "front-upper-arm".into(),
+            parent: Some(root),
+            length: 10.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let slot = state.doc.skeleton.add_slot(Slot {
+            attachment: Some("gun".into()),
+            ..Slot::new("weapon".to_string(), arm)
+        });
+        let skin = state.doc.skeleton.default_skin;
+        state.doc.skeleton.skins[skin].set(
+            slot,
+            "gun",
+            ankhimate_core::attachment::Attachment::Region(RegionAttachment {
+                texture: "gun".into(),
+                local_offset: glam::Vec2::ZERO,
+                local_rotation: 0.0,
+                local_scale: glam::Vec2::ONE,
+                width: 8.0,
+                height: 8.0,
+                uv_rect: Rect::default(),
+                pivot: glam::Vec2::splat(0.5),
+                sequence: None,
+            }),
+        );
+        state
+    }
+
+    fn bone_by_name(state: &AppState, name: &str) -> BoneId {
+        state
+            .doc
+            .skeleton
+            .bones
+            .iter()
+            .find(|(_, b)| b.name == name)
+            .map(|(id, _)| id)
+            .unwrap()
+    }
+
+    #[test]
+    fn an_empty_filter_keeps_everything() {
+        let state = rig();
+        let root = bone_by_name(&state, "root");
+        assert!(subtree_matches(&state, root, ""));
+    }
+
+    /// The point of matching a subtree: `arm` lives under `root`, and hiding
+    /// `root` would hide the match with it.
+    #[test]
+    fn a_parent_survives_when_a_descendant_matches() {
+        let state = rig();
+        let root = bone_by_name(&state, "root");
+        assert!(subtree_matches(&state, root, "arm"));
+    }
+
+    #[test]
+    fn a_branch_with_no_match_anywhere_is_dropped() {
+        let state = rig();
+        let arm = bone_by_name(&state, "front-upper-arm");
+        assert!(!subtree_matches(&state, arm, "leg"));
+    }
+
+    /// Art is searched for at least as often as bones, so a slot or attachment
+    /// name keeps its bone visible too.
+    #[test]
+    fn slot_and_attachment_names_match() {
+        let state = rig();
+        let arm = bone_by_name(&state, "front-upper-arm");
+        assert!(subtree_matches(&state, arm, "weapon"), "slot name");
+        assert!(subtree_matches(&state, arm, "gun"), "attachment name");
+    }
+
+    #[test]
+    fn matching_ignores_case() {
+        let state = rig();
+        let root = bone_by_name(&state, "root");
+        assert!(subtree_matches(&state, root, "arm"));
+        // The caller lowercases the needle; the haystack is lowercased here.
+        assert!(subtree_matches(&state, root, "front-upper"));
+    }
 }

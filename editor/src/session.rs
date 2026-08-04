@@ -232,6 +232,20 @@ pub struct Session {
 
     /// A spritesheet waiting to be sliced (T-305). Cancelling drops it.
     pub pending_atlas: Option<crate::ui::atlas::PendingAtlas>,
+    /// Substring the hierarchy filters rows by. Empty shows everything.
+    ///
+    /// A 67-bone rig is not browsable by scrolling. Matching is on the name only
+    /// and case-insensitive; a bone whose *descendant* matches is kept too, or
+    /// filtering would orphan every match under a non-matching parent.
+    pub tree_filter: String,
+    /// Scroll the tree to the selected row once, then forget.
+    ///
+    /// Revealing on every frame pinned the panel: scrolling away snapped
+    /// straight back, so a 67-bone rig could only ever be browsed near whatever
+    /// happened to be selected. Set when the selection is made *elsewhere* —
+    /// clicking art on the canvas, following a breadcrumb — and consumed by the
+    /// first paint that finds the row.
+    pub reveal_selection: bool,
     /// Draw the artwork. Off leaves the rig on its own, which is how you check
     /// a pose you cannot see for the art covering it.
     pub show_artwork: bool,
@@ -329,6 +343,8 @@ impl Session {
             trace_refined: false,
             pending_trace: None,
             pending_atlas: None,
+            tree_filter: String::new(),
+            reveal_selection: false,
             show_artwork: true,
             show_bones: true,
             hovered_attachment: None,
@@ -403,6 +419,7 @@ impl Session {
     /// siblings. `bone` is still taken because the caller has it in hand and the
     /// breadcrumb walks up from the slot.
     pub fn select_attachment(&mut self, slot: SlotId, name: impl Into<String>, _bone: BoneId) {
+        self.reveal_selection = true;
         self.selected_slots.clear();
         self.selected_slots.push(slot);
         self.selected_bones.clear();
@@ -415,10 +432,12 @@ impl Session {
 
     /// Focus a constraint.
     pub fn select_constraint(&mut self, constraint: ConstraintId) {
+        self.reveal_selection = true;
         self.selection = Some(Selection::Constraint(constraint));
     }
 
     pub fn select_bone(&mut self, bone: Option<BoneId>) {
+        self.reveal_selection = true;
         self.selection = bone.map(Selection::Bone);
         self.selected_bones.clear();
         if let Some(bone) = bone {
@@ -440,6 +459,7 @@ impl Session {
     }
 
     pub fn select_slot(&mut self, slot: Option<SlotId>) {
+        self.reveal_selection = true;
         self.selection = slot.map(Selection::Slot);
         self.selected_slots.clear();
         if let Some(slot) = slot {

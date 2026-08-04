@@ -18,7 +18,7 @@ egui_tiles = "0.15.0"
 bytemuck = { version = "1.25", features = ["derive"] }
 glam = "0.33.1"
 serde_json = "1.0.150"
-egui-phosphor = "0.12.0"
+egui-phosphor = { version = "0.12.0", features = ["fill"] }
 serde = { version = "1.0.228", features = ["derive"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 directories = "6.0.0"
