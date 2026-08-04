@@ -937,10 +937,13 @@ mod layout_tests {
     /// else did, so a slot sat at an arbitrary indent with no line connecting it
     /// to the bone it belongs to.
     #[test]
+    // `Context::run` and `CentralPanel::show` are the harness egui still gives a
+    // test; their replacements need a live frame.
+    #[allow(deprecated)]
     fn indent_is_the_same_step_at_every_depth() {
         let ctx = egui::Context::default();
         let mut x_at = Vec::new();
-        ctx.run(Default::default(), |ctx| {
+        let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 21.0));
                 for depth in 0..4 {
