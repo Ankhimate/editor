@@ -28,11 +28,21 @@ impl AnkhimateApp {
 
     /// Start up, optionally opening a project immediately.
     pub fn with_file(cc: &eframe::CreationContext<'_>, open: Option<std::path::PathBuf>) -> Self {
-        // Remix Icon: one consistent 24px grid and a matching stroke weight, so a
-        // column of glyphs reads as a set rather than as a pile of clip art. The
+        // Lucide: one stroke weight on one 24px grid, so a column of glyphs reads
+        // as a family rather than as clip art at differing optical weights. The
         // vocabulary lives in `ui::icons`, not scattered across the panels.
+        //
+        // Appended to the proportional family rather than replacing it: egui
+        // falls through to the next font for anything the first cannot draw, so
+        // ordinary text keeps its own face and only icon codepoints reach here.
         let mut fonts = egui::FontDefinitions::default();
-        egui_remixicon::add_to_fonts(&mut fonts);
+        fonts.font_data.insert(
+            "lucide".into(),
+            egui::FontData::from_static(crate::ui::icon_font::FONT).into(),
+        );
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.push("lucide".into());
+        }
         cc.egui_ctx.set_fonts(fonts);
 
         // Text and icons are rasterised at `size × zoom × pixels_per_point`, so

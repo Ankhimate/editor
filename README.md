@@ -87,6 +87,14 @@ either license — a deliberate advantage over GPL-only alternatives.
 Unless you state otherwise, any contribution you intentionally submit for
 inclusion shall be dual-licensed as above, with no additional terms.
 
+### Bundled assets
+
+The editor ships the [Lucide](https://lucide.dev) icon font
+(`editor/assets/lucide.ttf`) under the ISC license, reproduced verbatim at
+`editor/assets/LUCIDE-LICENSE`. ISC is permissive and imposes no obligation on
+anything you build with Ankhimate — it applies to the icon font alone, which the
+runtime does not use.
+
 ## Documentation
 
 - [`docs/ARCHITECTURE_PLAN.md`](docs/ARCHITECTURE_PLAN.md) — normative architecture & roadmap

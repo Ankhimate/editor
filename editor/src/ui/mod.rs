@@ -5,6 +5,7 @@ pub mod canvas;
 pub mod constraints;
 pub mod draw_order;
 pub mod events;
+pub mod icon_font;
 pub mod icons;
 pub mod inspector;
 pub mod psd_import;

@@ -220,7 +220,6 @@ dependencies = [
  "bytemuck",
  "directories",
  "eframe",
- "egui-remixicon",
  "egui_tiles",
  "env_logger",
  "glam",
@@ -1052,15 +1051,6 @@ dependencies = [
  "serde",
  "smallvec",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "egui-remixicon"
-version = "0.34.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e91021616f8b9022503638c5c5ed98714bd09077cbe05febfaf82b90d45e1d61"
-dependencies = [
- "egui",
 ]
 
 [[package]]
