@@ -183,6 +183,262 @@ mod tests {
         skel
     }
 
+    /// Every attachment kind, a linked mesh, a sequence, a skin that owns bones
+    /// and constraints, and an event with audio — through JSON and back.
+    #[test]
+    fn json_round_trip_preserves_the_whole_model() {
+        use ankhimate_core::animation::EventKey;
+        use ankhimate_core::attachment::{
+            Attachment, BoundingBoxAttachment, LinkedMesh, MeshAttachment, PointAttachment,
+            Sequence, SequenceMode, VertexWeight,
+        };
+        use ankhimate_core::constraints::{Constraint, IkConstraint};
+        use ankhimate_core::skin::Skin;
+        use ankhimate_core::slot::Slot;
+
+        let mut skel = sample_skeleton();
+        let arm = skel.bones.iter().find(|(_, b)| b.name == "arm").unwrap().0;
+        let slot = skel.add_slot(Slot::new("arm_slot".to_string(), arm));
+        let default_skin = skel.default_skin;
+
+        let source = MeshAttachment {
+            texture: "arm".into(),
+            setup_vertices: vec![
+                glam::vec2(0.0, 0.0),
+                glam::vec2(1.0, 0.0),
+                glam::vec2(0.0, 1.0),
+            ],
+            uvs: vec![
+                glam::vec2(0.0, 0.0),
+                glam::vec2(1.0, 0.0),
+                glam::vec2(0.0, 1.0),
+            ],
+            triangles: vec![[0, 1, 2]],
+            weights: vec![
+                vec![VertexWeight {
+                    bone: arm,
+                    weight: 1.0,
+                }],
+                vec![VertexWeight {
+                    bone: arm,
+                    weight: 1.0,
+                }],
+                vec![VertexWeight {
+                    bone: arm,
+                    weight: 1.0,
+                }],
+            ],
+            ..Default::default()
+        };
+        skel.skins[default_skin].set(slot, "source_mesh", Attachment::Mesh(source));
+        skel.skins[default_skin].set(
+            slot,
+            "linked_mesh",
+            Attachment::Mesh(MeshAttachment {
+                texture: "arm_recolour".into(),
+                linked: Some(LinkedMesh {
+                    skin: None,
+                    slot: "arm_slot".into(),
+                    attachment: "source_mesh".into(),
+                    inherit_deform: true,
+                }),
+                ..Default::default()
+            }),
+        );
+        skel.skins[default_skin].set(
+            slot,
+            "hitbox",
+            Attachment::BoundingBox(BoundingBoxAttachment {
+                vertices: vec![
+                    glam::vec2(0.0, 0.0),
+                    glam::vec2(4.0, 0.0),
+                    glam::vec2(4.0, 4.0),
+                ],
+                weights: vec![
+                    vec![VertexWeight {
+                        bone: arm,
+                        weight: 1.0,
+                    }],
+                    vec![VertexWeight {
+                        bone: arm,
+                        weight: 1.0,
+                    }],
+                    vec![VertexWeight {
+                        bone: arm,
+                        weight: 1.0,
+                    }],
+                ],
+            }),
+        );
+        skel.skins[default_skin].set(
+            slot,
+            "muzzle",
+            Attachment::Point(PointAttachment {
+                position: glam::vec2(7.0, -3.0),
+                rotation: std::f32::consts::FRAC_PI_2,
+            }),
+        );
+        skel.skins[default_skin].set(
+            slot,
+            "flash",
+            Attachment::Region(ankhimate_core::attachment::RegionAttachment {
+                texture: "flash_0".into(),
+                local_offset: glam::Vec2::ZERO,
+                local_rotation: 0.0,
+                local_scale: glam::Vec2::ONE,
+                width: 8.0,
+                height: 8.0,
+                uv_rect: Default::default(),
+                pivot: glam::Vec2::splat(0.5),
+                sequence: Some(Sequence {
+                    frames: vec!["flash_0".into(), "flash_1".into(), "flash_2".into()],
+                    fps: 24.0,
+                    mode: SequenceMode::PingPong,
+                    setup_index: 1,
+                }),
+            }),
+        );
+
+        let ik = skel.add_constraint(Constraint::Ik(IkConstraint {
+            name: "cape_ik".into(),
+            target: arm,
+            bones: vec![arm],
+            bend_direction: 1.0,
+            mix: 1.0,
+            softness: 0.0,
+            stretch: false,
+            stretch_limit: 1.1,
+        }));
+        let mut cape = Skin::new("cape");
+        cape.bones.push(arm);
+        cape.constraints.push(ik);
+        skel.add_skin(cape);
+
+        let mut anims: SlotMap<AnimationId, Animation> = SlotMap::with_key();
+        let mut anim = Animation::new("shoot", 1.0);
+        anim.events.push(EventKey {
+            time: 0.25,
+            name: "footstep".into(),
+            int_value: 3,
+            float_value: 0.5,
+            string_value: "left".into(),
+            audio: "step_gravel".into(),
+            volume: 0.8,
+            balance: -0.25,
+        });
+        anims.insert(anim);
+
+        let assets = AssetDb::new();
+        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
+        let loaded = from_json(&json).unwrap();
+        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
+
+        // Re-serializing has to produce the same document, which is the only
+        // check that catches a field written but never read back.
+        let json2 = to_json(&project(
+            &loaded.skeleton,
+            &loaded.animations,
+            &loaded.assets,
+            &loaded.name,
+            loaded.fps,
+        ))
+        .unwrap();
+        assert_eq!(json, json2, "round trip is not a fixed point");
+
+        let skin = &loaded.skeleton.skins[loaded.skeleton.default_skin];
+        let slot = loaded
+            .skeleton
+            .slots
+            .iter()
+            .find(|(_, s)| s.name == "arm_slot")
+            .unwrap()
+            .0;
+        assert!(matches!(
+            skin.get(slot, "hitbox"),
+            Some(Attachment::BoundingBox(b)) if b.weights.len() == 3
+        ));
+        assert!(matches!(
+            skin.get(slot, "muzzle"),
+            Some(Attachment::Point(p)) if (p.rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-4
+        ));
+        assert!(matches!(
+            skin.get(slot, "linked_mesh"),
+            Some(Attachment::Mesh(m)) if m.linked.as_ref().unwrap().attachment == "source_mesh"
+        ));
+        assert!(matches!(
+            skin.get(slot, "flash"),
+            Some(Attachment::Region(r))
+                if r.sequence.as_ref().unwrap().mode == SequenceMode::PingPong
+        ));
+
+        let cape = loaded
+            .skeleton
+            .skins
+            .iter()
+            .find(|(_, s)| s.name == "cape")
+            .unwrap()
+            .1;
+        assert_eq!(cape.bones.len(), 1, "skin kept its bone");
+        assert_eq!(cape.constraints.len(), 1, "skin kept its constraint");
+
+        let event = &loaded.animations.values().next().unwrap().events[0];
+        assert_eq!(event.audio, "step_gravel");
+        assert!((event.volume - 0.8).abs() < 1e-6);
+        assert!((event.balance + 0.25).abs() < 1e-6);
+    }
+
+    /// A linked mesh draws the source's geometry, and editing the source moves
+    /// every copy — the entire reason a link beats a duplicate.
+    #[test]
+    fn a_linked_mesh_follows_its_source() {
+        use ankhimate_core::attachment::{Attachment, LinkedMesh, MeshAttachment};
+        use ankhimate_core::slot::Slot;
+
+        let mut skel = sample_skeleton();
+        let arm = skel.bones.iter().find(|(_, b)| b.name == "arm").unwrap().0;
+        let slot = skel.add_slot(Slot::new("arm_slot".to_string(), arm));
+        let skin = skel.default_skin;
+        skel.skins[skin].set(
+            slot,
+            "source",
+            Attachment::Mesh(MeshAttachment {
+                setup_vertices: vec![glam::vec2(5.0, 5.0)],
+                ..Default::default()
+            }),
+        );
+        let link = MeshAttachment {
+            texture: "other".into(),
+            linked: Some(LinkedMesh {
+                skin: None,
+                slot: "arm_slot".into(),
+                attachment: "source".into(),
+                inherit_deform: true,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            skel.resolve_linked_mesh(&[], &link).setup_vertices,
+            vec![glam::vec2(5.0, 5.0)]
+        );
+
+        // A link that points nowhere resolves to itself, so a broken reference
+        // draws the mesh rather than a hole.
+        let dangling = MeshAttachment {
+            linked: Some(LinkedMesh {
+                skin: None,
+                slot: "nope".into(),
+                attachment: "nope".into(),
+                inherit_deform: true,
+            }),
+            ..Default::default()
+        };
+        assert!(
+            skel.resolve_linked_mesh(&[], &dangling)
+                .setup_vertices
+                .is_empty()
+        );
+    }
+
     #[test]
     fn json_round_trip_preserves_bones() {
         let skel = sample_skeleton();
@@ -562,6 +818,9 @@ mod tests {
                     int_value: 3,
                     float_value: 0.8,
                     string_value: "left".into(),
+                    audio: String::new(),
+                    volume: 1.0,
+                    balance: 0.0,
                 },
                 EventKey {
                     time: 0.75,
@@ -569,6 +828,9 @@ mod tests {
                     int_value: 4,
                     float_value: 0.8,
                     string_value: "right".into(),
+                    audio: String::new(),
+                    volume: 1.0,
+                    balance: 0.0,
                 },
             ],
         });

@@ -35,6 +35,9 @@ impl AddEvent {
                 int_value: 0,
                 float_value: 0.0,
                 string_value: String::new(),
+                audio: String::new(),
+                volume: 1.0,
+                balance: 0.0,
             },
             before: None,
         }
@@ -81,6 +84,10 @@ pub enum EventEdit {
         int_value: i32,
         float_value: f32,
         string_value: String,
+        /// Asset name of the sound to fire with the event; empty is silent.
+        audio: String,
+        volume: f32,
+        balance: f32,
     },
     Remove,
 }
@@ -133,11 +140,17 @@ impl EditCommand for EditEvent {
                 int_value,
                 float_value,
                 string_value,
+                audio,
+                volume,
+                balance,
             } => {
                 let e = &mut events[self.index];
                 e.int_value = *int_value;
                 e.float_value = *float_value;
                 e.string_value = string_value.clone();
+                e.audio = audio.clone();
+                e.volume = *volume;
+                e.balance = *balance;
             }
             EventEdit::Remove => {
                 events.remove(self.index);

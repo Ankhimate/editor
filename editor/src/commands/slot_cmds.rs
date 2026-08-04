@@ -384,6 +384,7 @@ mod tests {
             height: 10.0,
             uv_rect: Rect::default(),
             pivot: glam::Vec2::splat(0.5),
+            sequence: None,
         })
     }
 

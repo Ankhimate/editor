@@ -121,8 +121,9 @@ impl SetRegionProps {
             .get_mut(&(self.slot, self.name.clone()))?
         {
             Attachment::Region(r) => Some(r),
-            // Meshes are edited in mesh mode; clips have no region transform.
-            Attachment::Mesh(_) | Attachment::Clipping(_) | Attachment::Path(_) => None,
+            // Meshes are edited in mesh mode; nothing else has a region
+            // transform to set.
+            _ => None,
         }
     }
 }
@@ -416,6 +417,7 @@ mod tests {
                 local_scale: glam::Vec2::ONE,
                 width: 64.0,
                 height: 32.0,
+                sequence: None,
                 uv_rect: Rect {
                     x: 0.0,
                     y: 0.0,

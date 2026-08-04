@@ -815,6 +815,7 @@ mod tests {
                 h: 1.0,
             },
             pivot: Vec2::splat(0.5),
+            sequence: None,
         };
         MeshAttachment::from_region(&region)
     }

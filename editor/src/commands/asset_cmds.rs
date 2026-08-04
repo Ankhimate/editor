@@ -84,6 +84,7 @@ impl EditCommand for ImportImage {
                     h: 1.0,
                 },
                 pivot: glam::Vec2::splat(0.5),
+                sequence: None,
             }),
         );
 
@@ -384,9 +385,11 @@ impl RenameAsset {
                 let texture = match attachment {
                     Attachment::Region(r) => &mut r.texture,
                     Attachment::Mesh(m) => &mut m.texture,
-                    // Clips and paths reference no asset, so a rename cannot
-                    // touch them.
-                    Attachment::Clipping(_) | Attachment::Path(_) => continue,
+                    // The rest reference no asset, so a rename cannot touch them.
+                    Attachment::Clipping(_)
+                    | Attachment::Path(_)
+                    | Attachment::BoundingBox(_)
+                    | Attachment::Point(_) => continue,
                 };
                 if texture == from {
                     *texture = to.to_string();
@@ -520,7 +523,7 @@ mod tests {
             .map(|a| match a {
                 Attachment::Region(r) => r.texture.clone(),
                 Attachment::Mesh(m) => m.texture.clone(),
-                Attachment::Clipping(_) | Attachment::Path(_) => String::new(),
+                _ => String::new(),
             })
             .collect();
         assert!(textures.contains(&"arm".to_string()));

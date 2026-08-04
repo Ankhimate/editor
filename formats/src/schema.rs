@@ -132,6 +132,12 @@ pub struct Skin {
     pub name: String,
     #[serde(default)]
     pub entries: Vec<SkinEntry>,
+    /// Bone names this skin brings with it; skipped while the skin is off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bones: Vec<String>,
+    /// Constraint names that only apply while this skin is worn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<String>,
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,
@@ -153,6 +159,65 @@ pub enum Attachment {
     Mesh(Mesh),
     Clipping(Clipping),
     Path(Path),
+    BoundingBox(BoundingBox),
+    Point(Point),
+}
+
+/// A hit-test polygon, optionally skinned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoundingBox {
+    /// Flattened `[x, y, x, y, …]`, like `Mesh::vertices`.
+    #[serde(default)]
+    pub vertices: Vec<f32>,
+    /// Per-vertex weights: `[(bone_name, weight), …]` per vertex. Empty means
+    /// the polygon is rigid to its slot's bone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weights: Vec<Vec<(String, f32)>>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: Extra,
+}
+
+/// A named anchor with an orientation. Draws nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Point {
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    /// Degrees, like every other authored angle in the file.
+    #[serde(default)]
+    pub rotation: f32,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: Extra,
+}
+
+/// Frames an attachment cycles through, and how.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Sequence {
+    /// Texture names, in play order.
+    #[serde(default)]
+    pub frames: Vec<String>,
+    #[serde(default)]
+    pub fps: f32,
+    /// `hold`, `once`, `loop`, `ping_pong`, or any of those with `_reverse`.
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub setup_index: u32,
+}
+
+/// Where a linked mesh borrows its geometry from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinkedMesh {
+    /// Skin holding the source; absent means the default skin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skin: Option<String>,
+    pub slot: String,
+    pub attachment: String,
+    #[serde(default = "yes")]
+    pub inherit_deform: bool,
 }
 
 /// A curve bones can be driven along (T-502).
@@ -208,6 +273,8 @@ pub struct Region {
     pub pivot_x: f32,
     #[serde(default = "half")]
     pub pivot_y: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<Sequence>,
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,
@@ -229,6 +296,11 @@ pub struct Mesh {
     /// Per-vertex weights: `[(bone_name, weight), …]` per vertex.
     #[serde(default)]
     pub weights: Vec<Vec<(String, f32)>>,
+    /// Geometry borrowed from another mesh; its own vertices are then ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked: Option<LinkedMesh>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<Sequence>,
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,
@@ -324,6 +396,17 @@ pub struct Event {
     pub float_value: f32,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub string_value: String,
+    /// Asset name of a sound to play with the event.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub audio: String,
+    #[serde(default = "one", skip_serializing_if = "is_one_f32")]
+    pub volume: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub balance: f32,
+}
+
+fn is_one_f32(v: &f32) -> bool {
+    *v == 1.0
 }
 
 fn is_zero_i32(v: &i32) -> bool {

@@ -646,6 +646,8 @@ fn attachment_glyph(attachment: &Attachment) -> (&'static str, &'static str) {
         Attachment::Mesh(_) => (egui_phosphor::regular::POLYGON, "mesh"),
         Attachment::Clipping(_) => (egui_phosphor::regular::SCISSORS, "clip"),
         Attachment::Path(_) => (egui_phosphor::regular::PATH, "path"),
+        Attachment::BoundingBox(_) => (egui_phosphor::regular::BOUNDING_BOX, "hitbox"),
+        Attachment::Point(_) => (egui_phosphor::regular::CROSSHAIR_SIMPLE, "point"),
     }
 }
 

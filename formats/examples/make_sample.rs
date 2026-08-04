@@ -110,6 +110,7 @@ fn limb(
             local_scale: glam::Vec2::ONE,
             width: w,
             height: h,
+            sequence: None,
             uv_rect: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -372,6 +373,9 @@ fn main() {
                 int_value: 0,
                 float_value: 1.0,
                 string_value: "left".into(),
+                audio: String::new(),
+                volume: 1.0,
+                balance: 0.0,
             },
             EventKey {
                 time: 0.5,
@@ -379,6 +383,9 @@ fn main() {
                 int_value: 1,
                 float_value: 1.0,
                 string_value: "right".into(),
+                audio: String::new(),
+                volume: 1.0,
+                balance: 0.0,
             },
         ],
         timelines: vec![

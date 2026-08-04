@@ -412,9 +412,9 @@ fn attachment_uses(state: &AppState, id: AssetId) -> usize {
         .filter(|att| match att {
             Attachment::Region(r) => r.texture == name,
             Attachment::Mesh(m) => m.texture == name,
-            // Clips and paths are geometry, not artwork — they reference no
+            // The rest are geometry or markers, not artwork — they reference no
             // asset.
-            Attachment::Clipping(_) | Attachment::Path(_) => false,
+            _ => false,
         })
         .count()
 }

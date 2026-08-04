@@ -703,8 +703,15 @@ impl AppState {
                 Attachment::Mesh(mesh) => {
                     !mesh.weights.is_empty() && mesh.inverse_bind_matrices.is_empty()
                 }
-                // Clips and paths carry no weights, so they never need binds.
-                Attachment::Region(_) | Attachment::Clipping(_) | Attachment::Path(_) => false,
+                // A bounding box is skinned the same way a mesh is, and it binds
+                // on the same pass — a hitbox that lags the art it guards is a
+                // bug you only notice in playtest.
+                Attachment::BoundingBox(b) => !b.weights.is_empty(),
+                // The rest carry no weights, so they never need binds.
+                Attachment::Region(_)
+                | Attachment::Clipping(_)
+                | Attachment::Path(_)
+                | Attachment::Point(_) => false,
             })
         });
         if !needs_binds {
@@ -1101,6 +1108,7 @@ mod tests {
                     h: 1.0,
                 },
                 pivot: glam::Vec2::splat(0.5),
+                sequence: None,
             }),
         );
         if let Some(s) = state.doc.skeleton.slots.get_mut(slot) {
@@ -1222,6 +1230,7 @@ mod tests {
                     h: 1.0,
                 },
                 pivot: glam::Vec2::splat(0.5),
+                sequence: None,
             }),
         );
         if let Some(s) = state.doc.skeleton.slots.get_mut(slot) {

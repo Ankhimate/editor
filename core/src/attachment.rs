@@ -34,6 +34,9 @@ pub struct RegionAttachment {
     /// the shoulder. Defaulting to the centre keeps pre-pivot files identical.
     #[serde(default = "center_pivot")]
     pub pivot: Vec2,
+    /// Frames this attachment cycles through instead of `texture`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<Sequence>,
 }
 
 fn center_pivot() -> Vec2 {
@@ -105,6 +108,15 @@ pub struct MeshAttachment {
     /// `Affine2`, not `Mat4` — ADR 0002.
     #[serde(skip)]
     pub inverse_bind_matrices: HashMap<BoneId, Affine2>,
+
+    /// Geometry borrowed from another mesh. When set, this mesh's own
+    /// `setup_vertices`, `uvs`, `triangles` and `weights` are ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked: Option<LinkedMesh>,
+
+    /// Frames this mesh cycles through instead of `texture`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<Sequence>,
 }
 
 impl MeshAttachment {
@@ -137,6 +149,8 @@ impl MeshAttachment {
             weights: Vec::new(),
             ffd_keyframes: Vec::new(),
             inverse_bind_matrices: HashMap::new(),
+            linked: None,
+            sequence: None,
         }
     }
 
@@ -276,19 +290,7 @@ impl ClippingAttachment {
         if self.vertices.len() < 3 {
             return true; // A degenerate clip masks nothing.
         }
-        let mut inside = false;
-        let mut j = self.vertices.len() - 1;
-        for i in 0..self.vertices.len() {
-            let (a, b) = (self.vertices[i], self.vertices[j]);
-            if (a.y > point.y) != (b.y > point.y) {
-                let t = (point.y - a.y) / (b.y - a.y);
-                if point.x < a.x + t * (b.x - a.x) {
-                    inside = !inside;
-                }
-            }
-            j = i;
-        }
-        inside
+        polygon_contains(&self.vertices, point)
     }
 
     /// Axis-aligned bounds, which is what a scissor-rect renderer can use.
@@ -344,12 +346,176 @@ impl PathAttachment {
     }
 }
 
+/// How a sequence of frames advances over time.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum SequenceMode {
+    /// Stay on the setup frame until a timeline says otherwise.
+    #[default]
+    Hold,
+    Once,
+    Loop,
+    PingPong,
+    OnceReverse,
+    LoopReverse,
+    PingPongReverse,
+}
+
+/// A list of textures one attachment cycles through.
+///
+/// Frames are named explicitly rather than derived from a numeric suffix. The
+/// asset database already keys images by name, and a convention that breaks the
+/// moment someone renames `fire_09` to `fire_9` is a support burden we can
+/// decline.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Sequence {
+    pub frames: Vec<TextureRef>,
+    pub fps: f32,
+    pub mode: SequenceMode,
+    /// Frame shown in setup, and the one playback starts from.
+    pub setup_index: u32,
+}
+
+impl Sequence {
+    /// Which frame is showing `time` seconds into playback.
+    ///
+    /// Returns an index into [`Self::frames`], already wrapped or clamped per
+    /// [`Self::mode`], so callers never have to bounds-check.
+    pub fn index_at(&self, time: f32) -> u32 {
+        let count = self.frames.len() as i64;
+        if count == 0 {
+            return 0;
+        }
+        let start = (self.setup_index as i64).clamp(0, count - 1);
+        if self.fps <= 0.0 || matches!(self.mode, SequenceMode::Hold) {
+            return start as u32;
+        }
+        let elapsed = (time * self.fps).floor() as i64;
+        // One shared forward walk; the reverse modes are that walk negated, which
+        // keeps "does ping-pong bounce on the last frame or past it" a question
+        // with exactly one answer.
+        let reverse = matches!(
+            self.mode,
+            SequenceMode::OnceReverse | SequenceMode::LoopReverse | SequenceMode::PingPongReverse
+        );
+        let walked = start + if reverse { -elapsed } else { elapsed };
+        let index = match self.mode {
+            SequenceMode::Hold => start,
+            SequenceMode::Once | SequenceMode::OnceReverse => walked.clamp(0, count - 1),
+            SequenceMode::Loop | SequenceMode::LoopReverse => walked.rem_euclid(count),
+            SequenceMode::PingPong | SequenceMode::PingPongReverse => {
+                // A full bounce is 2n-2 frames: forward over n, back over the n-2
+                // interior ones, so neither end is held for two frames running.
+                let span = (2 * count - 2).max(1);
+                let phase = walked.rem_euclid(span);
+                if phase < count { phase } else { span - phase }
+            }
+        };
+        index.clamp(0, count - 1) as u32
+    }
+
+    /// The texture for a frame index, clamped to the list.
+    pub fn frame(&self, index: u32) -> Option<&TextureRef> {
+        if self.frames.is_empty() {
+            return None;
+        }
+        Some(&self.frames[(index as usize).min(self.frames.len() - 1)])
+    }
+}
+
+/// A mesh that borrows another mesh's geometry.
+///
+/// Two skins sharing a silhouette — the same jacket in three colours — should
+/// share one set of vertices, weights and triangles. Editing the source then
+/// updates every copy, and a deform keyed once plays on all of them, which is
+/// the whole reason the link exists rather than a duplicate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkedMesh {
+    /// Skin holding the source, or `None` for the default skin.
+    pub skin: Option<String>,
+    /// Slot the source attachment lives under.
+    pub slot: String,
+    /// The source attachment's name.
+    pub attachment: String,
+    /// Follow the source's deform timelines as well as its geometry.
+    #[serde(default = "yes")]
+    pub inherit_deform: bool,
+}
+
+/// A polygon used for hit tests, triggers and spawn regions.
+///
+/// Skinnable like a mesh: a hitbox that does not follow the pose it belongs to
+/// is worse than no hitbox, because it looks like it works.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BoundingBoxAttachment {
+    /// Polygon in the bone's local space, in perimeter order.
+    pub vertices: Vec<Vec2>,
+    /// Per-vertex bone influences. Empty means the polygon is rigid to its slot's
+    /// bone, exactly as a mesh with no weights is.
+    #[serde(default)]
+    pub weights: Vec<Vec<VertexWeight>>,
+}
+
+impl BoundingBoxAttachment {
+    /// Is `point` (in the same space as `vertices`) inside the polygon?
+    pub fn contains(&self, point: Vec2) -> bool {
+        polygon_contains(&self.vertices, point)
+    }
+}
+
+/// A named point with an orientation, carried by a bone.
+///
+/// What a muzzle flash, a footstep spark or a "hold the sword here" marker
+/// attaches to. It draws nothing, so it costs a slot and no draw call.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PointAttachment {
+    /// Position in the bone's local space.
+    pub position: Vec2,
+    /// Rotation relative to the bone, in radians.
+    pub rotation: f32,
+}
+
+impl PointAttachment {
+    /// World position and world rotation, given the owning bone's world affine.
+    pub fn world(&self, bone_world: &Affine2) -> (Vec2, f32) {
+        let position = bone_world.transform_point(self.position);
+        let axis = bone_world.transform_vector(Vec2::from_angle(self.rotation));
+        (position, axis.to_angle())
+    }
+}
+
+/// Even-odd point-in-polygon, shared by clipping and bounding boxes so the two
+/// never disagree about a shape that touches its own edge.
+fn polygon_contains(vertices: &[Vec2], point: Vec2) -> bool {
+    if vertices.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = vertices.len() - 1;
+    for i in 0..vertices.len() {
+        let (a, b) = (vertices[i], vertices[j]);
+        if (a.y > point.y) != (b.y > point.y) {
+            let t = (point.y - a.y) / (b.y - a.y);
+            if point.x < a.x + t * (b.x - a.x) {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+// A mesh is much larger than a point, and boxing the big variants would put an
+// indirection on the draw path for every sprite to save bytes on the rare
+// marker. Skins hold one of these per entry, not per frame.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Attachment {
     Region(RegionAttachment),
     Mesh(MeshAttachment),
     Clipping(ClippingAttachment),
     Path(PathAttachment),
+    BoundingBox(BoundingBoxAttachment),
+    Point(PointAttachment),
 }
 
 #[cfg(test)]
@@ -371,6 +537,7 @@ mod tests {
                 h: 1.0,
             },
             pivot: Vec2::splat(0.5),
+            sequence: None,
         }
     }
 
@@ -564,5 +731,110 @@ mod tests {
             (after - Vec2::new(0.0, 110.0)).length() < 1e-3,
             "swung with it: {after:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod new_attachment_tests {
+    use super::*;
+
+    fn seq(mode: SequenceMode, count: usize) -> Sequence {
+        Sequence {
+            frames: (0..count).map(|i| format!("f{i}")).collect(),
+            fps: 10.0,
+            mode,
+            setup_index: 0,
+        }
+    }
+
+    #[test]
+    fn hold_ignores_time() {
+        let mut s = seq(SequenceMode::Hold, 4);
+        s.setup_index = 2;
+        assert_eq!(s.index_at(0.0), 2);
+        assert_eq!(s.index_at(9.9), 2);
+    }
+
+    #[test]
+    fn once_clamps_at_the_last_frame() {
+        let s = seq(SequenceMode::Once, 4);
+        assert_eq!(s.index_at(0.0), 0);
+        assert_eq!(s.index_at(0.25), 2);
+        assert_eq!(s.index_at(5.0), 3);
+    }
+
+    #[test]
+    fn loop_wraps() {
+        let s = seq(SequenceMode::Loop, 4);
+        assert_eq!(s.index_at(0.4), 0);
+        assert_eq!(s.index_at(0.5), 1);
+    }
+
+    #[test]
+    fn ping_pong_holds_no_end_frame_twice() {
+        let s = seq(SequenceMode::PingPong, 4);
+        // 0 1 2 3 2 1 | 0 1 2 3 ...
+        let walked: Vec<u32> = (0..8).map(|i| s.index_at(i as f32 / 10.0)).collect();
+        assert_eq!(walked, vec![0, 1, 2, 3, 2, 1, 0, 1]);
+    }
+
+    #[test]
+    fn reverse_runs_the_same_walk_backwards() {
+        let mut s = seq(SequenceMode::LoopReverse, 4);
+        s.setup_index = 3;
+        let walked: Vec<u32> = (0..5).map(|i| s.index_at(i as f32 / 10.0)).collect();
+        assert_eq!(walked, vec![3, 2, 1, 0, 3]);
+    }
+
+    #[test]
+    fn a_sequence_without_frames_is_harmless() {
+        let s = Sequence {
+            frames: Vec::new(),
+            fps: 24.0,
+            mode: SequenceMode::Loop,
+            setup_index: 7,
+        };
+        assert_eq!(s.index_at(1.0), 0);
+        assert!(s.frame(0).is_none());
+    }
+
+    #[test]
+    fn bounding_box_hit_test_matches_its_polygon() {
+        let bb = BoundingBoxAttachment {
+            vertices: vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(10.0, 0.0),
+                Vec2::new(10.0, 10.0),
+                Vec2::new(0.0, 10.0),
+            ],
+            weights: Vec::new(),
+        };
+        assert!(bb.contains(Vec2::new(5.0, 5.0)));
+        assert!(!bb.contains(Vec2::new(15.0, 5.0)));
+    }
+
+    #[test]
+    fn a_degenerate_bounding_box_contains_nothing() {
+        // The opposite of clipping, on purpose: an empty clip masks nothing, but
+        // an empty hitbox must not swallow every hit test in the scene.
+        let bb = BoundingBoxAttachment::default();
+        assert!(!bb.contains(Vec2::ZERO));
+    }
+
+    #[test]
+    fn a_point_rides_its_bone() {
+        let bone = Affine2::compose(&crate::math::Transform {
+            position: Vec2::new(100.0, 0.0),
+            rotation: std::f32::consts::FRAC_PI_2,
+            scale: Vec2::ONE,
+            shear: Vec2::ZERO,
+        });
+        let point = PointAttachment {
+            position: Vec2::new(10.0, 0.0),
+            rotation: 0.0,
+        };
+        let (pos, rot) = point.world(&bone);
+        assert!((pos - Vec2::new(100.0, 10.0)).length() < 1e-4, "{pos:?}");
+        assert!((rot - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
     }
 }

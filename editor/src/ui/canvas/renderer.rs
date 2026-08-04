@@ -188,10 +188,13 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
 
     let region = match attachment {
         Attachment::Region(region) => region,
-        // Clips and paths are geometry, not artwork: one masks other slots
-        // (T-405), the other drives bones along itself (T-502). Both are drawn
-        // as overlays when selected, not as sprites.
-        Attachment::Clipping(_) | Attachment::Path(_) => return None,
+        // The non-artwork attachments: clips mask other slots (T-405), paths
+        // drive bones along themselves (T-502), hitboxes and points carry no
+        // pixels at all. Each is drawn as an overlay, not as a sprite.
+        Attachment::Clipping(_)
+        | Attachment::Path(_)
+        | Attachment::BoundingBox(_)
+        | Attachment::Point(_) => return None,
         // A mesh draws its own triangles. Vertices are in the bone's local
         // space, so the bone affine is all that is needed — weight skinning
         // (T-403) and deform offsets (T-404) slot in here later.

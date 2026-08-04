@@ -522,8 +522,19 @@ fn pick_attachment(
                         && inside(at(a), at(b), at(c))
                 })
             }
+            // A hitbox is pickable through its own polygon — it is the one piece
+            // of non-artwork geometry an animator positions by eye, so it has to
+            // be grabbable where it is drawn.
+            Attachment::BoundingBox(b) => {
+                let local = bone_world
+                    .invert()
+                    .map(|inv| inv.transform_point(world))
+                    .unwrap_or(world);
+                b.contains(local)
+            }
+            // A point has no area; the gizmo layer picks it by proximity.
             // Clips and paths are authoring geometry with their own handles.
-            Attachment::Clipping(_) | Attachment::Path(_) => false,
+            Attachment::Clipping(_) | Attachment::Path(_) | Attachment::Point(_) => false,
         };
         if hit {
             return Some((slot_id, name.to_string(), slot.bone));

@@ -47,7 +47,7 @@ fn mesh_mut<'a>(
         .get_mut(&(slot, name.to_string()))?
     {
         Attachment::Mesh(mesh) => Some(mesh),
-        Attachment::Region(_) | Attachment::Clipping(_) | Attachment::Path(_) => None,
+        _ => None,
     }
 }
 
@@ -305,6 +305,7 @@ mod tests {
                 h: 1.0,
             },
             pivot: glam::Vec2::splat(0.5),
+            sequence: None,
         })
     }
 
