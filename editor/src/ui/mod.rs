@@ -76,6 +76,18 @@ impl Tab {
         }
     }
 
+    /// Is this pane only meaningful while animating?
+    ///
+    /// Setup mode has no playhead and no active clip, so these show an
+    /// invitation to switch modes and nothing else. Four cards of that is a lot
+    /// of screen spent saying "not now".
+    pub fn is_animation(self) -> bool {
+        matches!(
+            self,
+            Tab::Timeline | Tab::Graph | Tab::Animations | Tab::Events
+        )
+    }
+
     pub fn icon(self) -> &'static str {
         match self {
             Tab::Canvas => crate::ui::icons::VIEWPORT,
@@ -386,10 +398,11 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
 
         let compact = self.compact_tabs.contains(&tile_id);
         let full_title = self.tab_title_for_tile(tiles, tile_id);
+        let icon = tab_icon(tiles, tile_id);
         let label: egui::WidgetText = if compact {
-            tab_icon(tiles, tile_id).into()
+            icon.into()
         } else {
-            full_title.clone()
+            format!("{icon}  {}", full_title.text()).into()
         };
         let font_id = egui::TextStyle::Button.resolve(ui.style());
         let galley =

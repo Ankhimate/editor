@@ -133,6 +133,49 @@ impl AnkhimateApp {
 }
 
 impl AnkhimateApp {
+    /// Hide the animation panes while building the rig, and bring them back when
+    /// animating.
+    ///
+    /// A card whose tabs are *all* animation panes is hidden whole, rather than
+    /// left as an empty frame with no tabs in it. One that mixes them — because
+    /// the user docked the dopesheet next to the assets — keeps its card and
+    /// loses only those tabs.
+    fn apply_mode_visibility(&mut self) {
+        use egui_tiles::{Container, Tile};
+
+        let animating = self.state.session.is_animating();
+
+        let panes: Vec<(egui_tiles::TileId, bool)> = self
+            .tree
+            .tiles
+            .iter()
+            .filter_map(|(id, tile)| match tile {
+                Tile::Pane(pane) => Some((*id, pane.is_animation())),
+                _ => None,
+            })
+            .collect();
+        for (id, is_animation) in &panes {
+            self.tree.set_visible(*id, animating || !is_animation);
+        }
+
+        let cards: Vec<(egui_tiles::TileId, Vec<egui_tiles::TileId>)> = self
+            .tree
+            .tiles
+            .iter()
+            .filter_map(|(id, tile)| match tile {
+                Tile::Container(Container::Tabs(tabs)) => Some((*id, tabs.children.clone())),
+                _ => None,
+            })
+            .collect();
+        for (card, children) in cards {
+            let all_animation = !children.is_empty()
+                && children.iter().all(|child| {
+                    matches!(self.tree.tiles.get(*child), Some(Tile::Pane(p)) if p.is_animation())
+                });
+            self.tree.set_visible(card, animating || !all_animation);
+        }
+    }
+
     /// Tabs that should show their icon alone, keyed by tab tile id.
     ///
     /// egui_tiles' answer to a crowded tab bar is a pair of hardcoded scroll
@@ -165,7 +208,11 @@ impl AnkhimateApp {
                 .children
                 .iter()
                 .filter_map(|child| match self.tree.tiles.get(*child) {
-                    Some(Tile::Pane(pane)) => Some(label_width(pane.title()) + padding),
+                    // The icon rides with the label, so it counts toward whether
+                    // the labels fit at all.
+                    Some(Tile::Pane(pane)) => {
+                        Some(label_width(&format!("{}  {}", pane.icon(), pane.title())) + padding)
+                    }
                     _ => None,
                 })
                 .sum();
@@ -665,10 +712,25 @@ impl eframe::App for AnkhimateApp {
                             // layout was reset by hand.
                             ui.menu_button("View", |ui| {
                                 ui.set_min_width(210.0);
+                                let animating = self.state.session.is_animating();
                                 for tab in crate::ui::Tab::ALL {
                                     let found = self.find_pane(tab);
                                     let mut on = found.is_some_and(|id| self.tree.is_visible(id));
                                     let label = format!("{}  {}", tab.icon(), tab.title());
+                                    // An animation pane is hidden by the mode, not
+                                    // by choice; offering a tick that the next
+                                    // frame undoes would be a control that does
+                                    // nothing.
+                                    if tab.is_animation() && !animating {
+                                        ui.add_enabled(
+                                            false,
+                                            egui::Checkbox::new(&mut on, label),
+                                        )
+                                        .on_disabled_hover_text(
+                                            "Switch to Animate (Tab) to use this panel",
+                                        );
+                                        continue;
+                                    }
                                     if ui.checkbox(&mut on, label).clicked() {
                                         match found {
                                             Some(id) => self.tree.set_visible(id, on),
@@ -905,6 +967,13 @@ impl eframe::App for AnkhimateApp {
                 crate::ui::toolbar::ui(ui, &mut self.state, &mut trigger_undo, &mut trigger_redo);
             });
 
+        // Animation panes are hidden in Setup mode.
+        //
+        // Not disabled — hidden. A dopesheet with no playhead, a graph with no
+        // curves and an event table with no clip are four cards saying "not
+        // now", and the rig you are actually building gets what is left.
+        self.apply_mode_visibility();
+
         // Which cards are too narrow to show every tab label.
         //
         // Measured here, before the tree runs, because the decision belongs to a
@@ -1140,6 +1209,58 @@ mod view_menu_tests {
         app.tree = AnkhimateApp::default_layout();
         for tab in Tab::ALL {
             assert!(app.find_pane(tab).is_some(), "{tab:?} did not come back");
+        }
+    }
+}
+
+#[cfg(test)]
+mod mode_visibility_tests {
+    use super::*;
+    use crate::ui::Tab;
+
+    fn is_shown(app: &AnkhimateApp, tab: Tab) -> bool {
+        app.find_pane(tab).is_some_and(|id| app.tree.is_visible(id))
+    }
+
+    #[test]
+    fn setup_hides_the_animation_panes_and_animate_brings_them_back() {
+        let mut app = AnkhimateApp::default();
+
+        app.state.session.work_mode = crate::session::WorkMode::Setup;
+        app.apply_mode_visibility();
+        for tab in Tab::ALL {
+            assert_eq!(is_shown(&app, tab), !tab.is_animation(), "{tab:?} in Setup");
+        }
+
+        app.state.session.work_mode = crate::session::WorkMode::Animate;
+        app.apply_mode_visibility();
+        for tab in Tab::ALL {
+            assert!(is_shown(&app, tab), "{tab:?} in Animate");
+        }
+    }
+
+    /// A card whose tabs are *all* animation panes is hidden whole. Left visible
+    /// it would be an empty frame with no tabs — which looks broken rather than
+    /// deliberate.
+    #[test]
+    fn a_card_of_only_animation_panes_is_hidden_whole() {
+        use egui_tiles::{Container, Tile};
+
+        let mut app = AnkhimateApp::default();
+        app.state.session.work_mode = crate::session::WorkMode::Setup;
+        app.apply_mode_visibility();
+
+        for (id, tile) in app.tree.tiles.iter() {
+            let Tile::Container(Container::Tabs(tabs)) = tile else {
+                continue;
+            };
+            let all_animation = !tabs.children.is_empty()
+                && tabs.children.iter().all(
+                    |c| matches!(app.tree.tiles.get(*c), Some(Tile::Pane(p)) if p.is_animation()),
+                );
+            if all_animation {
+                assert!(!app.tree.is_visible(*id), "an all-animation card stayed up");
+            }
         }
     }
 }
