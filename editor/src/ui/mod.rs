@@ -4,6 +4,7 @@ pub mod atlas;
 pub mod branding;
 pub mod canvas;
 pub mod constraints;
+pub mod dialog;
 pub mod draw_order;
 pub mod events;
 pub mod icon_font;
@@ -255,7 +256,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             }
             Tab::Animations => {
                 egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
-                    animations::ui(ui, self.state);
+                    animations::ui(ui, self.state, self.theme);
                 });
             }
             Tab::Events => {

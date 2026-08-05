@@ -94,7 +94,7 @@ impl PendingPsd {
 }
 
 /// Draw the import window. Returns `true` when it should close.
-pub fn ui(ctx: &egui::Context, state: &mut AppState) -> bool {
+pub fn ui(ctx: &egui::Context, state: &mut AppState, theme: &crate::theme::Theme) -> bool {
     let Some(mut pending) = state.session.pending_psd.clone() else {
         return false;
     };
@@ -102,12 +102,10 @@ pub fn ui(ctx: &egui::Context, state: &mut AppState) -> bool {
     let mut close = false;
     let mut confirm = false;
 
-    egui::Window::new("Import PSD")
-        .collapsible(false)
-        .resizable(true)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .default_width(620.0)
-        .show(ctx, |ui| {
+    let dialog = crate::ui::dialog::Dialog::new("psd_import", "Import PSD")
+        .icon(crate::ui::icons::IMPORT_PSD)
+        .width(620.0)
+        .show(ctx, theme, |ui| {
             ui.horizontal_top(|ui| {
                 layer_tree(ui, &mut pending);
 
@@ -191,6 +189,7 @@ pub fn ui(ctx: &egui::Context, state: &mut AppState) -> bool {
         run_import(state, &pending);
         close = true;
     }
+    close |= dialog.closed;
     if close {
         state.session.pending_psd = None;
     } else {

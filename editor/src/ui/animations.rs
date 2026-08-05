@@ -15,7 +15,7 @@ use crate::commands::key_cmds::{
 use ankhimate_core::ids::AnimationId;
 use eframe::egui;
 
-pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
+pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::Theme) {
     ui.horizontal(|ui| {
         if ui
             .button(format!("{} New", crate::ui::icons::ADD))
@@ -161,7 +161,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     if let Some((id, name)) = rename {
         ui.data_mut(|d| d.insert_temp(egui::Id::new("anim_rename"), (id, name)));
     }
-    rename_popup(ui, state);
+    rename_popup(ui, state, theme);
 
     // ── Properties of the selected clip ────────────────────────────────
     let Some(anim_id) = state.session.active_animation else {
@@ -209,18 +209,17 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
 
 /// A modal rename, because renaming in place inside a scroll area fights the
 /// row's click handling.
-fn rename_popup(ui: &mut egui::Ui, state: &mut AppState) {
+fn rename_popup(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::Theme) {
     let id = egui::Id::new("anim_rename");
     let Some((anim, mut name)) = ui.data(|d| d.get_temp::<(AnimationId, String)>(id)) else {
         return;
     };
     let mut close = false;
     let mut commit = false;
-    egui::Window::new("Rename animation")
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ui.ctx(), |ui| {
+    let dialog = crate::ui::dialog::Dialog::new("rename_animation", "Rename animation")
+        .icon(crate::ui::icons::ANIMATIONS)
+        .width(320.0)
+        .show(ui.ctx(), theme, |ui| {
             let response = ui.add(egui::TextEdit::singleline(&mut name).desired_width(220.0));
             response.request_focus();
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -242,6 +241,7 @@ fn rename_popup(ui: &mut egui::Ui, state: &mut AppState) {
         )));
         close = true;
     }
+    close |= dialog.closed;
     if close {
         ui.data_mut(|d| d.remove::<(AnimationId, String)>(id));
     } else {

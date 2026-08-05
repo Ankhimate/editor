@@ -57,11 +57,10 @@ pub fn ui(ctx: &egui::Context, state: &mut AppState, theme: &Theme) {
     let mut moved: Option<(usize, glam::Vec2)> = None;
     let mut released = false;
 
-    egui::Window::new("UV editor")
-        .collapsible(false)
-        .resizable(false)
-        .default_pos(egui::pos2(120.0, 120.0))
-        .show(ctx, |ui| {
+    let dialog = crate::ui::dialog::Dialog::new("uv_editor", "UV editor")
+        .icon(crate::ui::icons::MESH)
+        .width(660.0)
+        .show(ctx, theme, |ui| {
             ui.horizontal_top(|ui| {
                 let response = canvas(ui, state, theme, &pane, &mesh, &mut moved);
                 if response.drag_stopped() || ui.input(|i| i.pointer.any_released()) {
@@ -125,6 +124,7 @@ pub fn ui(ctx: &egui::Context, state: &mut AppState, theme: &Theme) {
             MeshEdit::ResetUvs,
         )));
     }
+    close |= dialog.closed;
     if close {
         state.session.uv_pane = None;
         state.session.thumbnails.remove(TEXTURE_KEY);

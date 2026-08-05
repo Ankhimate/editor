@@ -60,11 +60,10 @@ pub fn ui(ctx: &egui::Context, state: &mut AppState, theme: &crate::theme::Theme
     let mut apply = false;
     let mut close = false;
 
-    egui::Window::new("Trace mesh")
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ctx, |ui| {
+    let dialog = crate::ui::dialog::Dialog::new("trace_mesh", "Trace mesh")
+        .icon(crate::ui::icons::MESH)
+        .width(620.0)
+        .show(ctx, theme, |ui| {
             ui.horizontal_top(|ui| {
                 preview(ui, state, theme, &image, traced.as_ref());
 
@@ -216,6 +215,7 @@ pub fn ui(ctx: &egui::Context, state: &mut AppState, theme: &crate::theme::Theme
         apply_trace(state, &pending, &traced);
         close = true;
     }
+    close |= dialog.closed;
     if close {
         state.session.pending_trace = None;
         state.session.thumbnails.remove(PREVIEW_KEY);

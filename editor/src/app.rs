@@ -1041,20 +1041,19 @@ impl eframe::App for AnkhimateApp {
         crate::ui::uv::ui(ctx, &mut self.state, &self.theme);
 
         // ── Spritesheet slicer (T-305) ───────────────────────────────────
-        crate::ui::atlas::ui(ctx, &mut self.state);
-        crate::ui::psd_import::ui(ctx, &mut self.state);
+        crate::ui::atlas::ui(ctx, &mut self.state, &self.theme);
+        crate::ui::psd_import::ui(ctx, &mut self.state, &self.theme);
 
         // ── Import summary (T-303) ───────────────────────────────────────
         // A conversion that quietly drops half a rig is worse than one that
         // says what it left behind, so this is a dialog, not a status line.
         if let Some(notes) = self.state.session.import_summary.clone() {
             let mut open = true;
-            egui::Window::new("Import summary")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .show(ctx, |ui| {
-                    ui.set_max_width(460.0);
+            let dialog = crate::ui::dialog::Dialog::new("import_summary", "Import summary")
+                .icon(crate::ui::icons::IMPORT_PSD)
+                .width(460.0)
+                .max_height(320.0)
+                .show(ctx, &self.theme, |ui| {
                     for note in &notes {
                         ui.label(note);
                     }
@@ -1068,7 +1067,7 @@ impl eframe::App for AnkhimateApp {
                         }
                     });
                 });
-            if !open {
+            if !open || dialog.closed {
                 self.state.session.import_summary = None;
             }
         }
@@ -1093,7 +1092,7 @@ impl eframe::App for AnkhimateApp {
         // ── Startup window (T-304) ───────────────────────────────────────
         // Drawn last so it sits over the editor, which stays usable behind it.
         if self.show_startup {
-            match crate::ui::startup::ui(ctx, &mut self.config) {
+            match crate::ui::startup::ui(ctx, &mut self.config, &self.theme) {
                 crate::ui::startup::StartupChoice::None => {}
                 crate::ui::startup::StartupChoice::NewProject => {
                     file_action = Some(FileAction::New);

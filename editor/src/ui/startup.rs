@@ -20,17 +20,18 @@ pub enum StartupChoice {
     Dismiss,
 }
 
-pub fn ui(ctx: &egui::Context, config: &mut Config) -> StartupChoice {
+pub fn ui(ctx: &egui::Context, config: &mut Config, theme: &crate::theme::Theme) -> StartupChoice {
     let mut choice = StartupChoice::None;
     let samples = crate::config::sample_projects();
     let mut forget: Option<PathBuf> = None;
 
-    egui::Window::new("Ankhimate")
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .default_width(560.0)
-        .show(ctx, |ui| {
+    // Not dismissable: there is nothing behind it yet, so closing it would
+    // leave the user staring at an empty editor with no way back.
+    let _ = crate::ui::dialog::Dialog::new("startup", "Ankhimate")
+        .icon(crate::ui::icons::VIEWPORT)
+        .width(560.0)
+        .dismissable(false)
+        .show(ctx, theme, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.heading("Ankhimate");

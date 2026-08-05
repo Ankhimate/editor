@@ -45,13 +45,13 @@ pub fn ui(
         })
         .unwrap_or_default();
 
-    egui::Window::new("Settings")
-        .collapsible(false)
-        .resizable(true)
-        .default_width(520.0)
-        .default_height(440.0)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ctx, |ui| {
+    // `theme` is borrowed mutably by the body, so the dialog reads its chrome
+    // colours from a copy taken before the borrow starts.
+    let chrome = theme.clone();
+    let dialog = crate::ui::dialog::Dialog::new("settings", "Settings")
+        .icon(crate::ui::icons::PROPERTIES)
+        .width(520.0)
+        .show(ctx, &chrome, |ui| {
             ui.horizontal(|ui| {
                 for (label, icon, value) in [
                     ("Appearance", crate::ui::icons::PALETTE, Section::Appearance),
@@ -95,6 +95,7 @@ pub fn ui(
                 });
             });
         });
+    close |= dialog.closed;
 
     ctx.memory_mut(|m| {
         m.data

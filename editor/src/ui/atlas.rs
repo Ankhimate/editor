@@ -234,7 +234,7 @@ pub fn detect_cells(
 }
 
 /// Draw the slicer window. Returns `true` when it should close.
-pub fn ui(ctx: &egui::Context, state: &mut AppState) -> bool {
+pub fn ui(ctx: &egui::Context, state: &mut AppState, theme: &crate::theme::Theme) -> bool {
     let Some(mut pending) = state.session.pending_atlas.clone() else {
         return false;
     };
@@ -242,12 +242,10 @@ pub fn ui(ctx: &egui::Context, state: &mut AppState) -> bool {
     let mut close = false;
     let mut confirm = false;
 
-    egui::Window::new("Import spritesheet")
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .default_width(560.0)
-        .show(ctx, |ui| {
+    let dialog = crate::ui::dialog::Dialog::new("atlas_import", "Import spritesheet")
+        .icon(crate::ui::icons::IMPORT_SHEET)
+        .width(560.0)
+        .show(ctx, theme, |ui| {
             ui.horizontal_top(|ui| {
                 preview(ui, state, &mut pending);
 
@@ -353,6 +351,7 @@ pub fn ui(ctx: &egui::Context, state: &mut AppState) -> bool {
         slice_and_import(state, &pending);
         close = true;
     }
+    close |= dialog.closed;
     if close {
         state.session.pending_atlas = None;
         state.session.thumbnails.remove(ATLAS_PREVIEW_KEY);
