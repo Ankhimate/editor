@@ -248,6 +248,64 @@ pub fn swap_bones(weights: &[Vec<VertexWeight>], a: BoneId, b: BoneId) -> Vec<Ve
         .collect()
 }
 
+/// Give vertices that sit on top of each other the same weights.
+///
+/// Two meshes that meet at a seam — a torso and a hip, a sleeve and a forearm —
+/// each own their own copy of the vertices along that seam. Weight them
+/// separately and the seam splits open the moment the joint bends, because the
+/// two edges are being pulled by slightly different mixes of bone. Averaging
+/// coincident vertices closes it, and keeps it closed under every pose.
+///
+/// Takes each mesh's vertices in a **common space** with its weights, and returns
+/// each mesh's new weight table. `epsilon` is how close counts as the same point.
+pub fn weld(
+    meshes: &[(Vec<glam::Vec2>, Vec<Vec<VertexWeight>>)],
+    epsilon: f32,
+) -> Vec<Vec<Vec<VertexWeight>>> {
+    // Every (mesh, vertex) pair grouped into clusters of coincident points.
+    let mut clusters: Vec<(glam::Vec2, Vec<(usize, usize)>)> = Vec::new();
+    for (mesh_index, (positions, _)) in meshes.iter().enumerate() {
+        for (vertex_index, position) in positions.iter().enumerate() {
+            match clusters
+                .iter_mut()
+                .find(|(anchor, _)| (*anchor - *position).length() <= epsilon)
+            {
+                Some((_, members)) => members.push((mesh_index, vertex_index)),
+                None => clusters.push((*position, vec![(mesh_index, vertex_index)])),
+            }
+        }
+    }
+
+    let mut out: Vec<Vec<Vec<VertexWeight>>> =
+        meshes.iter().map(|(_, weights)| weights.clone()).collect();
+    for (_, members) in &clusters {
+        // A vertex that meets nothing keeps what it has; averaging a group of
+        // one would only cost it its exact values to floating point.
+        if members.len() < 2 {
+            continue;
+        }
+        let mut totals: Vec<VertexWeight> = Vec::new();
+        for (mesh_index, vertex_index) in members {
+            let Some(vertex) = meshes[*mesh_index].1.get(*vertex_index) else {
+                continue;
+            };
+            for w in vertex {
+                match totals.iter_mut().find(|t| t.bone == w.bone) {
+                    Some(t) => t.weight += w.weight,
+                    None => totals.push(*w),
+                }
+            }
+        }
+        normalize(&mut totals);
+        for (mesh_index, vertex_index) in members {
+            if let Some(slot) = out[*mesh_index].get_mut(*vertex_index) {
+                *slot = totals.clone();
+            }
+        }
+    }
+    out
+}
+
 /// Drop one bone's influence from a mesh entirely, sharing it out.
 pub fn remove_bone(weights: &[Vec<VertexWeight>], bone: BoneId) -> Vec<Vec<VertexWeight>> {
     weights
@@ -950,6 +1008,72 @@ mod tests {
         );
         let total: f32 = weights.iter().map(|w| w.weight).sum();
         assert!((total - 1.0).abs() < 1e-4, "renormalized after pruning");
+    }
+
+    #[test]
+    fn welding_averages_vertices_that_sit_on_each_other() {
+        let (a, b) = (bone_id(1), bone_id(2));
+        // Two meshes meeting at (0,0): one edge fully bound to a, the other to b.
+        let meshes = vec![
+            (
+                vec![glam::vec2(0.0, 0.0), glam::vec2(10.0, 0.0)],
+                vec![
+                    vec![VertexWeight {
+                        bone: a,
+                        weight: 1.0,
+                    }],
+                    Vec::new(),
+                ],
+            ),
+            (
+                // The seam vertex is a hair off, which is what an authored seam
+                // actually looks like.
+                vec![glam::vec2(0.001, 0.0), glam::vec2(-10.0, 0.0)],
+                vec![
+                    vec![VertexWeight {
+                        bone: b,
+                        weight: 1.0,
+                    }],
+                    Vec::new(),
+                ],
+            ),
+        ];
+        let welded = weld(&meshes, 0.01);
+
+        for (mesh, welded) in welded.iter().enumerate().take(2) {
+            let seam = &welded[0];
+            assert_eq!(seam.len(), 2, "mesh {mesh} did not take both bones");
+            for w in seam {
+                assert!(
+                    (w.weight - 0.5).abs() < 1e-4,
+                    "mesh {mesh} bone {:?} at {}",
+                    w.bone,
+                    w.weight
+                );
+            }
+        }
+        // The far vertices met nothing, so they are untouched.
+        assert!(welded[0][1].is_empty());
+        assert!(welded[1][1].is_empty());
+    }
+
+    #[test]
+    fn welding_leaves_vertices_that_meet_nothing_alone() {
+        let a = bone_id(1);
+        let meshes = vec![
+            (
+                vec![glam::vec2(0.0, 0.0)],
+                vec![vec![VertexWeight {
+                    bone: a,
+                    weight: 1.0,
+                }]],
+            ),
+            (vec![glam::vec2(50.0, 0.0)], vec![Vec::new()]),
+        ];
+        let welded = weld(&meshes, 0.01);
+        assert_eq!(welded[0][0].len(), 1);
+        assert!((welded[0][0][0].weight - 1.0).abs() < 1e-6);
+        assert!(welded[1][0].is_empty());
     }
 
     #[test]

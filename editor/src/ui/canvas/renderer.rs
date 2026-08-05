@@ -1256,8 +1256,15 @@ pub fn render_bones(
         crate::ui::canvas::outline::draw(&painter, rect, state, theme);
     }
 
-    // Draw Transform Gizmos for the selected bone
-    if let Some(selected_id) = state.session.active_bone()
+    // Transform gizmos for the selected bone.
+    //
+    // Only under Select. The other tools select a bone as part of doing
+    // something else — weight painting clicks one to aim the brush — and the
+    // gizmo then lands on top of the exact area being worked on, with handles
+    // that swallow the drag meant for the mesh. A gizmo for a transform the
+    // current tool cannot perform is decoration in the way.
+    if state.session.tool == crate::session::Tool::Select
+        && let Some(selected_id) = state.session.active_bone()
         && state.doc.skeleton.bones.contains_key(selected_id)
     {
         let selected_world = state.pose.world_decomposed(selected_id);

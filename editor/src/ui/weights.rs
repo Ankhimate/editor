@@ -16,7 +16,7 @@
 use crate::app_state::AppState;
 use crate::commands::attachment_cmds::owning_skin;
 use crate::commands::weight_cmds::{
-    BrushMode, SetWeights, auto_weight, prune, remove_bone, set_weight, swap_bones,
+    self, BrushMode, SetWeights, auto_weight, prune, remove_bone, set_weight, swap_bones,
 };
 use ankhimate_core::attachment::{Attachment, MeshAttachment, VertexWeight};
 use ankhimate_core::ids::{BoneId, SkinId, SlotId};
@@ -365,7 +365,19 @@ fn apply_direct(
 }
 
 fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &MeshAttachment) {
+    let selected_bones = state.session.selected_bones.clone();
     ui.horizontal(|ui| {
+        if ui
+            .add_enabled(!selected_bones.is_empty(), egui::Button::new("Bind"))
+            .on_hover_text(
+                "Bind the selected bones to this mesh, computing starting weights \
+                 from them alone.\n\
+                 Unlike Auto-weight, bones you did not select are left out.",
+            )
+            .clicked()
+        {
+            auto_weight_mesh(state, target, mesh, Some(&selected_bones));
+        }
         if ui
             .button("Auto-weight")
             .on_hover_text(
@@ -374,8 +386,42 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
             )
             .clicked()
         {
-            auto_weight_mesh(state, target, mesh);
+            auto_weight_mesh(state, target, mesh, None);
         }
+    });
+
+    ui.horizontal(|ui| {
+        if ui
+            .button("Update bindings")
+            .on_hover_text(
+                "Recapture the bind pose from the current setup.\n\
+                 Do this after moving a bone that already holds weight, or the \
+                 art drifts away from it.",
+            )
+            .clicked()
+        {
+            // The weights are unchanged; the point is the side effect. Every
+            // weight command clears the bind matrices, and `rebind_meshes`
+            // recaptures them from the setup pose on the next tick.
+            dispatch(state, target, mesh.weights.clone(), "Update Bindings");
+            state.session.set_status("Bindings updated");
+        }
+        if ui
+            .add_enabled(
+                state.session.selected_slots.len() > 1,
+                egui::Button::new("Weld"),
+            )
+            .on_hover_text(
+                "Give vertices that sit on top of each other the same weights.\n\
+                 Select two or more slots whose meshes meet at a seam.",
+            )
+            .clicked()
+        {
+            weld_selected(state);
+        }
+    });
+
+    ui.horizontal(|ui| {
         if ui
             .button("Prune")
             .on_hover_text("Drop the weakest influences on every vertex")
@@ -413,8 +459,71 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
     .on_hover_text("Weights below this are dropped by Prune");
 }
 
-/// Auto-weight this mesh against every bone in the rig.
-fn auto_weight_mesh(state: &mut AppState, target: &Target, mesh: &MeshAttachment) {
+/// Weld every selected slot's mesh together along the seams they share.
+fn weld_selected(state: &mut AppState) {
+    let slots = state.session.selected_slots.clone();
+    let mut targets: Vec<Target> = Vec::new();
+    let mut inputs: Vec<(Vec<glam::Vec2>, Vec<Vec<VertexWeight>>)> = Vec::new();
+
+    for slot in slots {
+        let Some(name) = state
+            .doc
+            .skeleton
+            .slots
+            .get(slot)
+            .and_then(|s| s.attachment.clone())
+        else {
+            continue;
+        };
+        let Some(skin) = owning_skin(&state.doc, state.session.active_skin, slot, &name) else {
+            continue;
+        };
+        let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot, &name) else {
+            continue;
+        };
+        // Compared in world space: each mesh's vertices live in its own slot
+        // bone's frame, and two seams that touch on screen have quite different
+        // local coordinates.
+        let bone = state.doc.skeleton.slots[slot].bone;
+        let Some(world) = state.pose.worlds.get(bone).copied() else {
+            continue;
+        };
+        let positions: Vec<glam::Vec2> = mesh
+            .setup_vertices
+            .iter()
+            .map(|v| world.transform_point(*v))
+            .collect();
+        let mut weights = mesh.weights.clone();
+        weights.resize(positions.len(), Vec::new());
+        inputs.push((positions, weights));
+        targets.push(Target { skin, slot, name });
+    }
+
+    if inputs.len() < 2 {
+        state
+            .session
+            .set_status("Select two or more slots with meshes to weld");
+        return;
+    }
+
+    // A pixel of slack. Seams are authored by eye or by tracing, so exact
+    // equality would match almost nothing.
+    let welded = weight_cmds::weld(&inputs, 1.0);
+    for (target, weights) in targets.iter().zip(welded) {
+        dispatch(state, target, weights, "Weld Weights");
+    }
+    state
+        .session
+        .set_status(format!("Welded {} meshes", targets.len()));
+}
+
+/// Auto-weight this mesh, against the whole rig or just the bones given.
+fn auto_weight_mesh(
+    state: &mut AppState,
+    target: &Target,
+    mesh: &MeshAttachment,
+    only: Option<&[BoneId]>,
+) {
     // Bones as segments in the mesh's local space, which is where its vertices
     // live: distance from a vertex to a *bone* means distance to its segment,
     // not to its origin, or long bones would only pull at one end.
@@ -430,6 +539,7 @@ fn auto_weight_mesh(state: &mut AppState, target: &Target, mesh: &MeshAttachment
         .skeleton
         .update_order
         .iter()
+        .filter(|id| only.is_none_or(|only| only.contains(id)))
         .map(|&id| {
             let start = state.pose.world_position(id);
             let end = state.pose.world_tip(&state.doc.skeleton, id);
@@ -444,9 +554,14 @@ fn auto_weight_mesh(state: &mut AppState, target: &Target, mesh: &MeshAttachment
         return;
     }
 
+    let label = if only.is_some() {
+        "Bind Bones"
+    } else {
+        "Auto-weight"
+    };
     let weights = auto_weight(mesh, &bones, 2.0);
     let vertices = weights.len();
-    if dispatch(state, target, weights, "Auto-weight") {
+    if dispatch(state, target, weights, label) {
         state
             .session
             .set_status(format!("Auto-weighted {vertices} vertices"));
