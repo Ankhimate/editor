@@ -55,40 +55,40 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                 .color(ui.visuals().weak_text_color()),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let import = ui.add_enabled(
-                setup,
-                egui::Button::new(format!("{} Import", crate::ui::icons::ADD)),
-            );
-            let import = if setup {
-                import.on_hover_text("Import image files into the library")
-            } else {
-                import.on_hover_text("Switch to Setup mode to import (Tab)")
+            // Icon only, outlined in the accent. The row is four actions of equal
+            // weight — importing images, a sheet, a PSD, and re-reading sources —
+            // and one of them spelled out as "＋ Import" made it look like the
+            // primary action and the rest like its options.
+            let hint = |enabled: bool, text: &'static str| {
+                if enabled {
+                    text
+                } else {
+                    "Switch to Setup mode (Tab)"
+                }
             };
-            if import.clicked() {
+            if action_button(ui, crate::ui::icons::ADD, setup)
+                .on_hover_text(hint(setup, "Import image files into the library"))
+                .clicked()
+            {
                 import_dialog(state);
             }
             // Checking sources reads every file, so it is a button rather than
             // something that happens quietly every frame.
-            if ui
-                .add_enabled(
-                    setup && !state.doc.assets.is_empty(),
-                    egui::Button::new(crate::ui::icons::REFRESH),
-                )
-                .on_hover_text("Check source files for changes")
+            let can_check = setup && !state.doc.assets.is_empty();
+            if action_button(ui, crate::ui::icons::REFRESH, can_check)
+                .on_hover_text(hint(can_check, "Check source files for changes"))
                 .clicked()
             {
                 check_sources(state);
             }
-            if ui
-                .add_enabled(setup, egui::Button::new(crate::ui::icons::GRID))
-                .on_hover_text("Import a spritesheet and slice it into cells")
+            if action_button(ui, crate::ui::icons::GRID, setup)
+                .on_hover_text(hint(setup, "Import a spritesheet and slice it into cells"))
                 .clicked()
             {
                 open_sheet_dialog(state);
             }
-            if ui
-                .add_enabled(setup, egui::Button::new(crate::ui::icons::DRAW_ORDER))
-                .on_hover_text("Import a layered PSD as a rig")
+            if action_button(ui, crate::ui::icons::DRAW_ORDER, setup)
+                .on_hover_text(hint(setup, "Import a layered PSD as a rig"))
                 .clicked()
             {
                 open_psd_dialog(state);
@@ -461,6 +461,49 @@ fn attachment_uses(state: &AppState, id: AssetId) -> usize {
             _ => false,
         })
         .count()
+}
+
+/// A square icon button, outlined in the accent colour.
+///
+/// Outlined rather than filled: four solid accent plates in a row would out-shout
+/// the panel they sit above, and these are ordinary actions rather than the one
+/// thing the panel is for.
+fn action_button(ui: &mut egui::Ui, icon: &str, enabled: bool) -> egui::Response {
+    const SIZE: f32 = 26.0;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(SIZE, SIZE),
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    let accent = ui.visuals().selection.bg_fill;
+    let color = if enabled {
+        accent
+    } else {
+        accent.gamma_multiply(0.35)
+    };
+    // Hover fills faintly rather than brightening the outline: a brighter border
+    // on an already-accent button is a change nobody notices.
+    if enabled && response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 6, accent.gamma_multiply(0.15));
+    }
+    ui.painter().rect_stroke(
+        rect,
+        6,
+        egui::Stroke::new(1.0, color),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(14.0),
+        color,
+    );
+    response
 }
 
 /// Decode (once) and cache an egui thumbnail for an asset.
