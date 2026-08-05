@@ -232,6 +232,16 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         let radius = CARD_RADIUS as f32;
         let card =
             egui::Rect::from_min_max(egui::pos2(body.min.x, body.min.y - TAB_BAR_H), body.max);
+
+        // A layer painter, not `ui.painter()`.
+        //
+        // `Painter::with_clip_rect` *intersects* with the clip it already has,
+        // and a pane's clip is its body — which stops below the tab strip. Every
+        // shape aimed at the top of the card was therefore clipped to nothing,
+        // which is why the bottom corners rounded and the top two never did, and
+        // why the outline only ever appeared along three sides.
+        let painter = ui.ctx().layer_painter(ui.layer_id());
+
         for (corner, centre) in [
             (card.left_top(), egui::vec2(radius, radius)),
             (
@@ -248,7 +258,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             ),
         ] {
             let square = egui::Rect::from_min_size(corner, egui::Vec2::splat(radius));
-            let painter = ui.painter().with_clip_rect(square);
+            let painter = painter.with_clip_rect(square);
             painter.rect_filled(square, 0, self.theme.window_background());
             painter.circle_filled(corner + centre, radius, ui.visuals().panel_fill);
         }
@@ -260,7 +270,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         // rect and the dopesheet paints its sheet — an outline drawn first is
         // painted over by the very panels that need it most, which is why the
         // cards looked stuck together with a 10px gap between them.
-        ui.painter().with_clip_rect(card.expand(2.0)).rect_stroke(
+        painter.with_clip_rect(card.expand(2.0)).rect_stroke(
             card,
             CARD_RADIUS,
             egui::Stroke::new(1.0, self.theme.card_border()),
@@ -440,5 +450,35 @@ mod layout_tests {
             "cards are {gap}px apart, expected {CARD_GAP}"
         );
         assert!(matches!(tree.tiles.get(left), Some(Tile::Container(_))));
+    }
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::*;
+
+    /// `Painter::with_clip_rect` intersects; it does not replace.
+    ///
+    /// Pinned because it cost four rounds of "still squared". A pane's clip stops
+    /// at its body, so anything aimed at the tab strip above — the top corners,
+    /// the top edge of the card outline — clipped to nothing and simply never
+    /// appeared. The card chrome uses a layer painter for exactly this reason,
+    /// and a future refactor that "simplifies" it back to `ui.painter()` would
+    /// silently lose the top of every card again.
+    #[test]
+    fn a_rect_above_the_pane_body_clips_to_nothing() {
+        let body = egui::Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(500.0, 400.0));
+        let top_corner = egui::Rect::from_min_size(
+            egui::pos2(body.min.x, body.min.y - TAB_BAR_H),
+            egui::Vec2::splat(CARD_RADIUS as f32),
+        );
+        assert!(
+            !top_corner.intersects(body),
+            "the top corner sits in the tab strip, outside the pane"
+        );
+        assert!(
+            top_corner.intersect(body).is_negative(),
+            "so intersecting with the pane's clip leaves nothing to paint"
+        );
     }
 }
