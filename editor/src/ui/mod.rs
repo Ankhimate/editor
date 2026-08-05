@@ -107,7 +107,7 @@ pub struct AppBehavior<'a> {
 /// Corner radius of a panel card.
 pub const CARD_RADIUS: u8 = 8;
 /// Gap between cards, and between the outermost cards and the window edge.
-pub const CARD_GAP: f32 = 10.0;
+pub const CARD_GAP: f32 = 5.0;
 /// Space between a tab's label and the top and bottom of its plate.
 pub const TAB_PAD_Y: f32 = 6.0;
 

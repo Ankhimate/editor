@@ -416,7 +416,12 @@ impl eframe::App for AnkhimateApp {
 
         // ── Title bar ────────────────────────────────────────────────────
         egui::TopBottomPanel::top("top_bar")
-            .frame(egui::Frame::NONE.fill(ctx.global_style().visuals.panel_fill))
+            // The desk colour, with no rule beneath it: the title bar is part of
+            // the window frame, not a card, and a line under it would draw a
+            // fourth horizontal edge into a layout that already has the cards'
+            // own outlines doing that job.
+            .show_separator_line(false)
+            .frame(egui::Frame::NONE.fill(self.theme.window_background()))
             .show(ctx, |ui| {
                 let h = 32.0;
                 let bar_rect = {
@@ -846,6 +851,7 @@ impl eframe::App for AnkhimateApp {
         // is the longest trip from where the hand is.
         egui::SidePanel::left("tool_rail")
             .resizable(false)
+            .show_separator_line(false)
             .exact_width(crate::ui::toolbar::RAIL_WIDTH)
             .frame(
                 egui::Frame::NONE
