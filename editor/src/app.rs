@@ -219,7 +219,11 @@ impl AnkhimateApp {
                     _ => None,
                 })
                 .sum();
-            if needed + crate::ui::TAB_START_PAD > rect.width() {
+            // Plus the close button, which only the active tab shows — but which
+            // tab is active changes as you click, and a strip that fits until you
+            // select the widest tab and then reflows is worse than one that
+            // compacts a little early.
+            if needed + crate::ui::TAB_START_PAD + crate::ui::TAB_CLOSE_WIDTH > rect.width() {
                 compact.extend(tabs.children.iter().copied());
             }
         }
@@ -268,9 +272,12 @@ impl AnkhimateApp {
         let constraints = tiles.insert_pane(Tab::Constraints);
 
         // The slot editor tabs with the viewport, so opening a piece replaces the
-        // rig on screen the way a smart object replaces the document.
+        // rig on screen the way a smart object replaces the document. The UV
+        // editor joins them: it is the same idea one level down — one attachment,
+        // opened on its own to be worked on — and it wants the same room.
         let slot_editor = tiles.insert_pane(Tab::SlotEditor);
-        let canvas_tab = tiles.insert_tab_tile(vec![canvas, slot_editor]);
+        let uv_editor = tiles.insert_pane(Tab::UvEditor);
+        let canvas_tab = tiles.insert_tab_tile(vec![canvas, slot_editor, uv_editor]);
         // Properties gets its own tile rather than sharing tabs with Assets:
         // the transform controls are used constantly, and hiding them behind a
         // tab every time the image library is opened is the wrong trade.
@@ -1016,6 +1023,7 @@ impl eframe::App for AnkhimateApp {
         // frame's rects, which is exact except on the frame a splitter is being
         // dragged — and one frame of a label popping mid-drag is invisible.
         let compact_tabs = self.compact_tabs(ctx);
+        let mut close_requests: Vec<egui_tiles::TileId> = Vec::new();
 
         egui::CentralPanel::default()
             .frame(
@@ -1032,13 +1040,26 @@ impl eframe::App for AnkhimateApp {
                     grid: &self.config.grid,
                     fonts: &self.config.fonts,
                     compact_tabs: &compact_tabs,
+                    close_requests: &mut close_requests,
                 };
                 self.tree.ui(&mut behavior, ui);
             });
 
+        // Tabs closed by their own button. Applied after the tree is drawn: the
+        // strip is mid-layout while `tab_ui` runs, so removing a tile there would
+        // pull the ground out from under it.
+        for tile_id in close_requests {
+            if let Some(egui_tiles::Tile::Pane(Tab::UvEditor)) = self.tree.tiles.get(tile_id) {
+                // The pane's target is session state, not layout state, so
+                // closing the tab has to drop it — otherwise reopening comes back
+                // showing the mesh from last time.
+                crate::ui::uv::clear(&mut self.state);
+            }
+            self.tree.tiles.remove(tile_id);
+        }
+
         // ── Mesh trace window (T-402) ────────────────────────────────────
         crate::ui::trace::ui(ctx, &mut self.state, &self.theme);
-        crate::ui::uv::ui(ctx, &mut self.state, &self.theme);
 
         // ── Spritesheet slicer (T-305) ───────────────────────────────────
         crate::ui::atlas::ui(ctx, &mut self.state, &self.theme);
@@ -1206,6 +1227,42 @@ mod view_menu_tests {
                 "{tab:?} is missing from the default layout, so View could not show it"
             );
         }
+    }
+
+    /// Closing the UV tab has to drop what it was editing, not just remove the
+    /// tile. The target lives in session state, so a tile removed without it
+    /// leaves the pane pointing at a mesh nobody can see — and reopening comes
+    /// back showing that mesh instead of a clean pane.
+    #[test]
+    fn closing_the_uv_tab_drops_its_target() {
+        let mut app = AnkhimateApp::default();
+        let id = app.find_pane(Tab::UvEditor).unwrap();
+        app.state.session.uv_pane = Some(crate::ui::uv::UvPane::new(
+            app.state.doc.skeleton.default_skin,
+            app.state
+                .doc
+                .skeleton
+                .slots
+                .keys()
+                .next()
+                .unwrap_or_default(),
+            "art".to_string(),
+        ));
+
+        // What the close button's tile id ends up doing, minus the click.
+        if let Some(egui_tiles::Tile::Pane(Tab::UvEditor)) = app.tree.tiles.get(id) {
+            crate::ui::uv::clear(&mut app.state);
+        }
+        app.tree.tiles.remove(id);
+
+        assert!(
+            app.state.session.uv_pane.is_none(),
+            "target outlived the tab"
+        );
+        assert!(
+            app.find_pane(Tab::UvEditor).is_none(),
+            "the tile is still in the tree"
+        );
     }
 
     #[test]

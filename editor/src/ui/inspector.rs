@@ -1916,6 +1916,10 @@ fn attachment_inspector(
             {
                 state.session.uv_pane =
                     Some(crate::ui::uv::UvPane::new(skin, slot_id, name.clone()));
+                // Bring the pane forward, adding it back if the tab was closed.
+                // Setting the target without surfacing it looks like the button
+                // did nothing.
+                state.session.focus_tab = Some(crate::ui::Tab::UvEditor);
             }
             let two_selected = state.session.selected_vertices.len() == 2;
             if ui

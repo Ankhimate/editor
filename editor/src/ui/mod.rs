@@ -35,6 +35,7 @@ pub enum Tab {
     Assets,
     Skins,
     SlotEditor,
+    UvEditor,
     Animations,
     Events,
     Constraints,
@@ -46,9 +47,10 @@ impl Tab {
     /// One list rather than a menu that has to be edited whenever a pane is
     /// added — a View menu missing the pane you are looking for is worse than no
     /// View menu, because it reads as "that panel does not exist".
-    pub const ALL: [Tab; 12] = [
+    pub const ALL: [Tab; 13] = [
         Tab::Canvas,
         Tab::SlotEditor,
+        Tab::UvEditor,
         Tab::Hierarchy,
         Tab::Inspector,
         Tab::Timeline,
@@ -72,6 +74,7 @@ impl Tab {
             Tab::Assets => "Assets",
             Tab::Skins => "Skins",
             Tab::SlotEditor => "Slot Editor",
+            Tab::UvEditor => "UV Editor",
             Tab::Animations => "Animations",
             Tab::Events => "Events",
             Tab::Constraints => "Constraints",
@@ -101,6 +104,7 @@ impl Tab {
             Tab::Assets => crate::ui::icons::ASSETS,
             Tab::Skins => crate::ui::icons::SKIN,
             Tab::SlotEditor => crate::ui::icons::SLOT_EDITOR,
+            Tab::UvEditor => crate::ui::icons::MESH,
             Tab::Animations => crate::ui::icons::ANIMATIONS,
             Tab::Events => crate::ui::icons::EVENTS,
             Tab::Constraints => crate::ui::icons::CONSTRAINT,
@@ -123,6 +127,12 @@ pub struct AppBehavior<'a> {
     /// opened it next.
     pub grid: &'a crate::config::GridSettings,
     pub fonts: &'a crate::config::FontSettings,
+    /// Tabs whose close button was clicked this frame.
+    ///
+    /// Collected rather than acted on in place: `tab_ui` is handed the tiles it
+    /// is drawing, so removing one mid-draw would pull the ground out from under
+    /// the strip it is in the middle of laying out.
+    pub close_requests: &'a mut Vec<TileId>,
 }
 
 /// The icon for whatever pane a tile holds, or a placeholder for a container.
@@ -141,6 +151,9 @@ pub const CARD_GAP: f32 = 5.0;
 pub const TAB_PAD_Y: f32 = 6.0;
 /// Space either side of a tab's label, inside its plate.
 pub const TAB_TITLE_SPACING: f32 = 10.0;
+/// Width a tab gives up to its close button, when it has one.
+pub const TAB_CLOSE_WIDTH: f32 = 20.0;
+
 /// Space before the first tab, holding it off the card's rounded corner.
 ///
 /// Matched to the corner radius: any less and the plate's square bottom-left
@@ -253,6 +266,16 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                 egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
                     slot_editor::ui(ui, self.state);
                 });
+            }
+            Tab::UvEditor => {
+                egui::ScrollArea::both()
+                    .id_salt("uv_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                            uv::ui(ui, self.state, self.theme);
+                        });
+                    });
             }
             Tab::Animations => {
                 egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
@@ -383,6 +406,14 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
     /// The plate is rounded at the top and square at the bottom, so the active
     /// tab runs into the body below it — the join is what says "this tab owns
     /// that content".
+    /// Every pane can be closed; the View menu is how it comes back.
+    ///
+    /// Containers are not: closing one would take its children with it, and the
+    /// tab strip gives no hint that it is about to.
+    fn is_tab_closable(&self, tiles: &egui_tiles::Tiles<Tab>, tile_id: TileId) -> bool {
+        matches!(tiles.get(tile_id), Some(egui_tiles::Tile::Pane(_)))
+    }
+
     fn tab_ui(
         &mut self,
         tiles: &mut egui_tiles::Tiles<Tab>,
@@ -410,8 +441,12 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         let galley =
             label.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
 
+        // Only the active tab carries a close button. A row of them turns a tab
+        // strip into a row of targets to misclick, and the tab you want to close
+        // is nearly always the one you are looking at.
+        let closable = state.active && self.is_tab_closable(tiles, tile_id) && !compact;
         let x_margin = TAB_TITLE_SPACING;
-        let width = galley.size().x + 2.0 * x_margin;
+        let width = galley.size().x + 2.0 * x_margin + if closable { TAB_CLOSE_WIDTH } else { 0.0 };
         let (_, rect) = ui.allocate_space(egui::vec2(width, ui.available_height()));
 
         let draggable = self.is_tile_draggable(tiles, tile_id);
@@ -452,10 +487,52 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             }
 
             let color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
+            // The label centres in what is left after the close button, so
+            // adding one shifts the text rather than sliding it under the glyph.
+            let text_area = egui::Rect::from_min_max(
+                plate.min,
+                egui::pos2(
+                    plate.max.x - if closable { TAB_CLOSE_WIDTH } else { 0.0 },
+                    plate.max.y,
+                ),
+            );
             let pos = egui::Align2::CENTER_CENTER
-                .align_size_within_rect(galley.size(), plate)
+                .align_size_within_rect(galley.size(), text_area)
                 .min;
             ui.painter().galley(pos, galley, color);
+        }
+
+        if closable {
+            let plate_top = rect.top() + TAB_TOP_PAD;
+            let btn = egui::Rect::from_center_size(
+                egui::pos2(
+                    rect.max.x - TAB_CLOSE_WIDTH * 0.5 - x_margin * 0.5,
+                    (plate_top + rect.bottom()) * 0.5,
+                ),
+                egui::vec2(16.0, 16.0),
+            );
+            // Its own id, and interacted *after* the tab's own response is
+            // built, so the click lands on the button rather than selecting the
+            // tab underneath it.
+            let close = ui.interact(btn, id.with("close"), egui::Sense::click());
+            if close.hovered() {
+                ui.painter()
+                    .rect_filled(btn, 4, ui.visuals().widgets.hovered.bg_fill);
+            }
+            ui.painter().text(
+                btn.center(),
+                egui::Align2::CENTER_CENTER,
+                icons::CLOSE,
+                egui::FontId::proportional(11.0),
+                if close.hovered() {
+                    ui.visuals().strong_text_color()
+                } else {
+                    ui.visuals().weak_text_color()
+                },
+            );
+            if close.clicked() {
+                self.close_requests.push(tile_id);
+            }
         }
 
         // The name on hover, always. It is the only way to read a compact tab,
@@ -594,6 +671,7 @@ mod layout_tests {
                     grid: &grid,
                     fonts: &fonts,
                     compact_tabs: &Default::default(),
+                    close_requests: &mut Vec::new(),
                 };
                 tree.ui(&mut behavior, ui);
             });
