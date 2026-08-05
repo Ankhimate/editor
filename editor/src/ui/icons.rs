@@ -72,6 +72,7 @@ pub const DUPLICATE: &str = f::COPY;
 pub const UNDO: &str = f::UNDO_2;
 pub const REDO: &str = f::REDO_2;
 pub const CLOSE: &str = f::X;
+pub const MINIMISE: &str = f::MINUS;
 pub const CLEAR: &str = f::CIRCLE_X;
 pub const REFRESH: &str = f::REFRESH_CW;
 pub const SEARCH: &str = f::SEARCH;

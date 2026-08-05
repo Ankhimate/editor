@@ -68,6 +68,14 @@ pub struct Theme {
     /// Event markers, in the timeline lane and the event pane.
     #[serde(default = "default_event_marker")]
     pub event_marker: String,
+    /// Outline around a panel card. Subtle by design: it is there to separate
+    /// two cards that happen to sit against each other, not to be seen.
+    #[serde(default = "default_card_border")]
+    pub card_border: String,
+}
+
+fn default_card_border() -> String {
+    "#27272a".into()
 }
 
 fn default_channel_translate() -> String {
@@ -209,6 +217,7 @@ impl Theme {
             ("Channel · scale", &mut self.channel_scale),
             ("Channel · shear", &mut self.channel_shear),
             ("Event marker", &mut self.event_marker),
+            ("Card border", &mut self.card_border),
         ]
     }
 
@@ -317,6 +326,10 @@ impl Theme {
 
     pub fn event_marker(&self) -> Color32 {
         hex_to_color(&self.event_marker)
+    }
+
+    pub fn card_border(&self) -> Color32 {
+        hex_to_color(&self.card_border)
     }
 
     /// The colour for an animation channel, by the property's row label.

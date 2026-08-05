@@ -1,89 +1,78 @@
+//! The tool rail: a vertical strip of tools down the left edge.
+//!
+//! Vertical and on the left because tools are picked with the pointer already
+//! over the viewport, and a horizontal strip across the top is the longest trip
+//! from where the hand already is. It also leaves the full window width to the
+//! panels, which matters most for the timeline.
+//!
+//! Icon-only. The rail is 44px, so there is no room for labels — the tooltip
+//! carries the name and the shortcut, and the shortcut is what anybody uses
+//! after the first day anyway.
+//!
+//! What is *not* here: the theme picker (Settings owns it) and the clip
+//! controls (the timeline's own header owns those). A rail that accumulates
+//! everything is a rail nobody can find anything in.
+
 use crate::app_state::AppState;
 use crate::session::{Tool, TransformTool, WorkMode};
-use crate::theme::Theme;
 use eframe::egui;
+
+/// Width of the rail, including its margins.
+pub const RAIL_WIDTH: f32 = 44.0;
+
+const BTN: f32 = 32.0;
 
 pub fn ui(
     ui: &mut egui::Ui,
     state: &mut AppState,
-    theme: &mut Theme,
-    available_themes: &[Theme],
     trigger_undo: &mut bool,
     trigger_redo: &mut bool,
 ) {
-    ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+    ui.spacing_mut().item_spacing = egui::vec2(0.0, 3.0);
+    ui.vertical_centered(|ui| {
+        mode_switch(ui, state);
+        gap(ui);
 
-    ui.horizontal(|ui| {
-        // ── Work mode (T-207) ──────────────────────────────────────────
-        // First control in the window on purpose: it decides what every other
-        // control in the editor writes to.
-        mode_switch(ui, state, theme);
-
-        ui.add_space(6.0);
-        ui.add(egui::Separator::default().vertical().shrink(6.0));
-        ui.add_space(6.0);
-
-        // ── Tool buttons ───────────────────────────────────────────────
-        // Rig-authoring tools are Setup-only; they stay visible while animating
-        // so the toolbar does not jump, but disabled with the reason on hover.
+        // ── Tools ──────────────────────────────────────────────────────
+        // Rig-authoring tools stay visible while animating so the rail does not
+        // reflow under the cursor, but disabled with the reason on hover.
         let setup = state.session.can_edit_structure();
-        tool_btn(
-            ui,
-            theme,
-            ToolBtn {
-                icon: crate::ui::icons::SELECT,
-                shortcut: "V",
-                tooltip: "Select",
-                selected: state.session.tool == Tool::Select,
-                enabled: true,
-            },
-            || state.session.tool = Tool::Select,
-        );
-        tool_btn(
-            ui,
-            theme,
-            ToolBtn {
-                icon: crate::ui::icons::BONE,
-                shortcut: "B",
-                tooltip: "Create Bone",
-                selected: state.session.tool == Tool::CreateBone,
-                enabled: setup,
-            },
-            || state.session.tool = Tool::CreateBone,
-        );
-        tool_btn(
-            ui,
-            theme,
-            ToolBtn {
-                icon: crate::ui::icons::WEIGHT_PAINT,
-                shortcut: "W",
-                tooltip: "Weight Paint",
-                selected: state.session.tool == Tool::WeightPaint,
-                enabled: setup,
-            },
-            || state.session.tool = Tool::WeightPaint,
-        );
+        let tool = state.session.tool;
+        for spec in [
+            (crate::ui::icons::SELECT, "V", "Select", Tool::Select, true),
+            (
+                crate::ui::icons::CREATE_BONE,
+                "B",
+                "Create bone",
+                Tool::CreateBone,
+                setup,
+            ),
+            (
+                crate::ui::icons::WEIGHT_PAINT,
+                "W",
+                "Weight paint",
+                Tool::WeightPaint,
+                setup,
+            ),
+        ] {
+            let (icon, key, name, value, enabled) = spec;
+            if rail_button(ui, icon, name, key, tool == value, enabled) {
+                state.session.tool = value;
+            }
+        }
+        gap(ui);
 
-        ui.add_space(6.0);
-        ui.add(egui::Separator::default().vertical().shrink(6.0));
-        ui.add_space(6.0);
-
-        // ── Transform gizmo (T/R/S/H) ──────────────────────────────────
-        // These pick which gizmo the Select tool shows, so choosing one also
-        // switches back to Select: clicking "Rotate" while the bone-creation
-        // tool is active otherwise sets a mode the next click cannot use.
-        //
-        // Enabled in both work modes on purpose — posing in Animate is the main
-        // reason to reach for them.
+        // ── Transform gizmo ────────────────────────────────────────────
+        let active = state.session.active_transform_tool;
         for spec in [
             (
-                crate::ui::icons::TRANSLATE,
+                crate::ui::icons::TOOL_TRANSLATE,
                 "T",
                 "Translate",
                 TransformTool::Translate,
             ),
             (
-                crate::ui::icons::ROTATE,
+                crate::ui::icons::TOOL_ROTATE,
                 "R",
                 "Rotate",
                 TransformTool::Rotate,
@@ -94,220 +83,185 @@ pub fn ui(
                 "Scale",
                 TransformTool::Scale,
             ),
-            (crate::ui::icons::SHEAR, "H", "Shear", TransformTool::Shear),
-        ] {
-            let (icon, shortcut, tooltip, tool) = spec;
-            tool_btn(
-                ui,
-                theme,
-                ToolBtn {
-                    icon,
-                    shortcut,
-                    tooltip,
-                    // Only lit while Select is active: the gizmo is not on
-                    // screen under the other tools, so showing it as the current
-                    // mode would be a lie.
-                    selected: state.session.tool == Tool::Select
-                        && state.session.active_transform_tool == tool,
-                    enabled: true,
-                },
-                || {
-                    state.session.active_transform_tool = tool;
-                    state.session.tool = Tool::Select;
-                },
-            );
-        }
-
-        ui.add_space(6.0);
-        ui.add(egui::Separator::default().vertical().shrink(6.0));
-        ui.add_space(6.0);
-
-        // ── Visibility filters ─────────────────────────────────────────
-        // Toggles rather than a menu: on a dense rig these get flipped every few
-        // seconds, and a menu makes that four clicks instead of one.
-        for (icon, tooltip, flag) in [
             (
-                crate::ui::icons::IMAGE,
-                "Show artwork (1)",
-                &mut state.session.show_artwork,
-            ),
-            (
-                crate::ui::icons::BONE,
-                "Show bones (2)",
-                &mut state.session.show_bones,
+                crate::ui::icons::TOOL_SHEAR,
+                "H",
+                "Shear",
+                TransformTool::Shear,
             ),
         ] {
-            let on = *flag;
-            let button = egui::Button::new(egui::RichText::new(icon).size(15.0).color(if on {
-                theme.primary()
-            } else {
-                ui.visuals().weak_text_color()
-            }))
-            .fill(if on {
-                ui.visuals().faint_bg_color
-            } else {
-                egui::Color32::TRANSPARENT
-            });
-            if ui.add(button).on_hover_text(tooltip).clicked() {
-                *flag = !on;
+            let (icon, key, name, value) = spec;
+            // Only lit under Select: the gizmo is not on screen under the other
+            // tools, so showing it as the current mode would be a lie.
+            let on = tool == Tool::Select && active == value;
+            if rail_button(ui, icon, name, key, on, true) {
+                state.session.active_transform_tool = value;
+                state.session.tool = Tool::Select;
             }
         }
+        gap(ui);
 
-        ui.add_space(6.0);
-        ui.add(egui::Separator::default().vertical().shrink(6.0));
-        ui.add_space(6.0);
+        // ── Visibility ─────────────────────────────────────────────────
+        if rail_button(
+            ui,
+            crate::ui::icons::IMAGE,
+            "Show artwork",
+            "1",
+            state.session.show_artwork,
+            true,
+        ) {
+            state.session.show_artwork = !state.session.show_artwork;
+        }
+        if rail_button(
+            ui,
+            crate::ui::icons::BONE,
+            "Show bones",
+            "2",
+            state.session.show_bones,
+            true,
+        ) {
+            state.session.show_bones = !state.session.show_bones;
+        }
 
-        // ── Undo / Redo ────────────────────────────────────────────────
+        // ── Undo / redo, pinned to the bottom ──────────────────────────
+        // Out of the way of the tools, which are the things reached for by
+        // muscle memory; undo has a keyboard shortcut everybody already knows.
+        let remaining = ui.available_height() - (BTN * 2.0 + 6.0);
+        if remaining > 0.0 {
+            ui.add_space(remaining);
+        }
         let can_undo = state.history.can_undo();
-        let can_redo = state.history.can_redo();
-
-        let undo = ui
-            .add_enabled(can_undo, icon_btn(crate::ui::icons::UNDO))
-            .on_hover_text(format!(
-                "Undo (Ctrl+Z)  [{} steps]",
-                state.history.undo_depth()
-            ));
-        if undo.clicked() {
+        let depth = state.history.undo_depth();
+        if rail_button_enabled(
+            ui,
+            crate::ui::icons::UNDO,
+            &format!("Undo (Ctrl+Z) — {depth} steps"),
+            can_undo,
+        ) {
             *trigger_undo = true;
         }
-
-        let redo = ui
-            .add_enabled(can_redo, icon_btn(crate::ui::icons::REDO))
-            .on_hover_text(format!("Redo (Ctrl+Y)  [{} steps]", 0));
-        if redo.clicked() {
+        let can_redo = state.history.can_redo();
+        if rail_button_enabled(ui, crate::ui::icons::REDO, "Redo (Ctrl+Y)", can_redo) {
             *trigger_redo = true;
         }
-
-        // ── Theme selector (right-aligned) ─────────────────────────────
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(6.0);
-            let mut current = theme.clone();
-            egui::ComboBox::from_id_salt("theme_selector")
-                .selected_text(format!("{} {}", crate::ui::icons::PALETTE, current.label()))
-                .width(130.0)
-                .show_ui(ui, |ui| {
-                    for t in available_themes {
-                        ui.selectable_value(&mut current, t.clone(), t.label());
-                    }
-                });
-            if current != *theme {
-                *theme = current;
-                ui.ctx().request_repaint();
-            }
-        });
     });
 }
 
-/// The Setup ⇄ Animate segmented switch (T-207).
-fn mode_switch(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
-    let current = state.session.work_mode;
-    let mut clicked: Option<WorkMode> = None;
+/// A separator between groups of tools.
+fn gap(ui: &mut egui::Ui) {
+    ui.add_space(5.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(BTN * 0.6, 1.0), egui::Sense::hover());
+    ui.painter().rect_filled(
+        rect,
+        0.0,
+        ui.visuals().widgets.noninteractive.bg_stroke.color,
+    );
+    ui.add_space(5.0);
+}
 
-    for (mode, tooltip) in [
+/// One rail button. Returns whether it was clicked.
+fn rail_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    name: &str,
+    shortcut: &str,
+    selected: bool,
+    enabled: bool,
+) -> bool {
+    let hover = if enabled {
+        format!("{name}  ({shortcut})")
+    } else {
+        format!("{name}  ({shortcut}) — Setup mode only")
+    };
+    button(ui, icon, &hover, selected, enabled)
+}
+
+fn rail_button_enabled(ui: &mut egui::Ui, icon: &str, hover: &str, enabled: bool) -> bool {
+    button(ui, icon, hover, false, enabled)
+}
+
+fn button(ui: &mut egui::Ui, icon: &str, hover: &str, selected: bool, enabled: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(BTN, BTN),
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    let visuals = ui.visuals();
+    let accent = visuals.selection.bg_fill;
+
+    // Selected is a tinted plate rather than a solid one: a solid accent block
+    // at this size fights the viewport for attention every frame it is on.
+    if selected {
+        ui.painter()
+            .rect_filled(rect, 6, accent.gamma_multiply(0.22));
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, 6, visuals.faint_bg_color);
+    }
+
+    let color = if !enabled {
+        visuals.weak_text_color().gamma_multiply(0.45)
+    } else if selected {
+        accent
+    } else {
+        visuals.text_color().gamma_multiply(0.85)
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(16.0),
+        color,
+    );
+
+    response.on_hover_text(hover).clicked()
+}
+
+/// The Setup ⇄ Animate switch (T-207), stacked to fit the rail.
+///
+/// Two letters rather than two words: "SETUP" does not fit in 32px, and the
+/// mode is also on the status bar and the Tab key.
+fn mode_switch(ui: &mut egui::Ui, state: &mut AppState) {
+    let current = state.session.work_mode;
+    let mut clicked = None;
+    for (mode, letter, tooltip) in [
         (
             WorkMode::Setup,
+            "S",
             "Setup mode (Tab) — edit the rig: create, parent, and pose the setup skeleton",
         ),
         (
             WorkMode::Animate,
+            "A",
             "Animate mode (Tab) — edits become keys on the active animation",
         ),
     ] {
         let selected = mode == current;
-        let (fill, text) = if selected {
-            (theme.primary(), theme.on_primary())
-        } else {
-            (egui::Color32::TRANSPARENT, ui.visuals().weak_text_color())
-        };
-        let btn = egui::Button::new(egui::RichText::new(mode.label()).size(10.5).color(text))
-            .min_size(egui::vec2(66.0, 24.0))
-            .fill(fill);
-        if ui.add(btn).on_hover_text(tooltip).clicked() && !selected {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(BTN, 22.0), egui::Sense::click());
+        let visuals = ui.visuals();
+        if selected {
+            ui.painter().rect_filled(rect, 5, visuals.selection.bg_fill);
+        } else if response.hovered() {
+            ui.painter().rect_filled(rect, 5, visuals.faint_bg_color);
+        }
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            letter,
+            egui::FontId::proportional(12.0),
+            if selected {
+                crate::theme::hex_to_color("#18181b")
+            } else {
+                visuals.weak_text_color()
+            },
+        );
+        if response.on_hover_text(tooltip).clicked() && !selected {
             clicked = Some(mode);
         }
     }
-
     if let Some(mode) = clicked {
         state.set_work_mode(mode);
     }
-}
-
-/// One toolbar tool button.
-struct ToolBtn<'a> {
-    icon: &'a str,
-    shortcut: &'a str,
-    tooltip: &'a str,
-    selected: bool,
-    /// Setup-only tools are drawn but disabled while animating (T-207).
-    enabled: bool,
-}
-
-fn tool_btn<F: FnOnce()>(ui: &mut egui::Ui, theme: &Theme, spec: ToolBtn<'_>, on_click: F) {
-    let ToolBtn {
-        icon,
-        shortcut,
-        tooltip,
-        selected,
-        enabled,
-    } = spec;
-    let (bg_fill, mut icon_color, stroke) = if selected {
-        (
-            theme.primary(),
-            theme.on_primary(),
-            egui::Stroke::new(1.0, theme.primary().linear_multiply(0.7)),
-        )
-    } else {
-        (
-            egui::Color32::TRANSPARENT,
-            ui.visuals().text_color(),
-            egui::Stroke::NONE,
-        )
-    };
-    if !enabled {
-        icon_color = ui.visuals().weak_text_color().gamma_multiply(0.5);
-    }
-
-    let btn = egui::Button::new("")
-        .min_size(egui::vec2(36.0, 32.0))
-        .fill(bg_fill)
-        .stroke(stroke);
-
-    let hover = if enabled {
-        format!("{tooltip} ({shortcut})")
-    } else {
-        format!("{tooltip} ({shortcut}) — Setup mode only")
-    };
-    let response = ui.add_enabled(enabled, btn).on_hover_text(hover);
-    let painter = ui.painter_at(response.rect);
-
-    // Icon (center-top biased) + shortcut hint below
-    let cx = response.rect.center().x;
-    let icon_y = response.rect.center().y - 3.0;
-    let hint_y = response.rect.max.y - 6.0;
-
-    painter.text(
-        egui::pos2(cx, icon_y),
-        egui::Align2::CENTER_CENTER,
-        icon,
-        egui::FontId::proportional(15.0),
-        icon_color,
-    );
-    painter.text(
-        egui::pos2(cx, hint_y),
-        egui::Align2::CENTER_CENTER,
-        shortcut,
-        egui::FontId::proportional(8.0),
-        icon_color.gamma_multiply(0.55),
-    );
-
-    if response.clicked() {
-        on_click();
-    }
-}
-
-fn icon_btn(icon: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(icon).size(15.0))
-        .min_size(egui::vec2(30.0, 32.0))
-        .fill(egui::Color32::TRANSPARENT)
-        .stroke(egui::Stroke::NONE)
 }

@@ -21,6 +21,31 @@ pub struct AnkhimateApp {
     show_settings: bool,
 }
 
+/// One window control. Returns whether it was clicked.
+fn window_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, danger: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(34.0, 26.0), egui::Sense::click());
+    if response.hovered() {
+        let fill = if danger {
+            ui.visuals().error_fg_color.gamma_multiply(0.75)
+        } else {
+            ui.visuals().faint_bg_color
+        };
+        ui.painter().rect_filled(rect, 5, fill);
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(14.0),
+        if response.hovered() && danger {
+            egui::Color32::WHITE
+        } else {
+            ui.visuals().weak_text_color()
+        },
+    );
+    response.on_hover_text(tooltip).clicked()
+}
+
 impl AnkhimateApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         Self::with_file(cc, None)
@@ -714,34 +739,69 @@ impl eframe::App for AnkhimateApp {
                     });
                 });
 
-                // Center: the most recent thing the editor wants to say — a
-                // refused edit (session status) outranks a file-op result,
-                // because it is feedback on what the user just tried to do.
-                let center_text = match (&self.state.session.status, &self.status) {
-                    (Some(msg), _) => msg.as_str(),
-                    (None, Some(msg)) => msg.as_str(),
-                    _ => "Ankhimate",
+                // Centre: what is open, in a pill — the same place a browser puts
+                // the address, and for the same reason. A status message takes
+                // it over while there is one, because feedback on what you just
+                // tried to do outranks a path you already know.
+                let (center_text, is_status) = match (&self.state.session.status, &self.status) {
+                    (Some(msg), _) => (msg.clone(), true),
+                    (None, Some(msg)) => (msg.clone(), true),
+                    (None, None) => (
+                        self.current_path
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "Untitled".to_string()),
+                        false,
+                    ),
                 };
-                ui.painter().text(
-                    bar_rect.center(),
-                    egui::Align2::CENTER_CENTER,
+                let visuals = ctx.global_style().visuals.clone();
+                let font = egui::FontId::proportional(12.5);
+                let galley = ui.painter().layout_no_wrap(
                     center_text,
-                    egui::FontId::proportional(13.0),
-                    ctx.global_style().visuals.weak_text_color(),
+                    font.clone(),
+                    if is_status {
+                        visuals.warn_fg_color
+                    } else {
+                        visuals.weak_text_color()
+                    },
+                );
+                let pill = egui::Rect::from_center_size(
+                    bar_rect.center(),
+                    egui::vec2(galley.size().x + 28.0, 26.0),
+                )
+                // Clamped so a long path cannot slide under the menus or the
+                // window buttons and steal their clicks.
+                .intersect(bar_rect.shrink2(egui::vec2(240.0, 0.0)));
+                ui.painter().rect(
+                    pill,
+                    13,
+                    visuals.extreme_bg_color,
+                    egui::Stroke::new(1.0, self.theme.card_border()),
+                    egui::StrokeKind::Inside,
+                );
+                ui.painter().with_clip_rect(pill.shrink(6.0)).galley(
+                    egui::pos2(
+                        pill.center().x - galley.size().x * 0.5,
+                        pill.center().y - galley.size().y * 0.5,
+                    ),
+                    galley,
+                    visuals.weak_text_color(),
                 );
 
                 // Right: window controls
                 ui.allocate_ui_at_rect(bar_rect, |ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(6.0);
-                        if ui.button("🗙").clicked() {
+                        // Close is the destructive one, so it is the only button
+                        // that colours on hover — the others stay quiet.
+                        if window_button(ui, crate::ui::icons::CLOSE, "Close", true) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
-                        if ui.button("🗖").clicked() {
+                        if window_button(ui, crate::ui::icons::FIT, "Maximise", false) {
                             let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
                             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
                         }
-                        if ui.button("🗕").clicked() {
+                        if window_button(ui, crate::ui::icons::MINIMISE, "Minimise", false) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                     });
@@ -765,34 +825,55 @@ impl eframe::App for AnkhimateApp {
             );
         }
 
-        egui::TopBottomPanel::top("toolbar")
+        // The tool rail. Vertical and on the left because tools are chosen with
+        // the pointer already over the viewport — a horizontal strip at the top
+        // is the longest trip from where the hand is.
+        egui::SidePanel::left("tool_rail")
+            .resizable(false)
+            .exact_width(crate::ui::toolbar::RAIL_WIDTH)
             .frame(
                 egui::Frame::NONE
-                    .fill(ctx.global_style().visuals.panel_fill)
-                    .inner_margin(egui::Margin::symmetric(8, 4)),
+                    .fill(ctx.global_style().visuals.extreme_bg_color)
+                    .inner_margin(egui::Margin::symmetric(4, 6)),
             )
             .show(ctx, |ui| {
-                crate::ui::toolbar::ui(
-                    ui,
-                    &mut self.state,
-                    &mut self.theme,
-                    &self.available_themes,
-                    &mut trigger_undo,
-                    &mut trigger_redo,
-                );
-                // Re-apply if theme changed inside toolbar
-                self.theme.apply(ctx);
+                crate::ui::toolbar::ui(ui, &mut self.state, &mut trigger_undo, &mut trigger_redo);
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let mut behavior = AppBehavior {
-                state: &mut self.state,
-                theme: &self.theme,
-                grid: &self.config.grid,
-                fonts: &self.config.fonts,
-            };
-            self.tree.ui(&mut behavior, ui);
-        });
+        // Cards are the tab containers. Collected here because
+        // `paint_on_top_of_tile` gets an id and a rect but no way to ask what
+        // kind of tile it is.
+        let card_tiles: std::collections::HashSet<egui_tiles::TileId> = self
+            .tree
+            .tiles
+            .iter()
+            .filter(|(_, tile)| {
+                matches!(
+                    tile,
+                    egui_tiles::Tile::Container(egui_tiles::Container::Tabs(_))
+                )
+            })
+            .map(|(id, _)| *id)
+            .collect();
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::NONE
+                    .fill(ctx.global_style().visuals.extreme_bg_color)
+                    // The window edge gets the same gap the cards have between
+                    // them, so nothing sits flush against the frame.
+                    .inner_margin(egui::Margin::same(crate::ui::CARD_GAP as i8)),
+            )
+            .show(ctx, |ui| {
+                let mut behavior = AppBehavior {
+                    state: &mut self.state,
+                    theme: &self.theme,
+                    grid: &self.config.grid,
+                    fonts: &self.config.fonts,
+                    card_tiles: &card_tiles,
+                };
+                self.tree.ui(&mut behavior, ui);
+            });
 
         // ── Mesh trace window (T-402) ────────────────────────────────────
         crate::ui::trace::ui(ctx, &mut self.state, &self.theme);

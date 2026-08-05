@@ -21,5 +21,6 @@
   "channel_rotate": "#a3be8c",
   "channel_scale": "#ebcb8b",
   "channel_shear": "#bf616a",
-  "event_marker": "#d08770"
+  "event_marker": "#d08770",
+  "card_border": "#3b4252"
 }
