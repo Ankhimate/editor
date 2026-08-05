@@ -223,6 +223,44 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                 });
             }
         }
+        // Round the top corners.
+        //
+        // egui_tiles fills the tab strip as a plain rectangle, so the card came
+        // out rounded along the bottom — where this pane paints the fill — and
+        // square across the top. There is no hook to get behind that fill: the
+        // strip is drawn before the pane runs.
+        //
+        // So the corners are carved afterwards. Each is the desk colour painted
+        // over the corner square, with a quarter-disc of card colour put back
+        // inside it — clipping a full circle to the corner square is the quarter,
+        // and it matches the radius the bottom corners use exactly because both
+        // come from the same constant.
+        let radius = CARD_RADIUS as f32;
+        for corner in [
+            egui::Rect::from_min_size(
+                egui::pos2(body.min.x, body.min.y - TAB_BAR_H),
+                egui::Vec2::splat(radius),
+            ),
+            egui::Rect::from_min_size(
+                egui::pos2(body.max.x - radius, body.min.y - TAB_BAR_H),
+                egui::Vec2::splat(radius),
+            ),
+        ] {
+            let painter = ui.painter().with_clip_rect(corner);
+            painter.rect_filled(corner, 0, self.theme.window_background());
+            // The disc's centre is the corner square's inner corner, so the arc
+            // it leaves is the rounding.
+            let centre = egui::pos2(
+                if corner.min.x <= body.min.x {
+                    corner.min.x + radius
+                } else {
+                    corner.max.x - radius
+                },
+                corner.min.y + radius,
+            );
+            painter.circle_filled(centre, radius, ui.visuals().panel_fill);
+        }
+
         // The card's outline, drawn *after* the panel's content and reaching back
         // up over the tab strip so strip and body enclose as one object.
         //
