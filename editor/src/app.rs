@@ -217,6 +217,22 @@ impl Default for AnkhimateApp {
 }
 
 impl eframe::App for AnkhimateApp {
+    /// What the window is cleared to before anything is drawn.
+    ///
+    /// eframe defaults this to `panel_fill`, which is the *card* colour — so
+    /// every pixel no panel covered came out the same shade as the panels, and
+    /// the gaps between cards read as no gap at all. It is the deep background
+    /// here, which is what a gap is meant to show.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        let c = self.theme.window_background();
+        [
+            c.r() as f32 / 255.0,
+            c.g() as f32 / 255.0,
+            c.b() as f32 / 255.0,
+            1.0,
+        ]
+    }
+
     // TODO(editor): migrate the custom title bar / toolbar chrome off the
     // deprecated `TopBottomPanel` + `allocate_ui_at_rect` APIs to `Panel::top` +
     // `allocate_new_ui`. That is a layout change, not a mechanical rename, so it
@@ -833,7 +849,7 @@ impl eframe::App for AnkhimateApp {
             .exact_width(crate::ui::toolbar::RAIL_WIDTH)
             .frame(
                 egui::Frame::NONE
-                    .fill(ctx.global_style().visuals.extreme_bg_color)
+                    .fill(self.theme.window_background())
                     .inner_margin(egui::Margin::symmetric(4, 6)),
             )
             .show(ctx, |ui| {
@@ -843,7 +859,7 @@ impl eframe::App for AnkhimateApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
-                    .fill(ctx.global_style().visuals.extreme_bg_color)
+                    .fill(self.theme.window_background())
                     // The window edge gets the same gap the cards have between
                     // them, so nothing sits flush against the frame.
                     .inner_margin(egui::Margin::same(crate::ui::CARD_GAP as i8)),

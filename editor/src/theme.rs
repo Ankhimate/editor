@@ -332,6 +332,16 @@ impl Theme {
         hex_to_color(&self.card_border)
     }
 
+    /// What shows through between panel cards, and behind everything else.
+    ///
+    /// Named apart from `extreme_bg_color` because they answer different
+    /// questions — that one is "the deepest inset surface", this one is "the
+    /// desk the cards sit on" — even though the shipped themes give them the
+    /// same value.
+    pub fn window_background(&self) -> Color32 {
+        hex_to_color(&self.extreme_bg_color)
+    }
+
     /// The colour for an animation channel, by the property's row label.
     ///
     /// Keyed on the label because that is what both the tree and the graph
