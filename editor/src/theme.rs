@@ -75,7 +75,7 @@ pub struct Theme {
 }
 
 fn default_card_border() -> String {
-    "#27272a".into()
+    "#3f3f46".into()
 }
 
 fn default_channel_translate() -> String {

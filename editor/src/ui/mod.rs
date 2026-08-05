@@ -110,9 +110,15 @@ pub struct AppBehavior<'a> {
 }
 
 /// Corner radius of a panel card.
-pub const CARD_RADIUS: u8 = 6;
+///
+/// Deliberately small. A pane paints its own background over its whole rect —
+/// the viewport's checkerboard reaches every corner — so the card's rounding can
+/// only be drawn as an outline on top, and any radius large enough to notice
+/// leaves a square of panel colour outside the curve. Four pixels reads as a
+/// softened corner without exposing that.
+pub const CARD_RADIUS: u8 = 4;
 /// Gap between cards, and between the outermost cards and the window edge.
-pub const CARD_GAP: f32 = 8.0;
+pub const CARD_GAP: f32 = 10.0;
 
 impl<'a> Behavior<Tab> for AppBehavior<'a> {
     fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut Tab) -> UiResponse {
@@ -277,7 +283,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             rect,
             CARD_RADIUS,
             egui::Stroke::new(1.0, self.theme.card_border()),
-            egui::StrokeKind::Inside,
+            egui::StrokeKind::Outside,
         );
     }
 
