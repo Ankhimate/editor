@@ -16,7 +16,33 @@ use eframe::egui;
 
 fn main() -> eframe::Result {
     env_logger::init();
+    // Prefer DX12 over Vulkan on Windows.
+    //
+    // wgpu 29's Vulkan backend panics while tearing the swapchain down —
+    // "Trying to destroy a SwapchainAcquireSemaphore that is still in use by a
+    // SurfaceTexture" — so closing the editor aborts instead of exiting. It is a
+    // shutdown-only fault, but a crash on exit is a crash: autosave and config
+    // writes never run, and the user is told the program failed after doing
+    // nothing wrong. Overlay layers that inject into Vulkan (Steam's, among
+    // others) make it more likely.
+    //
+    // DX12 is the better default on Windows regardless. Vulkan is still
+    // reachable with `WGPU_BACKEND=vulkan` for anyone who needs it.
+    let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut wgpu_options.wgpu_setup {
+        setup.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or({
+            if cfg!(target_os = "windows") {
+                // DX12 alone, not DX12-preferred: with both enabled wgpu is free
+                // to pick Vulkan anyway, and then the shutdown panic is back.
+                wgpu::Backends::DX12
+            } else {
+                wgpu::Backends::PRIMARY
+            }
+        });
+    }
+
     let options = eframe::NativeOptions {
+        wgpu_options,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
             .with_title("Ankhimate")

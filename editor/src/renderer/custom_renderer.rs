@@ -555,14 +555,23 @@ impl egui_wgpu::CallbackTrait for CustomCallback {
 
         // Fix for High-DPI and UI Panel offsets:
         // We MUST map the wgpu NDC strictly to our canvas UI rect.
-        render_pass.set_viewport(
-            info.viewport.min.x * px_per_point,
-            info.viewport.min.y * px_per_point,
-            info.viewport.width() * px_per_point,
-            info.viewport.height() * px_per_point,
-            0.0,
-            1.0,
-        );
+        //
+        // Clamped to the target. A viewport larger than the surface is a
+        // validation error that aborts the process, and egui can hand us one:
+        // on the first frames the pane's rect is whatever the layout guessed
+        // before the window reported its size. Clamping turns a frame that would
+        // have killed the editor into a frame drawn slightly wrong, which is the
+        // right trade for something that resolves itself on the next pass.
+        let [max_w, max_h] = info.screen_size_px;
+        let x = (info.viewport.min.x * px_per_point).clamp(0.0, max_w as f32);
+        let y = (info.viewport.min.y * px_per_point).clamp(0.0, max_h as f32);
+        let w = (info.viewport.width() * px_per_point).clamp(0.0, max_w as f32 - x);
+        let h = (info.viewport.height() * px_per_point).clamp(0.0, max_h as f32 - y);
+        if w <= 0.0 || h <= 0.0 {
+            // Nothing to draw into — a collapsed or off-screen pane.
+            return;
+        }
+        render_pass.set_viewport(x, y, w, h, 0.0, 1.0);
 
         // Sprites first: they are the artwork, everything else is an overlay on
         // top of it. Within the batch, submission order *is* draw order, so the
