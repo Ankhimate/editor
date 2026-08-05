@@ -111,7 +111,12 @@ pub const CARD_GAP: f32 = 10.0;
 /// Height of a card's tab strip. Pinned rather than left to the default because
 /// the card frame is drawn from the pane, which has to reach back up over the
 /// strip to enclose it.
-pub const TAB_BAR_H: f32 = 26.0;
+pub const TAB_BAR_H: f32 = 30.0;
+/// Space above a tab plate, between it and the top of the card.
+///
+/// The plate has to sit *on* the strip rather than fill it, or its rounded top
+/// meets the card's own rounded top and the two curves fight.
+pub const TAB_TOP_PAD: f32 = 5.0;
 
 impl<'a> Behavior<Tab> for AppBehavior<'a> {
     fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut Tab) -> UiResponse {
@@ -319,6 +324,78 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
 
     fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
         TAB_BAR_H
+    }
+
+    /// One tab: a plate that sits on the strip rather than filling it.
+    ///
+    /// Reimplemented rather than restyled because the default paints the tab as
+    /// a square rect filling the strip's full height, and neither the inset nor
+    /// the rounded top is reachable through the colour hooks.
+    ///
+    /// The plate is rounded at the top and square at the bottom, so the active
+    /// tab runs into the body below it — the join is what says "this tab owns
+    /// that content".
+    fn tab_ui(
+        &mut self,
+        tiles: &mut egui_tiles::Tiles<Tab>,
+        ui: &mut egui::Ui,
+        id: egui::Id,
+        tile_id: TileId,
+        state: &egui_tiles::TabState,
+    ) -> egui::Response {
+        let text = self.tab_title_for_tile(tiles, tile_id);
+        let font_id = egui::TextStyle::Button.resolve(ui.style());
+        let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
+
+        let x_margin = self.tab_title_spacing(ui.visuals());
+        let width = galley.size().x + 2.0 * x_margin;
+        let (_, rect) = ui.allocate_space(egui::vec2(width, ui.available_height()));
+
+        let draggable = self.is_tile_draggable(tiles, tile_id);
+        let sense = if draggable {
+            egui::Sense::click_and_drag()
+        } else {
+            egui::Sense::click()
+        };
+        let response = ui.interact(rect, id, sense);
+        let response = if draggable {
+            response.on_hover_cursor(self.tab_hover_cursor_icon())
+        } else {
+            response
+        };
+
+        if ui.is_rect_visible(rect) && !state.is_being_dragged {
+            let plate = egui::Rect::from_min_max(
+                egui::pos2(rect.left(), rect.top() + TAB_TOP_PAD),
+                rect.max,
+            );
+            let radius = egui::CornerRadius {
+                nw: CARD_RADIUS,
+                ne: CARD_RADIUS,
+                sw: 0,
+                se: 0,
+            };
+            if state.active {
+                ui.painter()
+                    .rect_filled(plate, radius, ui.visuals().panel_fill);
+            } else if response.hovered() {
+                // A hint, not a plate: hovering should say "this is clickable"
+                // without briefly looking like the active tab.
+                ui.painter().rect_filled(
+                    plate,
+                    radius,
+                    ui.visuals().panel_fill.gamma_multiply(0.5),
+                );
+            }
+
+            let color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
+            let pos = egui::Align2::CENTER_CENTER
+                .align_size_within_rect(galley.size(), plate)
+                .min;
+            ui.painter().galley(pos, galley, color);
+        }
+
+        response
     }
 
     /// What fills the gap between two cards.
