@@ -96,11 +96,6 @@ impl Tab {
 
 pub struct AppBehavior<'a> {
     pub state: &'a mut crate::app_state::AppState,
-    /// Tiles that are drawn as cards — the tab containers.
-    ///
-    /// Collected before the tree paints, because `paint_on_top_of_tile` is handed
-    /// an id and a rect but no way to ask what kind of tile it is.
-    pub card_tiles: &'a std::collections::HashSet<TileId>,
     pub theme: &'a crate::theme::Theme,
     /// Viewport checker settings, which live in `Config` rather than in the
     /// document: a grid size that travelled in a `.ankh` would fight whoever
@@ -119,14 +114,19 @@ pub struct AppBehavior<'a> {
 pub const CARD_RADIUS: u8 = 4;
 /// Gap between cards, and between the outermost cards and the window edge.
 pub const CARD_GAP: f32 = 10.0;
+/// Height of a card's tab strip. Pinned rather than left to the default because
+/// the card frame is drawn from the pane, which has to reach back up over the
+/// strip to enclose it.
+pub const TAB_BAR_H: f32 = 26.0;
 
 impl<'a> Behavior<Tab> for AppBehavior<'a> {
     fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut Tab) -> UiResponse {
         // The card body. The window behind is the deep background, so anything
         // not painted here reads as a gap between cards — which is exactly what
         // the gaps are.
+        let body = ui.max_rect();
         ui.painter().rect_filled(
-            ui.max_rect(),
+            body,
             egui::CornerRadius {
                 nw: 0,
                 ne: 0,
@@ -134,6 +134,20 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                 se: CARD_RADIUS,
             },
             ui.visuals().panel_fill,
+        );
+        // The card's outline, reaching back up over the tab strip so the strip
+        // and the body read as one object. Drawn here rather than from
+        // `paint_on_top_of_tile` because a pane always runs, and because two of
+        // these panes paint the window's own colour across their bodies — the
+        // viewport's checkerboard, the dopesheet's sheet — so without an edge
+        // there is nothing to tell card from gap.
+        let card =
+            egui::Rect::from_min_max(egui::pos2(body.min.x, body.min.y - TAB_BAR_H), body.max);
+        ui.painter().with_clip_rect(card.expand(2.0)).rect_stroke(
+            card,
+            CARD_RADIUS,
+            egui::Stroke::new(1.0, self.theme.card_border()),
+            egui::StrokeKind::Inside,
         );
         // Consistent inner margin for all non-canvas panels
         let margin = egui::Margin::same(8);
@@ -258,33 +272,14 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         CARD_GAP
     }
 
+    fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
+        TAB_BAR_H
+    }
+
     fn tab_bar_color(&self, visuals: &egui::Visuals) -> egui::Color32 {
         // The tab strip is the top of the card, not a separate bar, so it takes
         // the panel colour rather than the window's.
         visuals.panel_fill
-    }
-
-    /// The card outline.
-    ///
-    /// Drawn only around tab containers — a pane's own rect is the body below
-    /// the tab strip, and a linear container's is the union of its children, so
-    /// outlining either would draw a box in the wrong place.
-    fn paint_on_top_of_tile(
-        &self,
-        painter: &egui::Painter,
-        _style: &egui::Style,
-        tile_id: TileId,
-        rect: egui::Rect,
-    ) {
-        if !self.card_tiles.contains(&tile_id) {
-            return;
-        }
-        painter.rect_stroke(
-            rect,
-            CARD_RADIUS,
-            egui::Stroke::new(1.0, self.theme.card_border()),
-            egui::StrokeKind::Outside,
-        );
     }
 
     fn tab_bg_color(

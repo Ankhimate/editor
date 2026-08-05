@@ -840,22 +840,6 @@ impl eframe::App for AnkhimateApp {
                 crate::ui::toolbar::ui(ui, &mut self.state, &mut trigger_undo, &mut trigger_redo);
             });
 
-        // Cards are the tab containers. Collected here because
-        // `paint_on_top_of_tile` gets an id and a rect but no way to ask what
-        // kind of tile it is.
-        let card_tiles: std::collections::HashSet<egui_tiles::TileId> = self
-            .tree
-            .tiles
-            .iter()
-            .filter(|(_, tile)| {
-                matches!(
-                    tile,
-                    egui_tiles::Tile::Container(egui_tiles::Container::Tabs(_))
-                )
-            })
-            .map(|(id, _)| *id)
-            .collect();
-
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
@@ -870,7 +854,6 @@ impl eframe::App for AnkhimateApp {
                     theme: &self.theme,
                     grid: &self.config.grid,
                     fonts: &self.config.fonts,
-                    card_tiles: &card_tiles,
                 };
                 self.tree.ui(&mut behavior, ui);
             });
