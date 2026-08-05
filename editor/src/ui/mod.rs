@@ -278,6 +278,31 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         TAB_BAR_H
     }
 
+    /// What fills the gap between two cards.
+    ///
+    /// egui_tiles paints the resize separator as a stroke *as wide as the gap*,
+    /// and its default colour is `tab_bar_color` — which this behaviour sets to
+    /// the panel colour so a tab strip reads as the top of a card. The two
+    /// together painted every gap in card colour, so cards 10px apart looked
+    /// welded together with no gap at all.
+    ///
+    /// Idle fills the gap with the desk behind the cards, which is what a gap is.
+    /// Hovering and dragging keep the accent, because a separator you are about
+    /// to drag has to announce itself.
+    fn resize_stroke(&self, style: &egui::Style, state: egui_tiles::ResizeState) -> egui::Stroke {
+        match state {
+            egui_tiles::ResizeState::Idle => {
+                egui::Stroke::new(self.gap_width(style), self.theme.window_background())
+            }
+            egui_tiles::ResizeState::Hovering => {
+                egui::Stroke::new(self.gap_width(style), self.theme.card_border())
+            }
+            egui_tiles::ResizeState::Dragging => {
+                egui::Stroke::new(self.gap_width(style), style.visuals.selection.bg_fill)
+            }
+        }
+    }
+
     fn tab_bar_color(&self, visuals: &egui::Visuals) -> egui::Color32 {
         // The tab strip is the top of the card, not a separate bar, so it takes
         // the panel colour rather than the window's.
