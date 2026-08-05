@@ -506,8 +506,16 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
                     continue;
                 };
                 let (icon, kind, hue) = attachment_glyph(attachment);
+                // Which image this row draws, if any. Read before the row so the
+                // mutable borrow the preview needs does not overlap the one
+                // `selectable_row` takes.
+                let texture = match attachment {
+                    Attachment::Region(r) => Some(r.texture.clone()),
+                    Attachment::Mesh(m) => Some(m.texture.clone()),
+                    _ => None,
+                };
                 let shown = active.as_deref() == Some(name.as_str());
-                let clicked = selectable_row(
+                let response = selectable_row(
                     ui,
                     state,
                     Row {
@@ -526,9 +534,11 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
                         },
                         detail: kind.to_string(),
                     },
-                )
-                .clicked();
-                if clicked {
+                );
+                if let Some(texture) = texture {
+                    image_preview(ui, state, &response, &texture);
+                }
+                if response.clicked() {
                     state.session.select_attachment(slot_id, name, bone_id);
                 }
             }
@@ -748,6 +758,53 @@ fn selectable_row(ui: &mut egui::Ui, state: &mut AppState, row: Row<'_>) -> egui
         );
     }
     response
+}
+
+/// Longest edge of the hover preview, in points.
+///
+/// Big enough to tell two similar limb pieces apart — which is the whole reason
+/// to hover a row rather than click it — and small enough not to bury the tree
+/// it is drawn over.
+const PREVIEW_MAX: f32 = 128.0;
+
+/// Show the art on hover, with its pixel size beneath it.
+///
+/// Rows are 21px of text, which is enough to say a piece is called
+/// `front-upper-arm` and not enough to say *which* front upper arm. The pixel
+/// size sits under the image because "is this the 46x97 one or the 44x93 one" is
+/// exactly the question two near-identical pieces raise.
+fn image_preview(ui: &egui::Ui, state: &mut AppState, response: &egui::Response, texture: &str) {
+    if !response.hovered() {
+        return;
+    }
+    let Some(id) = state.doc.assets.by_name(texture) else {
+        return;
+    };
+    let Some(asset) = state.doc.assets.get(id) else {
+        return;
+    };
+    let (w, h) = (asset.width, asset.height);
+    // Rendered at twice the drawn size so the preview stays crisp on a hidpi
+    // display, and never upscaled past its own pixels — a 16x16 icon blown up to
+    // 128 tells you less than the same icon at 16.
+    let long_edge = w.max(h).min(PREVIEW_MAX as u32);
+    let Some(handle) = crate::ui::assets::scaled_thumbnail(ui.ctx(), state, id, long_edge * 2)
+    else {
+        return;
+    };
+
+    let scale = long_edge as f32 / w.max(h) as f32;
+    let size = egui::vec2(w as f32 * scale, h as f32 * scale);
+    response.clone().on_hover_ui(|ui| {
+        ui.vertical_centered(|ui| {
+            ui.add(egui::Image::new(&handle).fit_to_exact_size(size));
+            ui.label(
+                egui::RichText::new(format!("{w} × {h}"))
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+            );
+        });
+    });
 }
 
 /// The icon, one-word kind, and hue for an attachment.

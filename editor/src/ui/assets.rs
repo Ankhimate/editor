@@ -507,21 +507,36 @@ fn thumbnail(
     state: &mut AppState,
     id: AssetId,
 ) -> Option<egui::TextureHandle> {
+    scaled_thumbnail(ctx, state, id, THUMB as u32 * 2)
+}
+
+/// Decode (once) and cache an asset scaled to fit `max_px` on its long edge.
+///
+/// The panel and the hierarchy's hover preview want different sizes, so the size
+/// is part of the cache key: asking for a bigger one must not hand back the
+/// small one already in the map and draw it upscaled and soft.
+pub fn scaled_thumbnail(
+    ctx: &egui::Context,
+    state: &mut AppState,
+    id: AssetId,
+    max_px: u32,
+) -> Option<egui::TextureHandle> {
     let asset = state.doc.assets.get(id)?;
     if asset.bytes.is_empty() {
         return None;
     }
     // Keyed by name+size rather than the slotmap id, for the same reason the GPU
     // cache is content-keyed: ids are recycled between documents.
-    let cache_key = format!("thumb:{}:{}x{}", asset.name, asset.width, asset.height);
+    let cache_key = format!(
+        "thumb:{}:{}x{}@{max_px}",
+        asset.name, asset.width, asset.height
+    );
     if let Some(handle) = state.session.thumbnails.get(&cache_key) {
         return Some(handle.clone());
     }
 
     let image = image::load_from_memory(&asset.bytes).ok()?;
-    let rgba = image
-        .thumbnail(THUMB as u32 * 2, THUMB as u32 * 2)
-        .to_rgba8();
+    let rgba = image.thumbnail(max_px, max_px).to_rgba8();
     let (w, h) = rgba.dimensions();
     let color_image =
         egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], rgba.as_raw());
