@@ -47,49 +47,54 @@ fn target(state: &AppState) -> Option<(Target, MeshAttachment)> {
 }
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
-    super::inspector::section_header(ui, crate::ui::icons::WEIGHT_PAINT, "Weight Paint");
-    ui.add_space(4.0);
-
     let Some((target, mesh)) = target(state) else {
-        ui.label(
-            egui::RichText::new("Select a slot with a mesh attachment to paint weights.")
-                .size(10.5)
-                .color(ui.visuals().weak_text_color()),
-        );
-        ui.add_space(8.0);
+        ui.add_space(16.0);
+        ui.vertical_centered(|ui| {
+            ui.label(
+                egui::RichText::new(crate::ui::icons::WEIGHT_PAINT)
+                    .size(22.0)
+                    .color(ui.visuals().weak_text_color()),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Select a slot with a mesh")
+                    .color(ui.visuals().weak_text_color()),
+            );
+        });
         return;
     };
 
-    brush_controls(ui, state);
-    ui.add_space(8.0);
+    controls(ui, state, &target, &mesh);
+    ui.add_space(10.0);
     bound_bones(ui, state, &target, &mesh);
-    ui.add_space(8.0);
-    direct_entry(ui, state, &target, &mesh);
-    ui.add_space(8.0);
-    actions(ui, state, &target, &mesh);
-
-    ui.add_space(6.0);
-    ui.label(
-        egui::RichText::new(
-            "Click a bone on the canvas to aim the brush; drag over the mesh to paint.",
-        )
-        .size(10.5)
-        .color(ui.visuals().weak_text_color()),
-    );
-    ui.add_space(8.0);
 }
 
-fn brush_controls(ui: &mut egui::Ui, state: &mut AppState) {
-    let settings = &mut state.session.weight_paint_settings;
-
+/// The brush, in one column of labelled rows.
+///
+/// Laid out label-right of the control rather than as free-standing widgets:
+/// four sliders and a chip row with no alignment reads as a pile of settings,
+/// and the panel is looked at while the other hand is on the canvas.
+fn controls(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &MeshAttachment) {
+    // ── Mode ────────────────────────────────────────────────────────────
+    // Direct sits with the brush modes rather than in a section of its own.
+    // They are alternatives — either the pointer paints or the slider sets —
+    // and putting them side by side makes that a single choice instead of two
+    // controls that have to be reconciled.
     ui.horizontal_wrapped(|ui| {
-        ui.add_space(8.0);
+        let direct = state.session.weight_paint_settings.direct;
+        if ui
+            .selectable_label(direct, "Direct")
+            .on_hover_text("Type a weight for the selected vertices instead of painting")
+            .clicked()
+        {
+            state.session.weight_paint_settings.direct = true;
+        }
         for mode in BrushMode::ALL {
-            let selected = settings.mode == mode;
+            let selected = !direct && state.session.weight_paint_settings.mode == mode;
             let hint = match mode {
-                BrushMode::Add => "Raise toward Strength, never past it",
-                BrushMode::Subtract => "Lower toward zero; Strength is the rate",
-                BrushMode::Replace => "Set to exactly Strength, from either side",
+                BrushMode::Add => "Raise toward Weight, never past it",
+                BrushMode::Subtract => "Lower toward zero; Weight is the rate",
+                BrushMode::Replace => "Set to exactly Weight, from either side",
                 BrushMode::Smooth => "Average with neighbouring vertices",
             };
             if ui
@@ -97,30 +102,65 @@ fn brush_controls(ui: &mut egui::Ui, state: &mut AppState) {
                 .on_hover_text(hint)
                 .clicked()
             {
-                settings.mode = mode;
+                state.session.weight_paint_settings.direct = false;
+                state.session.weight_paint_settings.mode = mode;
             }
         }
     });
-    ui.add_space(4.0);
+    ui.add_space(6.0);
 
-    ui.add(egui::Slider::new(&mut settings.radius, 4.0..=400.0).text("Size"));
-    ui.add(
-        egui::Slider::new(&mut settings.strength, 0.0..=1.0)
-            .text("Strength")
-            .fixed_decimals(2),
-    )
-    .on_hover_text("The weight the brush drives toward — not an amount added");
-    ui.add(
-        egui::Slider::new(&mut settings.feather, 0.0..=1.0)
-            .text("Feather")
-            .fixed_decimals(2),
-    )
-    .on_hover_text(
-        "How much of the radius is gradient.\n\
-         0 stamps a hard edge, 1 fades from the centre.",
-    );
+    // ── Weight / Size / Feather ─────────────────────────────────────────
+    let direct = state.session.weight_paint_settings.direct;
+    let selected_vertices = state.session.selected_vertices.clone();
+    let bone = state.session.active_bone();
 
-    ui.add_space(4.0);
+    let weight_changed = ui
+        .add(
+            egui::Slider::new(&mut state.session.weight_paint_settings.strength, 0.0..=1.0)
+                .text("Weight")
+                .fixed_decimals(2),
+        )
+        .on_hover_text(if direct {
+            "The weight written to the selected vertices"
+        } else {
+            "The weight the brush drives toward — not an amount added"
+        })
+        .changed();
+
+    // Size and feather describe a brush, so they go quiet when there is no
+    // brush. Hiding them instead would make the panel jump height every time
+    // the mode changes.
+    ui.add_enabled_ui(!direct, |ui| {
+        ui.add(
+            egui::Slider::new(&mut state.session.weight_paint_settings.radius, 4.0..=400.0)
+                .text("Size"),
+        );
+        ui.add(
+            egui::Slider::new(&mut state.session.weight_paint_settings.feather, 0.0..=1.0)
+                .text("Feather")
+                .fixed_decimals(2),
+        )
+        .on_hover_text(
+            "How much of the radius is gradient.\n\
+             0 stamps a hard edge, 1 fades from the centre.",
+        );
+    });
+
+    if direct
+        && weight_changed
+        && let Some(bone) = bone
+    {
+        let value = state.session.weight_paint_settings.strength;
+        apply_direct(state, target, mesh, &selected_vertices, bone, value);
+    }
+
+    // ── Actions ─────────────────────────────────────────────────────────
+    ui.add_space(6.0);
+    actions(ui, state, target, mesh);
+
+    // ── What the canvas shows ───────────────────────────────────────────
+    ui.add_space(6.0);
+    let settings = &mut state.session.weight_paint_settings;
     ui.horizontal(|ui| {
         ui.checkbox(&mut settings.show_overlay, "Overlay")
             .on_hover_text("Shade the mesh by the selected bone's influence");
@@ -129,6 +169,25 @@ fn brush_controls(ui: &mut egui::Ui, state: &mut AppState) {
         ui.checkbox(&mut settings.show_selected_only, "Selected")
             .on_hover_text("Only mark the vertices picked in mesh edit mode");
     });
+
+    // One line, and only the line that applies right now. The panel used to
+    // carry a paragraph of instructions and a vertex-count heading that said
+    // nothing when the count was zero.
+    ui.add_space(4.0);
+    let hint = if direct {
+        match (bone.is_some(), selected_vertices.len()) {
+            (false, _) => "Select a bone to set its weight".to_string(),
+            (true, 0) => "Pick vertices in mesh edit mode".to_string(),
+            (true, n) => format!("Weight applies to {n} selected vertices"),
+        }
+    } else {
+        "Click a bone to aim the brush, then drag over the mesh".to_string()
+    };
+    ui.label(
+        egui::RichText::new(hint)
+            .size(10.5)
+            .color(ui.visuals().weak_text_color()),
+    );
 }
 
 /// Which bones actually influence this mesh, strongest first.
@@ -273,78 +332,6 @@ fn bound_bones(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &
     });
 }
 
-/// Exact weights for the vertices picked in mesh-edit mode.
-///
-/// The brush is a gesture and gestures are approximate. Some weights want to be
-/// said outright — a vertex at the very end of a limb is 100% that bone, and
-/// nudging a brush until it reads 1.00 is a silly way to say so.
-fn direct_entry(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &MeshAttachment) {
-    let selected = state.session.selected_vertices.clone();
-    ui.label(
-        egui::RichText::new(format!("SELECTED VERTICES  {}", selected.len()))
-            .size(10.5)
-            .strong()
-            .color(ui.visuals().weak_text_color()),
-    );
-    if selected.is_empty() {
-        ui.label(
-            egui::RichText::new("Pick vertices in mesh edit mode to set weights exactly")
-                .size(10.5)
-                .color(ui.visuals().weak_text_color()),
-        );
-        return;
-    }
-    let Some(bone) = state.session.active_bone() else {
-        ui.label(
-            egui::RichText::new("Select a bone to set its weight")
-                .size(10.5)
-                .color(ui.visuals().weak_text_color()),
-        );
-        return;
-    };
-
-    // The mean across the selection, so one field can stand for many vertices.
-    // Showing the first vertex's value instead would silently misreport the rest.
-    let mean = selected
-        .iter()
-        .filter_map(|i| mesh.weights.get(*i))
-        .map(|v| v.iter().find(|w| w.bone == bone).map_or(0.0, |w| w.weight))
-        .sum::<f32>()
-        / selected.len() as f32;
-
-    let mut value = mean;
-    let name = state
-        .doc
-        .skeleton
-        .bones
-        .get(bone)
-        .map(|b| b.name.clone())
-        .unwrap_or_default();
-    let changed = ui
-        .add(
-            egui::Slider::new(&mut value, 0.0..=1.0)
-                .text(&name)
-                .fixed_decimals(3),
-        )
-        .changed();
-
-    ui.horizontal(|ui| {
-        let mut preset = None;
-        for (label, v) in [("0%", 0.0), ("25%", 0.25), ("50%", 0.5), ("100%", 1.0)] {
-            if ui.small_button(label).clicked() {
-                preset = Some(v);
-            }
-        }
-        if let Some(v) = preset {
-            apply_direct(state, target, mesh, &selected, bone, v);
-        }
-    });
-
-    if changed {
-        apply_direct(state, target, mesh, &selected, bone, value);
-    }
-}
-
 fn apply_direct(
     state: &mut AppState,
     target: &Target,
@@ -364,47 +351,46 @@ fn apply_direct(
     dispatch(state, target, weights, "Set Vertex Weights");
 }
 
+/// The whole-mesh operations, in two rows.
+///
+/// Grouped by what they touch rather than by how often they are used: the first
+/// row assigns weights, the second cleans up and maintains them. A flat grid of
+/// eight buttons reads as eight equally likely things to press, which is how the
+/// panel got a reputation for being unreadable.
 fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &MeshAttachment) {
     let selected_bones = state.session.selected_bones.clone();
-    ui.horizontal(|ui| {
+    let selected_vertices = state.session.selected_vertices.clone();
+
+    ui.horizontal_wrapped(|ui| {
         if ui
-            .add_enabled(!selected_bones.is_empty(), egui::Button::new("Bind"))
+            .button("Auto")
             .on_hover_text(
-                "Bind the selected bones to this mesh, computing starting weights \
-                 from them alone.\n\
-                 Unlike Auto-weight, bones you did not select are left out.",
-            )
-            .clicked()
-        {
-            auto_weight_mesh(state, target, mesh, Some(&selected_bones));
-        }
-        if ui
-            .button("Auto-weight")
-            .on_hover_text(
-                "Bind every vertex to nearby bones by distance across the mesh surface.\n\
+                "Weight every vertex to nearby bones, measured across the mesh surface.
                  A starting point to refine, not a finished rig.",
             )
             .clicked()
         {
             auto_weight_mesh(state, target, mesh, None);
         }
-    });
-
-    ui.horizontal(|ui| {
         if ui
-            .button("Update bindings")
+            .add_enabled(!selected_bones.is_empty(), egui::Button::new("Bind"))
             .on_hover_text(
-                "Recapture the bind pose from the current setup.\n\
-                 Do this after moving a bone that already holds weight, or the \
-                 art drifts away from it.",
+                "Same, but only from the bones you have selected.
+                 Select bones first.",
             )
             .clicked()
         {
-            // The weights are unchanged; the point is the side effect. Every
-            // weight command clears the bind matrices, and `rebind_meshes`
-            // recaptures them from the setup pose on the next tick.
-            dispatch(state, target, mesh.weights.clone(), "Update Bindings");
-            state.session.set_status("Bindings updated");
+            auto_weight_mesh(state, target, mesh, Some(&selected_bones));
+        }
+        if ui
+            .button("Smooth")
+            .on_hover_text(
+                "Average each vertex with its neighbours.
+                 Applies to the selected vertices, or the whole mesh if none.",
+            )
+            .clicked()
+        {
+            smooth_all(state, target, mesh, &selected_vertices);
         }
         if ui
             .add_enabled(
@@ -412,7 +398,7 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
                 egui::Button::new("Weld"),
             )
             .on_hover_text(
-                "Give vertices that sit on top of each other the same weights.\n\
+                "Give vertices that sit on top of each other the same weights.
                  Select two or more slots whose meshes meet at a seam.",
             )
             .clicked()
@@ -421,10 +407,10 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
         }
     });
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui
             .button("Prune")
-            .on_hover_text("Drop the weakest influences on every vertex")
+            .on_hover_text("Drop the weakest influences, by the limits below")
             .clicked()
         {
             let settings = &state.session.weight_paint_settings;
@@ -440,23 +426,68 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
                 .collect();
             dispatch(state, target, weights, "Prune Weights");
         }
-    });
+        if ui
+            .button("Update")
+            .on_hover_text(
+                "Recapture the bind pose from the current setup.
+                 Do this after moving a bone that already holds weight.",
+            )
+            .clicked()
+        {
+            dispatch(state, target, mesh.weights.clone(), "Update Bindings");
+            state.session.set_status("Bindings updated");
+        }
 
-    let settings = &mut state.session.weight_paint_settings;
-    let mut bones = settings.max_bones as f32;
-    if ui
-        .add(egui::Slider::new(&mut bones, 1.0..=8.0).text("Max bones"))
-        .on_hover_text("Ceiling on how many bones may influence one vertex")
-        .changed()
-    {
-        settings.max_bones = bones.round() as usize;
-    }
-    ui.add(
-        egui::Slider::new(&mut settings.prune_threshold, 0.0..=0.2)
-            .text("Threshold")
-            .fixed_decimals(3),
-    )
-    .on_hover_text("Weights below this are dropped by Prune");
+        let settings = &mut state.session.weight_paint_settings;
+        let mut bones = settings.max_bones as f32;
+        if ui
+            .add(egui::DragValue::new(&mut bones).range(1.0..=8.0).speed(0.1))
+            .on_hover_text("Prune: most bones allowed on one vertex")
+            .changed()
+        {
+            settings.max_bones = bones.round() as usize;
+        }
+        ui.add(
+            egui::DragValue::new(&mut settings.prune_threshold)
+                .range(0.0..=0.2)
+                .speed(0.002)
+                .fixed_decimals(3),
+        )
+        .on_hover_text("Prune: weights below this are dropped");
+    });
+}
+
+/// Smooth the selection, or the whole mesh when nothing is selected.
+fn smooth_all(state: &mut AppState, target: &Target, mesh: &MeshAttachment, selected: &[usize]) {
+    let Some(bone) = state.session.active_bone() else {
+        state
+            .session
+            .set_status("Select a bone to smooth its weights");
+        return;
+    };
+    // Zero distance means full effect; anything outside the selection is put
+    // past the radius so the same brush code can express "these and no others".
+    let distances: Vec<f32> = (0..mesh.setup_vertices.len())
+        .map(|i| {
+            if selected.is_empty() || selected.contains(&i) {
+                0.0
+            } else {
+                f32::INFINITY
+            }
+        })
+        .collect();
+    let locked = state.session.weight_paint_settings.locked.clone();
+    let weights = weight_cmds::brush(
+        mesh,
+        bone,
+        BrushMode::Smooth,
+        &distances,
+        1.0,
+        1.0,
+        1.0,
+        &locked,
+    );
+    dispatch(state, target, weights, "Smooth Weights");
 }
 
 /// Weld every selected slot's mesh together along the seams they share.

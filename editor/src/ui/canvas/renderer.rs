@@ -479,8 +479,24 @@ fn pie(
             fan.indices.extend_from_slice(&[0, step, step + 1]);
         }
         painter.add(egui::Shape::mesh(fan));
+
+        // A spoke at each slice's leading edge. Without one a single-influence
+        // vertex — which is most of them on a finished rig — draws as a plain
+        // filled disc, and a plain disc reads as "a dot", not as "one bone holds
+        // all of this". The spoke is what makes it legible as a chart.
+        let edge = egui::vec2(start.cos(), start.sin()) * RADIUS;
+        painter.line_segment(
+            [center, center + edge],
+            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(200)),
+        );
         start += sweep;
     }
+
+    painter.circle_stroke(
+        center,
+        RADIUS,
+        egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)),
+    );
 }
 
 /// Weight to colour for the influence overlay.

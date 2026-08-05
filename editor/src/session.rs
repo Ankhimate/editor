@@ -112,6 +112,12 @@ pub struct WeightPaintSettings {
     /// Fraction of the radius spent on the gradient. 0 is a hard stamp.
     pub feather: f32,
     pub mode: crate::commands::weight_cmds::BrushMode,
+    /// Set weights from the slider instead of by painting.
+    ///
+    /// An alternative to the brush modes rather than a separate feature: either
+    /// the pointer decides which vertices change or the selection does, and
+    /// presenting them as one choice is what keeps the panel to one column.
+    pub direct: bool,
     /// Bones whose weight the brush must not disturb.
     ///
     /// Per session rather than per mesh: a lock is a statement about what you
@@ -150,6 +156,7 @@ impl Default for WeightPaintSettings {
             // complaint there is.
             feather: 0.7,
             mode: crate::commands::weight_cmds::BrushMode::Add,
+            direct: false,
             locked: Vec::new(),
             max_bones: crate::commands::weight_cmds::DEFAULT_MAX_BONES,
             prune_threshold: crate::commands::weight_cmds::DEFAULT_PRUNE_THRESHOLD,

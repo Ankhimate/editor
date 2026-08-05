@@ -28,7 +28,9 @@ impl CanvasTool for WeightPaintTool {
             return;
         }
 
-        if !ctx.response.dragged() {
+        // Direct mode writes from the panel's slider, so a drag here must not
+        // also paint — the two would fight over the same vertices.
+        if !ctx.response.dragged() || ctx.state.session.weight_paint_settings.direct {
             return;
         }
         let (Some(bone), Some(slot_id)) = (
