@@ -110,6 +110,11 @@ pub const CARD_RADIUS: u8 = 8;
 pub const CARD_GAP: f32 = 5.0;
 /// Space between a tab's label and the top and bottom of its plate.
 pub const TAB_PAD_Y: f32 = 6.0;
+/// Space before the first tab, holding it off the card's rounded corner.
+///
+/// Matched to the corner radius: any less and the plate's square bottom-left
+/// overhangs the curve, which reads as the tab hanging off the edge of the card.
+pub const TAB_START_PAD: f32 = CARD_RADIUS as f32;
 
 /// Height of a card's tab strip.
 ///
@@ -355,6 +360,13 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         tile_id: TileId,
         state: &egui_tiles::TabState,
     ) -> egui::Response {
+        // Hold the first tab off the card's corner. The tab bar lays its tabs out
+        // left to right with no item spacing, so the leading gap has to be taken
+        // here — and only once, when the cursor is still at the strip's edge.
+        if ui.cursor().left() <= ui.max_rect().left() + 0.5 {
+            ui.add_space(TAB_START_PAD);
+        }
+
         let text = self.tab_title_for_tile(tiles, tile_id);
         let font_id = egui::TextStyle::Button.resolve(ui.style());
         let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
