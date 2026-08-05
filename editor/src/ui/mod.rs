@@ -135,20 +135,6 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             },
             ui.visuals().panel_fill,
         );
-        // The card's outline, reaching back up over the tab strip so the strip
-        // and the body read as one object. Drawn here rather than from
-        // `paint_on_top_of_tile` because a pane always runs, and because two of
-        // these panes paint the window's own colour across their bodies — the
-        // viewport's checkerboard, the dopesheet's sheet — so without an edge
-        // there is nothing to tell card from gap.
-        let card =
-            egui::Rect::from_min_max(egui::pos2(body.min.x, body.min.y - TAB_BAR_H), body.max);
-        ui.painter().with_clip_rect(card.expand(2.0)).rect_stroke(
-            card,
-            CARD_RADIUS,
-            egui::Stroke::new(1.0, self.theme.card_border()),
-            egui::StrokeKind::Inside,
-        );
         // Consistent inner margin for all non-canvas panels
         let margin = egui::Margin::same(8);
         match pane {
@@ -237,6 +223,22 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                 });
             }
         }
+        // The card's outline, drawn *after* the panel's content and reaching back
+        // up over the tab strip so strip and body enclose as one object.
+        //
+        // After, because the viewport paints its checkerboard across its whole
+        // rect and the dopesheet paints its sheet — an outline drawn first is
+        // painted over by the very panels that need it most, which is why the
+        // cards looked stuck together with a 10px gap between them.
+        let card =
+            egui::Rect::from_min_max(egui::pos2(body.min.x, body.min.y - TAB_BAR_H), body.max);
+        ui.painter().with_clip_rect(card.expand(2.0)).rect_stroke(
+            card,
+            CARD_RADIUS,
+            egui::Stroke::new(1.0, self.theme.card_border()),
+            egui::StrokeKind::Inside,
+        );
+
         UiResponse::None
     }
 
@@ -331,5 +333,59 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             all_panes_must_have_tabs: true,
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// The gap between cards is laid out, not painted — `gap_width` shrinks each
+    /// child's rect, and egui_tiles re-runs layout every frame. Asserted here
+    /// because "the panels look stuck together" and "there is no gap" are two
+    /// different bugs with two different fixes, and a screenshot cannot tell them
+    /// apart when both sides of the gap are the same near-black.
+    #[test]
+    #[allow(deprecated)]
+    fn sibling_cards_are_separated_by_the_gap() {
+        use crate::app_state::AppState;
+        use egui_tiles::{Tile, Tiles, Tree};
+
+        let mut tiles = Tiles::default();
+        let a = tiles.insert_pane(Tab::Canvas);
+        let b = tiles.insert_pane(Tab::Hierarchy);
+        let left = tiles.insert_tab_tile(vec![a]);
+        let right = tiles.insert_tab_tile(vec![b]);
+        let root = tiles.insert_horizontal_tile(vec![left, right]);
+        let mut tree = Tree::new("test", root, tiles);
+
+        let mut state = AppState::default();
+        let theme = crate::theme::Theme::default();
+        let grid = crate::config::GridSettings::default();
+        let fonts = crate::config::FontSettings::default();
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut behavior = AppBehavior {
+                    state: &mut state,
+                    theme: &theme,
+                    grid: &grid,
+                    fonts: &fonts,
+                };
+                tree.ui(&mut behavior, ui);
+            });
+        });
+
+        let (left_rect, right_rect) = (
+            tree.tiles.rect(left).expect("left laid out"),
+            tree.tiles.rect(right).expect("right laid out"),
+        );
+        let gap = right_rect.min.x - left_rect.max.x;
+        assert!(
+            (gap - CARD_GAP).abs() < 0.5,
+            "cards are {gap}px apart, expected {CARD_GAP}"
+        );
+        assert!(matches!(tree.tiles.get(left), Some(Tile::Container(_))));
     }
 }
