@@ -242,25 +242,30 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         // why the outline only ever appeared along three sides.
         let painter = ui.ctx().layer_painter(ui.layer_id());
 
-        for (corner, centre) in [
-            (card.left_top(), egui::vec2(radius, radius)),
+        let strip = self.theme.window_background();
+        let panel = ui.visuals().panel_fill;
+        for (corner, centre, restore) in [
+            (card.left_top(), egui::vec2(radius, radius), strip),
             (
                 egui::pos2(card.right() - radius, card.top()),
                 egui::vec2(0.0, radius),
+                strip,
             ),
             (
                 egui::pos2(card.left(), card.bottom() - radius),
                 egui::vec2(radius, 0.0),
+                panel,
             ),
             (
                 egui::pos2(card.right() - radius, card.bottom() - radius),
                 egui::vec2(0.0, 0.0),
+                panel,
             ),
         ] {
             let square = egui::Rect::from_min_size(corner, egui::Vec2::splat(radius));
             let painter = painter.with_clip_rect(square);
             painter.rect_filled(square, 0, self.theme.window_background());
-            painter.circle_filled(corner + centre, radius, ui.visuals().panel_fill);
+            painter.circle_filled(corner + centre, radius, restore);
         }
 
         // The card's outline, drawn *after* the panel's content and reaching back
@@ -341,10 +346,13 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         }
     }
 
-    fn tab_bar_color(&self, visuals: &egui::Visuals) -> egui::Color32 {
-        // The tab strip is the top of the card, not a separate bar, so it takes
-        // the panel colour rather than the window's.
-        visuals.panel_fill
+    fn tab_bar_color(&self, _visuals: &egui::Visuals) -> egui::Color32 {
+        // The strip recedes to the desk colour, so the card reads as a sheet of
+        // panel with its heading set into the surface behind it rather than as a
+        // solid block with a lighter band on top. The active tab keeps the panel
+        // colour (see `tab_bg_color`), which is what connects it to the body
+        // below and makes it look raised out of the strip.
+        self.theme.window_background()
     }
 
     fn tab_bg_color(
@@ -355,9 +363,14 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         state: &egui_tiles::TabState,
     ) -> egui::Color32 {
         if state.active {
+            // The panel colour, matching the body below it, so the active tab
+            // reads as raised out of the strip and joined to its own content.
             visuals.panel_fill
         } else {
-            visuals.extreme_bg_color
+            // Nothing. An inactive tab is its label on the strip; giving it a
+            // fill would put three competing plates in a row and make the active
+            // one harder to find, not easier.
+            egui::Color32::TRANSPARENT
         }
     }
 
