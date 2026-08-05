@@ -538,22 +538,29 @@ impl eframe::App for AnkhimateApp {
                 ui.allocate_ui_at_rect(bar_rect, |ui| {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         // First thing in the window, as in VS Code and every
-                        // other app that owns its title bar. The corner is the
-                        // one spot nothing else competes for.
+                        // other app that owns its title bar.
+                        //
+                        // It takes the whole width of the tool rail and centres
+                        // itself in it, so the mark sits directly over the column
+                        // of tools rather than starting a second left edge a few
+                        // pixels off from theirs. That also puts the menus flush
+                        // with the cards, which begin where the rail ends.
                         let logo_h = crate::ui::branding::TITLE_BAR_HEIGHT;
+                        let rail = crate::ui::toolbar::RAIL_WIDTH;
+                        let (column, _) =
+                            ui.allocate_exact_size(egui::vec2(rail, logo_h), egui::Sense::hover());
                         if let Some(logo) = self.logo.texture(ctx, logo_h) {
                             let size = logo.size_vec2();
-                            ui.add_space(10.0);
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::vec2(size.x / size.y * logo_h, logo_h),
-                                // Hover only: the bar's own drag interaction is
-                                // behind this, and a click sense here would
-                                // punch a dead spot in the window drag area.
-                                egui::Sense::hover(),
-                            );
+                            // Hover-only, and painted rather than allocated: the
+                            // bar's own drag interaction is behind this, and a
+                            // click sense would punch a dead spot in the window
+                            // drag area.
                             ui.painter().image(
                                 logo.id(),
-                                rect,
+                                egui::Rect::from_center_size(
+                                    column.center(),
+                                    egui::vec2(size.x / size.y * logo_h, logo_h),
+                                ),
                                 egui::Rect::from_min_max(
                                     egui::pos2(0.0, 0.0),
                                     egui::pos2(1.0, 1.0),
