@@ -59,12 +59,11 @@ pub fn render(height: u32) -> Option<Raster> {
     // tiny-skia works premultiplied; egui and the platform icon APIs both want
     // straight alpha. Un-premultiplying here rather than at the call sites keeps
     // the one place that knows about the difference in this file.
-    Some(Raster {
+    Some(unpremultiply(Raster {
         rgba: pixmap.take(),
         width,
         height,
-    })
-    .map(unpremultiply)
+    }))
 }
 
 fn unpremultiply(mut raster: Raster) -> Raster {

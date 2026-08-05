@@ -534,9 +534,33 @@ impl eframe::App for AnkhimateApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
 
-                // Left: menus only (no theme selector here anymore)
+                // Left: the mark, then the menus
                 ui.allocate_ui_at_rect(bar_rect, |ui| {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        // First thing in the window, as in VS Code and every
+                        // other app that owns its title bar. The corner is the
+                        // one spot nothing else competes for.
+                        let logo_h = crate::ui::branding::TITLE_BAR_HEIGHT;
+                        if let Some(logo) = self.logo.texture(ctx, logo_h) {
+                            let size = logo.size_vec2();
+                            ui.add_space(10.0);
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(size.x / size.y * logo_h, logo_h),
+                                // Hover only: the bar's own drag interaction is
+                                // behind this, and a click sense here would
+                                // punch a dead spot in the window drag area.
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().image(
+                                logo.id(),
+                                rect,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                egui::Color32::WHITE,
+                            );
+                        }
                         ui.add_space(8.0);
                         egui::MenuBar::new().ui(ui, |ui| {
                             ui.menu_button("File", |ui| {
@@ -933,32 +957,6 @@ impl eframe::App for AnkhimateApp {
                         }
                         if window_button(ui, crate::ui::icons::MINIMISE, "Minimise", false) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                        }
-
-                        // The mark, inboard of the window controls. Right rather
-                        // than left because the left of this bar is the menus,
-                        // and a logo butted against "File" reads as another menu.
-                        let h = crate::ui::branding::TITLE_BAR_HEIGHT;
-                        if let Some(logo) = self.logo.texture(ctx, h) {
-                            let size = logo.size_vec2();
-                            ui.add_space(10.0);
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::vec2(size.x / size.y * h, h),
-                                // Hover only: the bar's own drag interaction is
-                                // behind this, and a click sense here would
-                                // punch a dead spot in the window drag area.
-                                egui::Sense::hover(),
-                            );
-                            ui.painter().image(
-                                logo.id(),
-                                rect,
-                                egui::Rect::from_min_max(
-                                    egui::pos2(0.0, 0.0),
-                                    egui::pos2(1.0, 1.0),
-                                ),
-                                egui::Color32::WHITE,
-                            );
-                            ui.add_space(4.0);
                         }
                     });
                 });
