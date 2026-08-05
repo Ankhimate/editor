@@ -22,6 +22,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 directories = "6.0.0"
 spade = "2.15.1"
+resvg = { version = "0.48", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
