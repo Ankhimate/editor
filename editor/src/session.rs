@@ -107,18 +107,39 @@ pub enum GizmoInteraction {
 #[derive(Debug, Clone)]
 pub struct WeightPaintSettings {
     pub radius: f32,
+    /// The weight the brush drives toward — a target, not an amount added.
     pub strength: f32,
+    /// Fraction of the radius spent on the gradient. 0 is a hard stamp.
+    pub feather: f32,
     pub mode: crate::commands::weight_cmds::BrushMode,
+    /// Bones whose weight the brush must not disturb.
+    ///
+    /// Per session rather than per mesh: a lock is a statement about what you
+    /// are doing right now, and carrying it in the document would mean saving a
+    /// file that quietly refuses edits when it is reopened.
+    pub locked: Vec<ankhimate_core::ids::BoneId>,
+    /// Ceiling on influences per vertex, for the Prune action.
+    pub max_bones: usize,
+    /// Weights below this are dropped by Prune.
+    pub prune_threshold: f32,
 }
 
 impl Default for WeightPaintSettings {
     fn default() -> Self {
         Self {
             radius: 50.0,
-            // Low: weight painting is built up in passes, and a strong default
-            // makes every first stroke something to undo.
-            strength: 0.1,
+            // Full: strength is the weight painted toward, so the default is
+            // "bind what I paint over to this bone" — the common case. It was
+            // 0.1 back when strength was an increment.
+            strength: 1.0,
+            // A soft edge by default. A hard-edged weight boundary creases when
+            // the joint bends, and that crease is the most common weighting
+            // complaint there is.
+            feather: 0.7,
             mode: crate::commands::weight_cmds::BrushMode::Add,
+            locked: Vec::new(),
+            max_bones: crate::commands::weight_cmds::DEFAULT_MAX_BONES,
+            prune_threshold: crate::commands::weight_cmds::DEFAULT_PRUNE_THRESHOLD,
         }
     }
 }
@@ -169,6 +190,11 @@ pub struct Session {
     /// touches the `Document` until mouse-up (PLAN §3.2, defect D7).
     pub preview_locals: SecondaryMap<BoneId, Transform>,
     pub weight_paint_settings: WeightPaintSettings,
+    /// Weights copied off a mesh, waiting to be pasted onto another.
+    ///
+    /// Session state: a clipboard that survived a save would paste weights from
+    /// a rig nobody has open.
+    pub weight_clipboard: Option<Vec<Vec<ankhimate_core::attachment::VertexWeight>>>,
 
     // ── Playback / animation ─────────────────────────────────────────────
     pub active_animation: Option<AnimationId>,
@@ -349,6 +375,7 @@ impl Session {
             preview_bone: None,
             preview_locals: SecondaryMap::new(),
             weight_paint_settings: WeightPaintSettings::default(),
+            weight_clipboard: None,
             active_animation: None,
             playhead: 0.0,
             playing: false,

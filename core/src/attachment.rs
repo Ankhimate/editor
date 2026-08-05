@@ -71,7 +71,7 @@ impl RegionAttachment {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct VertexWeight {
     pub bone: BoneId,
     pub weight: f32,

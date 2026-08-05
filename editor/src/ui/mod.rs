@@ -20,6 +20,7 @@ pub mod toolbar;
 pub mod trace;
 pub mod tree;
 pub mod uv;
+pub mod weights;
 
 use eframe::egui;
 use egui_tiles::{Behavior, TileId, UiResponse};

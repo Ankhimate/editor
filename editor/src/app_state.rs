@@ -1253,7 +1253,16 @@ mod tests {
             else {
                 panic!("expected a mesh");
             };
-            brush(mesh, root, Default::default(), &[0.0; 4], 50.0, 1.0)
+            brush(
+                mesh,
+                root,
+                Default::default(),
+                &[0.0; 4],
+                50.0,
+                1.0,
+                1.0,
+                &[],
+            )
         };
         state.dispatch(Box::new(PaintWeights::new(skin, slot, "art", weights)));
 

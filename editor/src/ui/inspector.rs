@@ -26,60 +26,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     }
 
     if state.session.tool == Tool::WeightPaint {
-        use crate::commands::weight_cmds::BrushMode;
-
-        section_header(ui, crate::ui::icons::WEIGHT_PAINT, "Weight Paint");
-        ui.add_space(4.0);
-        transform_row_single(
-            ui,
-            "Radius",
-            &mut state.session.weight_paint_settings.radius,
-            1.0,
-            0,
-            SINGLE_COLOR,
-            false,
-        );
-        transform_row_single(
-            ui,
-            "Strength",
-            &mut state.session.weight_paint_settings.strength,
-            0.005,
-            3,
-            SINGLE_COLOR,
-            false,
-        );
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            for mode in [BrushMode::Add, BrushMode::Subtract, BrushMode::Smooth] {
-                let selected = state.session.weight_paint_settings.mode == mode;
-                if ui.selectable_label(selected, mode.label()).clicked() {
-                    state.session.weight_paint_settings.mode = mode;
-                }
-            }
-        });
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            if ui
-                .button("Auto-weight")
-                .on_hover_text(
-                    "Bind every vertex to the nearest bones by distance.\n\
-                     A starting point to refine, not a finished rig.",
-                )
-                .clicked()
-            {
-                auto_weight_selected(state);
-            }
-        });
-        ui.label(
-            egui::RichText::new(
-                "Click a bone to paint its influence; the selected slot's mesh is the target.",
-            )
-            .size(10.5)
-            .color(ui.visuals().weak_text_color()),
-        );
-        ui.add_space(8.0);
+        crate::ui::weights::ui(ui, state);
     }
 
     // Transform first, always. It is the control the user reaches for on every
@@ -1368,73 +1315,6 @@ fn influence_list(
     }
 }
 
-/// Auto-weight the selected slot's mesh against the whole rig (T-403).
-fn auto_weight_selected(state: &mut AppState) {
-    use crate::commands::attachment_cmds::owning_skin;
-    use crate::commands::weight_cmds::{PaintWeights, auto_weight};
-    use ankhimate_core::attachment::Attachment;
-
-    let Some(slot_id) = state.session.active_slot() else {
-        state.session.set_status("Select a slot to auto-weight");
-        return;
-    };
-    let Some(name) = state
-        .doc
-        .skeleton
-        .slots
-        .get(slot_id)
-        .and_then(|s| s.attachment.clone())
-    else {
-        return;
-    };
-    let Some(skin) = owning_skin(&state.doc, state.session.active_skin, slot_id, &name) else {
-        return;
-    };
-    let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot_id, &name) else {
-        state
-            .session
-            .set_status("This slot has no mesh — convert it first");
-        return;
-    };
-
-    // Bones as segments in the mesh's local space, which is where its vertices
-    // live: distance from a vertex to a *bone* means distance to its segment,
-    // not to its origin, or long bones would only pull at one end.
-    let slot_bone = state.doc.skeleton.slots[slot_id].bone;
-    let Some(bone_world) = state.pose.worlds.get(slot_bone).copied() else {
-        return;
-    };
-    let Some(inverse) = bone_world.invert() else {
-        return;
-    };
-    let bones: Vec<_> = state
-        .doc
-        .skeleton
-        .update_order
-        .iter()
-        .map(|&id| {
-            let start = state.pose.world_position(id);
-            let end = state.pose.world_tip(&state.doc.skeleton, id);
-            (
-                id,
-                inverse.transform_point(start),
-                inverse.transform_point(end),
-            )
-        })
-        .collect();
-    if bones.is_empty() {
-        return;
-    }
-
-    let weights = auto_weight(mesh, &bones, 2.0);
-    let vertices = weights.len();
-    if state.dispatch(Box::new(PaintWeights::new(skin, slot_id, name, weights))) {
-        state
-            .session
-            .set_status(format!("Auto-weighted {vertices} vertices"));
-    }
-}
-
 // ── Key affordances (T-210) ────────────────────────────────────────────────
 
 /// What the user did to a key dot.
@@ -2595,7 +2475,7 @@ fn slot_inspector(ui: &mut egui::Ui, state: &mut AppState, slot_id: ankhimate_co
 
 // ── Section header with left accent bar ───────────────────────────────────
 
-fn section_header(ui: &mut egui::Ui, icon: &str, label: &str) {
+pub fn section_header(ui: &mut egui::Ui, icon: &str, label: &str) {
     ui.add_space(2.0);
     let accent = ui.visuals().selection.bg_fill;
     let w = ui.available_width();

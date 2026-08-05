@@ -421,6 +421,26 @@ impl ShearFrame {
 ///
 /// Drawn as a triangle fan so it stays correct past 90°: egui's convex-polygon
 /// fill would misrender a reflex wedge, and shear angles routinely exceed 180°.
+/// Weight to colour for the influence overlay.
+///
+/// Blue (unbound) through green to red (fully bound) — the convention every
+/// rigging tool uses, so it needs no legend.
+///
+/// Translucent, and increasingly so toward zero: the overlay sits on the artwork
+/// and an opaque one hides the thing being weighted. Unbound areas fade out
+/// entirely, which also makes "nothing here holds this bone" read at a glance
+/// instead of as a wash of blue.
+fn heat(weight: f32) -> egui::Color32 {
+    let w = weight.clamp(0.0, 1.0);
+    let green = (60.0 + 140.0 * (1.0 - (w - 0.5).abs() * 2.0).max(0.0)) as u8;
+    egui::Color32::from_rgba_unmultiplied(
+        (w * 255.0) as u8,
+        green,
+        ((1.0 - w) * 255.0) as u8,
+        (60.0 + 110.0 * w) as u8,
+    )
+}
+
 fn filled_wedge(
     painter: &egui::Painter,
     center: egui::Pos2,
@@ -840,30 +860,79 @@ pub fn render_bones(
         && let Some(bone_world) = state.pose.worlds.get(slot.bone)
     {
         let skinned = !mesh.weights.is_empty() && !mesh.inverse_bind_matrices.is_empty();
-        for (index, vertex) in mesh.setup_vertices.iter().enumerate() {
-            let world = if skinned {
-                mesh.skin_vertex_with_ffd(index, glam::Vec2::ZERO, &state.pose)
-            } else {
-                bone_world.transform_point(*vertex)
-            };
-            let screen = state.session.camera.world_to_screen(world, viewport_size);
-            let p = egui::pos2(rect.min.x + screen.x, rect.min.y + screen.y);
-
-            let weight = mesh
-                .weights
+        let points: Vec<egui::Pos2> = mesh
+            .setup_vertices
+            .iter()
+            .enumerate()
+            .map(|(index, vertex)| {
+                let world = if skinned {
+                    mesh.skin_vertex_with_ffd(index, glam::Vec2::ZERO, &state.pose)
+                } else {
+                    bone_world.transform_point(*vertex)
+                };
+                let screen = state.session.camera.world_to_screen(world, viewport_size);
+                egui::pos2(rect.min.x + screen.x, rect.min.y + screen.y)
+            })
+            .collect();
+        let weight_at = |index: usize| {
+            mesh.weights
                 .get(index)
                 .and_then(|w| w.iter().find(|w| w.bone == bone))
                 .map(|w| w.weight)
-                .unwrap_or(0.0);
-            // Blue (unbound) through to red (fully bound) — the convention every
-            // rigging tool uses, so it needs no legend.
-            let color = egui::Color32::from_rgb(
-                (weight * 255.0) as u8,
-                (60.0 * (1.0 - (weight - 0.5).abs() * 2.0).max(0.0)) as u8,
-                ((1.0 - weight) * 255.0) as u8,
+                .unwrap_or(0.0)
+        };
+
+        // The surface, not just the vertices. Dots alone say what each vertex
+        // holds but nothing about the gradient between them — and the gradient
+        // *is* the thing being painted, since that is what decides whether a
+        // joint creases or goes rubbery.
+        let mut fill = egui::Mesh::default();
+        for (index, p) in points.iter().enumerate() {
+            fill.vertices.push(egui::epaint::Vertex {
+                pos: *p,
+                uv: egui::epaint::WHITE_UV,
+                color: heat(weight_at(index)),
+            });
+        }
+        for tri in &mesh.triangles {
+            if tri.iter().all(|i| (*i as usize) < points.len()) {
+                fill.indices.extend_from_slice(&[tri[0], tri[1], tri[2]]);
+            }
+        }
+        if !fill.indices.is_empty() {
+            painter.add(egui::Shape::mesh(fill));
+        }
+
+        // Vertices on top, opaque: the fill is translucent so the art stays
+        // readable, and at low weights that leaves the dots too faint to aim at.
+        for (index, p) in points.iter().enumerate() {
+            let color = heat(weight_at(index)).to_opaque();
+            painter.circle_filled(*p, 4.0, egui::Color32::from_black_alpha(120));
+            painter.circle_filled(*p, 3.0, color);
+        }
+
+        // The brush itself. Painting with an invisible cursor footprint means
+        // guessing what a stroke will touch, and the feathered part of the
+        // radius behaves differently enough from the solid core to be worth
+        // drawing separately.
+        if let Some(cursor) = ui.input(|i| i.pointer.hover_pos())
+            && rect.contains(cursor)
+        {
+            let settings = &state.session.weight_paint_settings;
+            let outer = settings.radius * state.session.camera.zoom;
+            let solid = outer * (1.0 - settings.feather.clamp(0.0, 1.0));
+            painter.circle_stroke(
+                cursor,
+                outer,
+                egui::Stroke::new(1.0, egui::Color32::from_white_alpha(180)),
             );
-            painter.circle_filled(p, 4.0, egui::Color32::from_black_alpha(120));
-            painter.circle_filled(p, 3.0, color);
+            if solid > 1.0 {
+                painter.circle_stroke(
+                    cursor,
+                    solid,
+                    egui::Stroke::new(1.0, egui::Color32::from_white_alpha(70)),
+                );
+            }
         }
     }
 

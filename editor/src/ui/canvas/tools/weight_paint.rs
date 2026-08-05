@@ -108,6 +108,8 @@ impl CanvasTool for WeightPaintTool {
             &distances,
             settings.radius,
             settings.strength,
+            settings.feather,
+            &settings.locked,
         );
         ctx.state
             .dispatch(Box::new(PaintWeights::new(skin, slot_id, name, weights)));
