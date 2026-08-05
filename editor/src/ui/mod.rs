@@ -105,13 +105,7 @@ pub struct AppBehavior<'a> {
 }
 
 /// Corner radius of a panel card.
-///
-/// Deliberately small. A pane paints its own background over its whole rect —
-/// the viewport's checkerboard reaches every corner — so the card's rounding can
-/// only be drawn as an outline on top, and any radius large enough to notice
-/// leaves a square of panel colour outside the curve. Four pixels reads as a
-/// softened corner without exposing that.
-pub const CARD_RADIUS: u8 = 4;
+pub const CARD_RADIUS: u8 = 8;
 /// Gap between cards, and between the outermost cards and the window edge.
 pub const CARD_GAP: f32 = 10.0;
 /// Height of a card's tab strip. Pinned rather than left to the default because
@@ -223,42 +217,40 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                 });
             }
         }
-        // Round the top corners.
+        // Round the card, by carving rather than by filling.
         //
-        // egui_tiles fills the tab strip as a plain rectangle, so the card came
-        // out rounded along the bottom — where this pane paints the fill — and
-        // square across the top. There is no hook to get behind that fill: the
-        // strip is drawn before the pane runs.
+        // Neither end of the card is ours to fill. egui_tiles paints the tab
+        // strip as a plain rectangle before this pane runs, and the panels paint
+        // their own backgrounds across the body afterwards — the viewport's
+        // checkerboard, the dopesheet's sheet. A rounded fill from here is
+        // squared off at the top by the first and at the bottom by the second.
         //
-        // So the corners are carved afterwards. Each is the desk colour painted
-        // over the corner square, with a quarter-disc of card colour put back
-        // inside it — clipping a full circle to the corner square is the quarter,
-        // and it matches the radius the bottom corners use exactly because both
-        // come from the same constant.
+        // So each corner is cut back after everything else has drawn: the desk
+        // colour over the corner square, then a quarter-disc of card colour put
+        // back inside it. Clipping a full circle to the square gives the quarter,
+        // and the result does not care what painted underneath.
         let radius = CARD_RADIUS as f32;
-        for corner in [
-            egui::Rect::from_min_size(
-                egui::pos2(body.min.x, body.min.y - TAB_BAR_H),
-                egui::Vec2::splat(radius),
+        let card =
+            egui::Rect::from_min_max(egui::pos2(body.min.x, body.min.y - TAB_BAR_H), body.max);
+        for (corner, centre) in [
+            (card.left_top(), egui::vec2(radius, radius)),
+            (
+                egui::pos2(card.right() - radius, card.top()),
+                egui::vec2(0.0, radius),
             ),
-            egui::Rect::from_min_size(
-                egui::pos2(body.max.x - radius, body.min.y - TAB_BAR_H),
-                egui::Vec2::splat(radius),
+            (
+                egui::pos2(card.left(), card.bottom() - radius),
+                egui::vec2(radius, 0.0),
+            ),
+            (
+                egui::pos2(card.right() - radius, card.bottom() - radius),
+                egui::vec2(0.0, 0.0),
             ),
         ] {
-            let painter = ui.painter().with_clip_rect(corner);
-            painter.rect_filled(corner, 0, self.theme.window_background());
-            // The disc's centre is the corner square's inner corner, so the arc
-            // it leaves is the rounding.
-            let centre = egui::pos2(
-                if corner.min.x <= body.min.x {
-                    corner.min.x + radius
-                } else {
-                    corner.max.x - radius
-                },
-                corner.min.y + radius,
-            );
-            painter.circle_filled(centre, radius, ui.visuals().panel_fill);
+            let square = egui::Rect::from_min_size(corner, egui::Vec2::splat(radius));
+            let painter = ui.painter().with_clip_rect(square);
+            painter.rect_filled(square, 0, self.theme.window_background());
+            painter.circle_filled(corner + centre, radius, ui.visuals().panel_fill);
         }
 
         // The card's outline, drawn *after* the panel's content and reaching back
@@ -268,8 +260,6 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         // rect and the dopesheet paints its sheet — an outline drawn first is
         // painted over by the very panels that need it most, which is why the
         // cards looked stuck together with a 10px gap between them.
-        let card =
-            egui::Rect::from_min_max(egui::pos2(body.min.x, body.min.y - TAB_BAR_H), body.max);
         ui.painter().with_clip_rect(card.expand(2.0)).rect_stroke(
             card,
             CARD_RADIUS,
