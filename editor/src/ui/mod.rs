@@ -108,15 +108,27 @@ pub struct AppBehavior<'a> {
 pub const CARD_RADIUS: u8 = 8;
 /// Gap between cards, and between the outermost cards and the window edge.
 pub const CARD_GAP: f32 = 10.0;
-/// Height of a card's tab strip. Pinned rather than left to the default because
-/// the card frame is drawn from the pane, which has to reach back up over the
-/// strip to enclose it.
-pub const TAB_BAR_H: f32 = 30.0;
+/// Space between a tab's label and the top and bottom of its plate.
+pub const TAB_PAD_Y: f32 = 6.0;
+
+/// Height of a card's tab strip.
+///
+/// Derived from the label rather than fixed, so a tab is padded by the same
+/// amount whatever size the text is. A constant has to be chosen for one font
+/// size and clips the label at any larger one — and the interface font is a
+/// setting, so "any larger one" is something users can ask for.
+///
+/// The pane needs this too: the card frame is drawn from the pane, which has to
+/// reach back up over the strip to enclose it.
+pub fn tab_bar_height(style: &egui::Style) -> f32 {
+    let text = egui::TextStyle::Button.resolve(style).size;
+    TAB_TOP_PAD + text + 2.0 * TAB_PAD_Y
+}
 /// Space above a tab plate, between it and the top of the card.
 ///
 /// The plate has to sit *on* the strip rather than fill it, or its rounded top
 /// meets the card's own rounded top and the two curves fight.
-pub const TAB_TOP_PAD: f32 = 5.0;
+pub const TAB_TOP_PAD: f32 = 10.0;
 
 impl<'a> Behavior<Tab> for AppBehavior<'a> {
     fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut Tab) -> UiResponse {
@@ -235,8 +247,8 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         // back inside it. Clipping a full circle to the square gives the quarter,
         // and the result does not care what painted underneath.
         let radius = CARD_RADIUS as f32;
-        let card =
-            egui::Rect::from_min_max(egui::pos2(body.min.x, body.min.y - TAB_BAR_H), body.max);
+        let strip_h = tab_bar_height(ui.style());
+        let card = egui::Rect::from_min_max(egui::pos2(body.min.x, body.min.y - strip_h), body.max);
 
         // A layer painter, not `ui.painter()`.
         //
@@ -322,8 +334,8 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         CARD_GAP
     }
 
-    fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
-        TAB_BAR_H
+    fn tab_bar_height(&self, style: &egui::Style) -> f32 {
+        tab_bar_height(style)
     }
 
     /// One tab: a plate that sits on the strip rather than filling it.
@@ -559,7 +571,10 @@ mod clip_tests {
     fn a_rect_above_the_pane_body_clips_to_nothing() {
         let body = egui::Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(500.0, 400.0));
         let top_corner = egui::Rect::from_min_size(
-            egui::pos2(body.min.x, body.min.y - TAB_BAR_H),
+            egui::pos2(
+                body.min.x,
+                body.min.y - tab_bar_height(&egui::Style::default()),
+            ),
             egui::Vec2::splat(CARD_RADIUS as f32),
         );
         assert!(
@@ -569,6 +584,46 @@ mod clip_tests {
         assert!(
             top_corner.intersect(body).is_negative(),
             "so intersecting with the pane's clip leaves nothing to paint"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tab_metrics_tests {
+    use super::*;
+
+    /// A tab's label sits with the same space above and below it, whatever size
+    /// the interface font is set to. A fixed strip height gives that at exactly
+    /// one font size and clips the label above it.
+    #[test]
+    fn the_strip_grows_with_the_label() {
+        let mut small = egui::Style::default();
+        small
+            .text_styles
+            .insert(egui::TextStyle::Button, egui::FontId::proportional(10.0));
+        let mut large = egui::Style::default();
+        large
+            .text_styles
+            .insert(egui::TextStyle::Button, egui::FontId::proportional(20.0));
+
+        let (a, b) = (tab_bar_height(&small), tab_bar_height(&large));
+        assert!(b > a, "a bigger label needs a taller strip");
+        // The difference is exactly the difference in text size: the padding is
+        // the same at both ends, which is what "symmetric" means here.
+        assert!((b - a - 10.0).abs() < 0.01, "{a} then {b}");
+    }
+
+    /// The plate leaves `TAB_PAD_Y` above and below the label. Asserted through
+    /// the same arithmetic the painter uses, so a change to one without the other
+    /// is caught.
+    #[test]
+    fn the_plate_pads_the_label_evenly() {
+        let style = egui::Style::default();
+        let text = egui::TextStyle::Button.resolve(&style).size;
+        let plate = tab_bar_height(&style) - TAB_TOP_PAD;
+        assert!(
+            (plate - text - 2.0 * TAB_PAD_Y).abs() < 0.01,
+            "plate {plate} should be the label {text} plus {TAB_PAD_Y} at each end"
         );
     }
 }
