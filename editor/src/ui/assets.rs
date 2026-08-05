@@ -463,11 +463,12 @@ fn attachment_uses(state: &AppState, id: AssetId) -> usize {
         .count()
 }
 
-/// A square icon button, outlined in the accent colour.
+/// A square icon button: an accent glyph, and nothing else until you touch it.
 ///
-/// Outlined rather than filled: four solid accent plates in a row would out-shout
-/// the panel they sit above, and these are ordinary actions rather than the one
-/// thing the panel is for.
+/// No border. The glyphs are already the only accent-coloured thing in the
+/// header, so an outline around each one adds a second mark saying what the
+/// colour has said — and four boxed icons in a row read as a toolbar bolted on
+/// rather than as part of the header.
 fn action_button(ui: &mut egui::Ui, icon: &str, enabled: bool) -> egui::Response {
     const SIZE: f32 = 26.0;
     let (rect, response) = ui.allocate_exact_size(
@@ -490,12 +491,6 @@ fn action_button(ui: &mut egui::Ui, icon: &str, enabled: bool) -> egui::Response
         ui.painter()
             .rect_filled(rect, 6, accent.gamma_multiply(0.15));
     }
-    ui.painter().rect_stroke(
-        rect,
-        6,
-        egui::Stroke::new(1.0, color),
-        egui::StrokeKind::Inside,
-    );
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
