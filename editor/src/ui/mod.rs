@@ -37,6 +37,7 @@ pub enum Tab {
     Skins,
     SlotEditor,
     UvEditor,
+    Weights,
     Animations,
     Events,
     Constraints,
@@ -48,10 +49,11 @@ impl Tab {
     /// One list rather than a menu that has to be edited whenever a pane is
     /// added — a View menu missing the pane you are looking for is worse than no
     /// View menu, because it reads as "that panel does not exist".
-    pub const ALL: [Tab; 13] = [
+    pub const ALL: [Tab; 14] = [
         Tab::Canvas,
         Tab::SlotEditor,
         Tab::UvEditor,
+        Tab::Weights,
         Tab::Hierarchy,
         Tab::Inspector,
         Tab::Timeline,
@@ -76,6 +78,7 @@ impl Tab {
             Tab::Skins => "Skins",
             Tab::SlotEditor => "Slot Editor",
             Tab::UvEditor => "UV Editor",
+            Tab::Weights => "Weights",
             Tab::Animations => "Animations",
             Tab::Events => "Events",
             Tab::Constraints => "Constraints",
@@ -106,6 +109,7 @@ impl Tab {
             Tab::Skins => crate::ui::icons::SKIN,
             Tab::SlotEditor => crate::ui::icons::SLOT_EDITOR,
             Tab::UvEditor => crate::ui::icons::MESH,
+            Tab::Weights => crate::ui::icons::WEIGHT_PAINT,
             Tab::Animations => crate::ui::icons::ANIMATIONS,
             Tab::Events => crate::ui::icons::EVENTS,
             Tab::Constraints => crate::ui::icons::CONSTRAINT,
@@ -275,6 +279,16 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                     .show(ui, |ui| {
                         egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
                             uv::ui(ui, self.state, self.theme);
+                        });
+                    });
+            }
+            Tab::Weights => {
+                egui::ScrollArea::vertical()
+                    .id_salt("weights_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                            weights::ui(ui, self.state);
                         });
                     });
             }

@@ -119,6 +119,16 @@ fn brush_controls(ui: &mut egui::Ui, state: &mut AppState) {
         "How much of the radius is gradient.\n\
          0 stamps a hard edge, 1 fades from the centre.",
     );
+
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut settings.show_overlay, "Overlay")
+            .on_hover_text("Shade the mesh by the selected bone's influence");
+        ui.checkbox(&mut settings.show_pies, "Pies")
+            .on_hover_text("Show each vertex's whole influence split, in bone colours");
+        ui.checkbox(&mut settings.show_selected_only, "Selected")
+            .on_hover_text("Only mark the vertices picked in mesh edit mode");
+    });
 }
 
 /// Which bones actually influence this mesh, strongest first.

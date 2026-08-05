@@ -281,7 +281,8 @@ impl AnkhimateApp {
         // Properties gets its own tile rather than sharing tabs with Assets:
         // the transform controls are used constantly, and hiding them behind a
         // tab every time the image library is opened is the wrong trade.
-        let inspector_tab = tiles.insert_tab_tile(vec![inspector]);
+        let weights = tiles.insert_pane(Tab::Weights);
+        let inspector_tab = tiles.insert_tab_tile(vec![inspector, weights]);
         // Assets and draw order are both "what is in the rig" browsers, so they
         // can share.
         let library_tab = tiles.insert_tab_tile(vec![assets, draw_order, skins, constraints]);

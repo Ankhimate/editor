@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::renderer::{CustomCallback, MeshDrawCall, MeshVertex, SpriteDraw, SpriteUpload};
+use crate::renderer::{CustomCallback, MeshVertex, SpriteDraw, SpriteUpload};
 use ankhimate_core::attachment::{Attachment, RegionAttachment};
 use ankhimate_core::ids::SlotId;
 use eframe::egui;
@@ -421,6 +421,72 @@ impl ShearFrame {
 ///
 /// Drawn as a triangle fan so it stays correct past 90°: egui's convex-polygon
 /// fill would misrender a reflex wedge, and shear angles routinely exceed 180°.
+/// One vertex's whole influence split, drawn as a pie in the bones' own colours.
+///
+/// The heat overlay answers "how much of the *selected* bone is here". This
+/// answers the other question — "what is holding this vertex at all" — which is
+/// the one you have when a vertex moves and you do not know what moved it.
+/// Bone colours rather than a heat ramp, so a wedge is traceable back to a row
+/// in the tree without a legend.
+fn pie(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    weights: Option<&Vec<ankhimate_core::attachment::VertexWeight>>,
+    skeleton: &ankhimate_core::skeleton::Skeleton,
+) {
+    const RADIUS: f32 = 6.0;
+    let Some(weights) = weights.filter(|w| !w.is_empty()) else {
+        // An unweighted vertex is a hollow ring, not an absent one: a gap in the
+        // pies reads as "no vertex here", which is the wrong thing to conclude.
+        painter.circle_stroke(
+            center,
+            RADIUS * 0.6,
+            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(120)),
+        );
+        return;
+    };
+
+    let total: f32 = weights.iter().map(|w| w.weight).sum();
+    if total <= 1e-6 {
+        return;
+    }
+    painter.circle_filled(center, RADIUS + 1.0, egui::Color32::from_black_alpha(160));
+
+    let mut start = -std::f32::consts::FRAC_PI_2;
+    for w in weights {
+        let sweep = w.weight / total * std::f32::consts::TAU;
+        let color = skeleton
+            .bones
+            .get(w.bone)
+            .map(|b| {
+                egui::Color32::from_rgb(
+                    (b.color[0] * 255.0) as u8,
+                    (b.color[1] * 255.0) as u8,
+                    (b.color[2] * 255.0) as u8,
+                )
+            })
+            .unwrap_or(egui::Color32::GRAY);
+
+        // Fanned as a triangle strip from the centre. Steps scale with the
+        // wedge so a thin slice is not spent on twelve segments it cannot show.
+        let steps = ((sweep / std::f32::consts::TAU) * 24.0).ceil().max(2.0) as usize;
+        let mut fan = egui::Mesh::default();
+        fan.colored_vertex(center, color);
+        for step in 0..=steps {
+            let angle = start + sweep * (step as f32 / steps as f32);
+            fan.colored_vertex(
+                center + egui::vec2(angle.cos(), angle.sin()) * RADIUS,
+                color,
+            );
+        }
+        for step in 1..=steps as u32 {
+            fan.indices.extend_from_slice(&[0, step, step + 1]);
+        }
+        painter.add(egui::Shape::mesh(fan));
+        start += sweep;
+    }
+}
+
 /// Weight to colour for the influence overlay.
 ///
 /// Blue (unbound) through green to red (fully bound) — the convention every
@@ -611,7 +677,12 @@ pub fn render_bones(
     let painter = canvas_painter.clone();
     let viewport_size = glam::Vec2::new(rect.width(), rect.height());
 
-    let mut mesh_draws = Vec::new();
+    // The flat-colour mesh pipeline has no producer since the weight heat map
+    // moved to the egui painter, which can scope it to one mesh and shade the
+    // triangles by vertex. The pipeline is left in place rather than torn out
+    // with it: removing a wgpu pass is its own change with its own risk, and
+    // this is the seam any future GPU-side mesh overlay would plug into.
+    let mesh_draws = Vec::new();
 
     for (bone_id, bone) in state.doc.skeleton.bones.iter() {
         if !state.session.show_bones {
@@ -882,33 +953,48 @@ pub fn render_bones(
                 .unwrap_or(0.0)
         };
 
+        let settings = &state.session.weight_paint_settings;
+
         // The surface, not just the vertices. Dots alone say what each vertex
         // holds but nothing about the gradient between them — and the gradient
         // *is* the thing being painted, since that is what decides whether a
         // joint creases or goes rubbery.
-        let mut fill = egui::Mesh::default();
-        for (index, p) in points.iter().enumerate() {
-            fill.vertices.push(egui::epaint::Vertex {
-                pos: *p,
-                uv: egui::epaint::WHITE_UV,
-                color: heat(weight_at(index)),
-            });
-        }
-        for tri in &mesh.triangles {
-            if tri.iter().all(|i| (*i as usize) < points.len()) {
-                fill.indices.extend_from_slice(&[tri[0], tri[1], tri[2]]);
+        if settings.show_overlay {
+            let mut fill = egui::Mesh::default();
+            for (index, p) in points.iter().enumerate() {
+                fill.vertices.push(egui::epaint::Vertex {
+                    pos: *p,
+                    uv: egui::epaint::WHITE_UV,
+                    color: heat(weight_at(index)),
+                });
+            }
+            for tri in &mesh.triangles {
+                if tri.iter().all(|i| (*i as usize) < points.len()) {
+                    fill.indices.extend_from_slice(&[tri[0], tri[1], tri[2]]);
+                }
+            }
+            if !fill.indices.is_empty() {
+                painter.add(egui::Shape::mesh(fill));
             }
         }
-        if !fill.indices.is_empty() {
-            painter.add(egui::Shape::mesh(fill));
-        }
+
+        let shown = |index: usize| {
+            !settings.show_selected_only || state.session.selected_vertices.contains(&index)
+        };
 
         // Vertices on top, opaque: the fill is translucent so the art stays
         // readable, and at low weights that leaves the dots too faint to aim at.
         for (index, p) in points.iter().enumerate() {
-            let color = heat(weight_at(index)).to_opaque();
-            painter.circle_filled(*p, 4.0, egui::Color32::from_black_alpha(120));
-            painter.circle_filled(*p, 3.0, color);
+            if !shown(index) {
+                continue;
+            }
+            if settings.show_pies {
+                pie(&painter, *p, mesh.weights.get(index), &state.doc.skeleton);
+            } else {
+                let color = heat(weight_at(index)).to_opaque();
+                painter.circle_filled(*p, 4.0, egui::Color32::from_black_alpha(120));
+                painter.circle_filled(*p, 3.0, color);
+            }
         }
 
         // The brush itself. Painting with an invisible cursor footprint means
@@ -1364,115 +1450,46 @@ pub fn render_bones(
         }
     }
 
-    // Generate wgpu Mesh Data.
+    // Slots with nothing to show get a placeholder dot; a textured attachment
+    // is its own affordance (T-301).
     //
-    // This pass paints the mesh's triangles as flat colour — it exists for the
-    // weight heat map and nothing else, so it is gated on the weight tool. Left
-    // ungated it laid a 60%-opaque white sheet over the artwork any time a mesh
-    // was selected, which is not a surface anyone asked to see.
-    let weight_painting = state.session.tool == crate::session::Tool::WeightPaint;
+    // This loop used to also paint every mesh in the rig as a flat-coloured
+    // weight heat map, through the wgpu pass, whenever the weight tool was
+    // active. It ran over the whole draw order rather than the selected mesh, so
+    // picking up the brush turned the entire character blue — every unweighted
+    // mesh in the rig shaded as "0% of the selected bone", which is true and
+    // useless. The overlay above draws the one mesh being worked on.
     for &slot_id in &state.doc.skeleton.draw_order {
-        if let Some(slot) = state.doc.skeleton.slots.get(slot_id) {
-            // Attachments are always obtained via skin resolution (ADR 0003) —
-            // never read off the slot directly.
-            if let Some(ankhimate_core::attachment::Attachment::Mesh(mesh)) = state
+        let Some(slot) = state.doc.skeleton.slots.get(slot_id) else {
+            continue;
+        };
+        if !state.doc.skeleton.bones.contains_key(slot.bone)
+            || sprite_for_slot(state, slot_id).is_some()
+            || state
                 .doc
                 .skeleton
                 .resolve_slot_many(&state.session.skin_stack(), slot_id)
-                .filter(|_| weight_painting)
-            {
-                let mut wgpu_vertices = Vec::new();
-                let bone_world = match state.pose.worlds.get(slot.bone) {
-                    Some(&w) => w,
-                    None => continue,
-                };
-
-                for (i, setup_pos) in mesh.setup_vertices.iter().enumerate() {
-                    let world_pos = bone_world.transform_point(*setup_pos);
-
-                    let uv = mesh.uvs.get(i).copied().unwrap_or(glam::Vec2::ZERO);
-
-                    let mut color = [0.8, 0.8, 0.8, 0.6];
-                    if state.session.tool == crate::session::Tool::WeightPaint {
-                        if let Some(selected_bone) = state.session.active_bone() {
-                            let weight = mesh
-                                .weights
-                                .get(i)
-                                .and_then(|vw_list| {
-                                    vw_list
-                                        .iter()
-                                        .find(|vw| vw.bone == selected_bone)
-                                        .map(|vw| vw.weight)
-                                })
-                                .unwrap_or(0.0);
-
-                            // Heatmap: Blue (0) -> Red (1)
-                            color = [weight, 0.0, 1.0 - weight, 0.8];
-                        } else {
-                            color = [0.4, 0.4, 0.4, 0.6];
-                        }
-                    }
-
-                    wgpu_vertices.push(MeshVertex {
-                        position: [world_pos.x, world_pos.y],
-                        uv: [uv.x, uv.y],
-                        color,
-                        // The weight heat map is flat colour, not artwork.
-                        dark: [0.0; 4],
-                    });
-                }
-
-                let mut indices = Vec::new();
-                for tri in &mesh.triangles {
-                    indices.push(tri[0]);
-                    indices.push(tri[1]);
-                    indices.push(tri[2]);
-                }
-
-                mesh_draws.push(MeshDrawCall {
-                    vertices: wgpu_vertices,
-                    indices,
-                });
-
-                // Draw vertices as small dots if selected (Gizmo - keep in egui)
-                if state.session.tool == crate::session::Tool::WeightPaint
-                    && (state.session.active_slot() == Some(slot_id))
-                {
-                    for setup_pos in &mesh.setup_vertices {
-                        let world_pos = bone_world.transform_point(*setup_pos);
-                        let screen_pos = state
-                            .session
-                            .camera
-                            .world_to_screen(world_pos, viewport_size);
-                        let p = egui::pos2(rect.min.x + screen_pos.x, rect.min.y + screen_pos.y);
-                        painter.circle_filled(p, 3.0, egui::Color32::WHITE);
-                    }
-                }
-            } else if state.doc.skeleton.bones.contains_key(slot.bone)
-                && sprite_for_slot(state, slot_id).is_none()
-            {
-                // Only slots with nothing to show get the placeholder dot; a
-                // textured attachment is its own affordance (T-301).
-                let pos = state.pose.world_position(slot.bone);
-                let screen_pos = state.session.camera.world_to_screen(pos, viewport_size);
-                let point = egui::pos2(rect.min.x + screen_pos.x, rect.min.y + screen_pos.y);
-
-                let color = egui::Color32::from_rgba_unmultiplied(
-                    (slot.color[0] * 255.0) as u8,
-                    (slot.color[1] * 255.0) as u8,
-                    (slot.color[2] * 255.0) as u8,
-                    (slot.color[3] * 255.0) as u8,
-                );
-
-                let radius = if state.session.active_slot() == Some(slot_id) {
-                    8.0
-                } else {
-                    5.0
-                };
-                painter.circle_filled(point, radius, color);
-                painter.circle_stroke(point, radius, egui::Stroke::new(1.0, egui::Color32::BLACK));
-            }
+                .is_some()
+        {
+            continue;
         }
+        let pos = state.pose.world_position(slot.bone);
+        let screen_pos = state.session.camera.world_to_screen(pos, viewport_size);
+        let point = egui::pos2(rect.min.x + screen_pos.x, rect.min.y + screen_pos.y);
+
+        let color = egui::Color32::from_rgba_unmultiplied(
+            (slot.color[0] * 255.0) as u8,
+            (slot.color[1] * 255.0) as u8,
+            (slot.color[2] * 255.0) as u8,
+            (slot.color[3] * 255.0) as u8,
+        );
+        let radius = if state.session.active_slot() == Some(slot_id) {
+            8.0
+        } else {
+            5.0
+        };
+        painter.circle_filled(point, radius, color);
+        painter.circle_stroke(point, radius, egui::Stroke::new(1.0, egui::Color32::BLACK));
     }
 
     // Textured attachments, in the pose's draw order (back to front) — the

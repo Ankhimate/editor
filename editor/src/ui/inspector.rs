@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::commands::key_cmds::{BoneProperty, TimelineAddr};
-use crate::session::{Tool, TransformTool};
+use crate::session::TransformTool;
 use eframe::egui;
 
 // Axis accent colors — same palette as Blender/Unity
@@ -23,10 +23,6 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     if let Some(crate::session::Selection::Constraint(id)) = state.session.selection.clone() {
         focused_constraint(ui, state, id);
         return;
-    }
-
-    if state.session.tool == Tool::WeightPaint {
-        crate::ui::weights::ui(ui, state);
     }
 
     // Transform first, always. It is the control the user reaches for on every

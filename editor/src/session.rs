@@ -122,6 +122,19 @@ pub struct WeightPaintSettings {
     pub max_bones: usize,
     /// Weights below this are dropped by Prune.
     pub prune_threshold: f32,
+
+    // ── What the canvas draws ────────────────────────────────────────────
+    /// Shade the mesh by the active bone's influence.
+    pub show_overlay: bool,
+    /// Draw each vertex's whole influence split as a pie, rather than only its
+    /// share of the active bone.
+    ///
+    /// The overlay answers "how much of *this* bone", the pies answer "what is
+    /// on this vertex at all" — which is the question when a vertex is being
+    /// pulled by something you did not expect.
+    pub show_pies: bool,
+    /// Restrict the vertex markers to the current mesh-edit selection.
+    pub show_selected_only: bool,
 }
 
 impl Default for WeightPaintSettings {
@@ -140,6 +153,11 @@ impl Default for WeightPaintSettings {
             locked: Vec::new(),
             max_bones: crate::commands::weight_cmds::DEFAULT_MAX_BONES,
             prune_threshold: crate::commands::weight_cmds::DEFAULT_PRUNE_THRESHOLD,
+            show_overlay: true,
+            // Off by default: a pie at every vertex on a dense mesh is more ink
+            // than art, and the overlay answers the common question already.
+            show_pies: false,
+            show_selected_only: false,
         }
     }
 }
