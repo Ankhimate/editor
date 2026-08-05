@@ -96,6 +96,13 @@ impl Tab {
 
 pub struct AppBehavior<'a> {
     pub state: &'a mut crate::app_state::AppState,
+    /// Tabs to draw as their icon alone, because their card is too narrow to
+    /// hold every label.
+    ///
+    /// Decided per card and applied to all of its tabs, so a card never shows a
+    /// mix of labels and bare icons — which reads as some tabs being special
+    /// rather than as a card being narrow.
+    pub compact_tabs: &'a std::collections::HashSet<TileId>,
     pub theme: &'a crate::theme::Theme,
     /// Viewport checker settings, which live in `Config` rather than in the
     /// document: a grid size that travelled in a `.ankh` would fight whoever
@@ -104,12 +111,22 @@ pub struct AppBehavior<'a> {
     pub fonts: &'a crate::config::FontSettings,
 }
 
+/// The icon for whatever pane a tile holds, or a placeholder for a container.
+fn tab_icon(tiles: &egui_tiles::Tiles<Tab>, tile_id: TileId) -> &'static str {
+    match tiles.get(tile_id) {
+        Some(egui_tiles::Tile::Pane(pane)) => pane.icon(),
+        _ => icons::FOLDER,
+    }
+}
+
 /// Corner radius of a panel card.
 pub const CARD_RADIUS: u8 = 8;
 /// Gap between cards, and between the outermost cards and the window edge.
 pub const CARD_GAP: f32 = 5.0;
 /// Space between a tab's label and the top and bottom of its plate.
 pub const TAB_PAD_Y: f32 = 6.0;
+/// Space either side of a tab's label, inside its plate.
+pub const TAB_TITLE_SPACING: f32 = 10.0;
 /// Space before the first tab, holding it off the card's rounded corner.
 ///
 /// Matched to the corner radius: any less and the plate's square bottom-left
@@ -367,11 +384,18 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             ui.add_space(TAB_START_PAD);
         }
 
-        let text = self.tab_title_for_tile(tiles, tile_id);
+        let compact = self.compact_tabs.contains(&tile_id);
+        let full_title = self.tab_title_for_tile(tiles, tile_id);
+        let label: egui::WidgetText = if compact {
+            tab_icon(tiles, tile_id).into()
+        } else {
+            full_title.clone()
+        };
         let font_id = egui::TextStyle::Button.resolve(ui.style());
-        let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
+        let galley =
+            label.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
 
-        let x_margin = self.tab_title_spacing(ui.visuals());
+        let x_margin = TAB_TITLE_SPACING;
         let width = galley.size().x + 2.0 * x_margin;
         let (_, rect) = ui.allocate_space(egui::vec2(width, ui.available_height()));
 
@@ -419,6 +443,11 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             ui.painter().galley(pos, galley, color);
         }
 
+        // The name on hover, always. It is the only way to read a compact tab,
+        // and harmless on a full one.
+        if compact {
+            return response.on_hover_text(full_title.text());
+        }
         response
     }
 
@@ -549,6 +578,7 @@ mod layout_tests {
                     theme: &theme,
                     grid: &grid,
                     fonts: &fonts,
+                    compact_tabs: &Default::default(),
                 };
                 tree.ui(&mut behavior, ui);
             });
@@ -637,5 +667,42 @@ mod tab_metrics_tests {
             (plate - text - 2.0 * TAB_PAD_Y).abs() < 0.01,
             "plate {plate} should be the label {text} plus {TAB_PAD_Y} at each end"
         );
+    }
+}
+
+#[cfg(test)]
+mod compact_tab_tests {
+    use super::*;
+
+    /// Every tab in a card collapses together or not at all. A card showing two
+    /// labels and three bare icons reads as some tabs being special rather than
+    /// as the card being narrow.
+    #[test]
+    fn compaction_is_decided_per_card() {
+        let mut tiles = egui_tiles::Tiles::default();
+        let a = tiles.insert_pane(Tab::Assets);
+        let b = tiles.insert_pane(Tab::DrawOrder);
+        let card = tiles.insert_tab_tile(vec![a, b]);
+
+        // What `AppBehavior::compact_tabs` builds: the children of a card that
+        // did not fit, never a subset of them.
+        let compact: std::collections::HashSet<_> = match tiles.get(card) {
+            Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(tabs))) => {
+                tabs.children.iter().copied().collect()
+            }
+            _ => panic!("expected a tab container"),
+        };
+        assert!(compact.contains(&a) && compact.contains(&b));
+    }
+
+    /// A compact tab still has to be identifiable, so every pane owns an icon.
+    #[test]
+    fn every_pane_has_an_icon_to_collapse_to() {
+        for tab in Tab::ALL {
+            assert!(
+                !tab.icon().is_empty(),
+                "{tab:?} would collapse to an empty tab"
+            );
+        }
     }
 }

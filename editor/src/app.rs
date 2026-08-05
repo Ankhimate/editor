@@ -133,6 +133,49 @@ impl AnkhimateApp {
 }
 
 impl AnkhimateApp {
+    /// Tabs that should show their icon alone, keyed by tab tile id.
+    ///
+    /// egui_tiles' answer to a crowded tab bar is a pair of hardcoded scroll
+    /// arrows — not stylable, not overridable, and a poor trade: two clicks to
+    /// reach a tab that would have fitted as an icon. Collapsing the labels
+    /// keeps every tab reachable in one click, and the name is on hover.
+    fn compact_tabs(&self, ctx: &egui::Context) -> std::collections::HashSet<egui_tiles::TileId> {
+        use egui_tiles::{Container, Tile};
+
+        let font = egui::TextStyle::Button.resolve(&ctx.global_style());
+        let label_width = |text: &str| {
+            ctx.fonts_mut(|f| {
+                f.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE)
+                    .size()
+                    .x
+            })
+        };
+        // Per tab: the label, its side margins, and the leading inset once.
+        let padding = 2.0 * crate::ui::TAB_TITLE_SPACING;
+
+        let mut compact = std::collections::HashSet::new();
+        for (container_id, tile) in self.tree.tiles.iter() {
+            let Tile::Container(Container::Tabs(tabs)) = tile else {
+                continue;
+            };
+            let Some(rect) = self.tree.tiles.rect(*container_id) else {
+                continue;
+            };
+            let needed: f32 = tabs
+                .children
+                .iter()
+                .filter_map(|child| match self.tree.tiles.get(*child) {
+                    Some(Tile::Pane(pane)) => Some(label_width(pane.title()) + padding),
+                    _ => None,
+                })
+                .sum();
+            if needed + crate::ui::TAB_START_PAD > rect.width() {
+                compact.extend(tabs.children.iter().copied());
+            }
+        }
+        compact
+    }
+
     /// The tile id of a pane, if it is still in the tree at all.
     fn find_pane(&self, tab: crate::ui::Tab) -> Option<egui_tiles::TileId> {
         self.tree.tiles.iter().find_map(|(id, tile)| match tile {
@@ -862,6 +905,14 @@ impl eframe::App for AnkhimateApp {
                 crate::ui::toolbar::ui(ui, &mut self.state, &mut trigger_undo, &mut trigger_redo);
             });
 
+        // Which cards are too narrow to show every tab label.
+        //
+        // Measured here, before the tree runs, because the decision belongs to a
+        // whole card and `tab_ui` only ever sees one tab at a time. It uses last
+        // frame's rects, which is exact except on the frame a splitter is being
+        // dragged — and one frame of a label popping mid-drag is invisible.
+        let compact_tabs = self.compact_tabs(ctx);
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
@@ -876,6 +927,7 @@ impl eframe::App for AnkhimateApp {
                     theme: &self.theme,
                     grid: &self.config.grid,
                     fonts: &self.config.fonts,
+                    compact_tabs: &compact_tabs,
                 };
                 self.tree.ui(&mut behavior, ui);
             });
