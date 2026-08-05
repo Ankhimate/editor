@@ -41,13 +41,21 @@ fn main() -> eframe::Result {
         });
     }
 
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1280.0, 720.0])
+        .with_title("Ankhimate")
+        .with_decorations(false)
+        .with_transparent(true);
+    // The taskbar and Alt-Tab entry. Without this the window carries whatever
+    // stock icon the platform hands an unbranded binary, which is the one place
+    // a user picks the editor out of a row of other windows.
+    if let Some(icon) = ui::branding::window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
+
     let options = eframe::NativeOptions {
         wgpu_options,
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 720.0])
-            .with_title("Ankhimate")
-            .with_decorations(false)
-            .with_transparent(true),
+        viewport,
         ..Default::default()
     };
     // A path on the command line opens that project straight away:

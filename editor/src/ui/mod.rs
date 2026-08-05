@@ -1,6 +1,7 @@
 pub mod animations;
 pub mod assets;
 pub mod atlas;
+pub mod branding;
 pub mod canvas;
 pub mod constraints;
 pub mod draw_order;

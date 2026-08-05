@@ -19,6 +19,9 @@ pub struct AnkhimateApp {
     show_startup: bool,
     /// Is the settings window up? (T-701)
     show_settings: bool,
+    /// The program mark, uploaded once. `None` only if the vendored PNG will
+    /// not decode — the title bar simply goes without rather than failing.
+    logo: Option<egui::TextureHandle>,
 }
 
 /// One window control. Returns whether it was clicked.
@@ -111,6 +114,7 @@ impl AnkhimateApp {
             available_themes,
             config,
             show_startup,
+            logo: crate::ui::branding::logo_texture(&cc.egui_ctx),
             ..Default::default()
         };
 
@@ -302,6 +306,9 @@ impl Default for AnkhimateApp {
             config: crate::config::Config::default(),
             show_startup: false,
             show_settings: false,
+            // Needs a context to upload to, so the real one is loaded in
+            // `with_file`; `Default` is only ever a base for that.
+            logo: None,
         }
     }
 }
@@ -929,6 +936,32 @@ impl eframe::App for AnkhimateApp {
                         }
                         if window_button(ui, crate::ui::icons::MINIMISE, "Minimise", false) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        }
+
+                        // The mark, inboard of the window controls. Right rather
+                        // than left because the left of this bar is the menus,
+                        // and a logo butted against "File" reads as another menu.
+                        if let Some(logo) = &self.logo {
+                            ui.add_space(10.0);
+                            let h = crate::ui::branding::TITLE_BAR_HEIGHT;
+                            let size = logo.size_vec2();
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(size.x / size.y * h, h),
+                                // Hover only: the bar's own drag interaction is
+                                // behind this, and a click sense here would
+                                // punch a dead spot in the window drag area.
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().image(
+                                logo.id(),
+                                rect,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                egui::Color32::WHITE,
+                            );
+                            ui.add_space(4.0);
                         }
                     });
                 });
