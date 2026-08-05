@@ -80,20 +80,12 @@ pub fn vertex_screen_positions(
     // Handles must sit on the *drawn* vertices, deform and skinning included, or
     // grabbing one in Animate mode would mean aiming at where it used to be.
     let deform = state.pose.deforms.get(&(target.slot, target.name.clone()));
-    let skinned = !target.mesh.weights.is_empty() && !target.mesh.inverse_bind_matrices.is_empty();
-
-    target
-        .mesh
-        .setup_vertices
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
+    (0..target.mesh.setup_vertices.len())
+        .map(|i| {
             let offset = deform.and_then(|d| d.get(i).copied()).unwrap_or_default();
-            let world = if skinned {
-                target.mesh.skin_vertex_with_ffd(i, offset, &state.pose)
-            } else {
-                target.world.transform_point(*v + offset)
-            };
+            let world = target
+                .mesh
+                .skin_vertex_with_ffd(i, offset, &state.pose, &target.world);
             state.session.camera.world_to_screen(world, viewport_size)
         })
         .collect()

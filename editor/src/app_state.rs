@@ -1275,7 +1275,12 @@ mod tests {
             "binds were captured after painting"
         );
 
-        let skinned = mesh.skin_vertex_with_ffd(0, glam::Vec2::ZERO, &state.pose);
+        let slot_world = *state
+            .pose
+            .worlds
+            .get(state.doc.skeleton.slots[slot].bone)
+            .unwrap();
+        let skinned = mesh.skin_vertex_with_ffd(0, glam::Vec2::ZERO, &state.pose, &slot_world);
         assert!(
             (skinned - vertex_before).length() < 1e-3,
             "the vertex must not move when it gains an influence: {skinned:?} vs {vertex_before:?}"
@@ -2189,5 +2194,206 @@ mod tests {
             rotation.abs() > 5.0,
             "IK turned the upper arm; it is at {rotation}°, i.e. still in the rest pose"
         );
+    }
+}
+
+#[cfg(test)]
+mod weight_paint_regression {
+    use super::*;
+    use crate::commands::bone_cmds::CreateBone;
+    use crate::commands::weight_cmds::{BrushMode, PaintWeights, brush};
+    use ankhimate_core::attachment::{Attachment, MeshAttachment, Rect, RegionAttachment};
+    use ankhimate_core::math::Transform;
+    use ankhimate_core::skeleton::Bone;
+    use ankhimate_core::slot::Slot;
+
+    fn bone_at(name: &str, x: f32, y: f32) -> Bone {
+        posed_bone(name, x, y, 0.0, glam::Vec2::ONE)
+    }
+
+    fn posed_bone(name: &str, x: f32, y: f32, rotation: f32, scale: glam::Vec2) -> Bone {
+        Bone {
+            name: name.to_string(),
+            parent: None,
+            length: 40.0,
+            local_transform: Transform {
+                position: glam::vec2(x, y),
+                rotation,
+                scale,
+                ..Default::default()
+            },
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        }
+    }
+
+    fn quad_mesh() -> MeshAttachment {
+        MeshAttachment::from_region(&RegionAttachment {
+            texture: "img".into(),
+            local_offset: glam::Vec2::ZERO,
+            local_rotation: 0.0,
+            local_scale: glam::Vec2::ONE,
+            width: 40.0,
+            height: 40.0,
+            uv_rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
+            pivot: glam::Vec2::splat(0.5),
+            sequence: None,
+        })
+    }
+
+    /// Painting a mesh must not move it.
+    ///
+    /// The bind is `bone⁻¹ ∘ mesh-space`, so at the setup pose the two cancel and
+    /// skinning reproduces the rigid placement exactly — gaining an influence is
+    /// meant to be invisible until a bone actually moves. This asserts that end
+    /// to end, through the real dispatch and rebind path, because the property
+    /// only holds if the rebind runs and uses the same pose the canvas draws.
+    #[test]
+    fn painting_a_new_bone_does_not_move_the_mesh() {
+        let mut state = AppState::default();
+        // The slot's own bone at the origin, and a second bone well away from it.
+        state.dispatch(Box::new(CreateBone::new(bone_at("hip", 0.0, 0.0))));
+        state.dispatch(Box::new(CreateBone::new(bone_at("far", 300.0, -120.0))));
+        let hip = state.doc.skeleton.update_order[0];
+        let far = state.doc.skeleton.update_order[1];
+
+        let mut slot_data = Slot::new("art".to_string(), hip);
+        slot_data.attachment = Some("art".into());
+        let slot = state.doc.skeleton.slots.insert(slot_data);
+        state.doc.skeleton.draw_order.push(slot);
+        let skin = state.doc.skeleton.default_skin;
+        state.doc.skeleton.skins[skin]
+            .entries
+            .insert((slot, "art".to_string()), Attachment::Mesh(quad_mesh()));
+
+        // Where the art sits before it has any weights: rigid, through the
+        // slot bone. Not `skin_vertex_with_ffd`, which returns the raw local
+        // position for an unweighted mesh — the canvas branches the same way.
+        let before: Vec<glam::Vec2> = {
+            let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot, "art")
+            else {
+                panic!("no mesh")
+            };
+            let bone_world = *state.pose.worlds.get(hip).unwrap();
+            mesh.setup_vertices
+                .iter()
+                .map(|v| bone_world.transform_point(*v))
+                .collect()
+        };
+
+        // Paint the distant bone over every vertex at full strength — the
+        // gesture that tore the shin off the leg.
+        let weights = {
+            let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot, "art")
+            else {
+                panic!("no mesh")
+            };
+            brush(mesh, far, BrushMode::Add, &[0.0; 4], 50.0, 1.0, 1.0, &[])
+        };
+        state.dispatch(Box::new(PaintWeights::new(skin, slot, "art", weights)));
+
+        let bone_world = *state.pose.worlds.get(hip).unwrap();
+        let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot, "art") else {
+            panic!("no mesh")
+        };
+        assert!(
+            !mesh.inverse_bind_matrices.is_empty(),
+            "the rebind never ran, so skinning has no bind to cancel against"
+        );
+        for (i, expected) in before.iter().enumerate() {
+            let now = mesh.skin_vertex_with_ffd(i, glam::Vec2::ZERO, &state.pose, &bone_world);
+            assert!(
+                (now - *expected).length() < 1e-3,
+                "vertex {i} moved {} units on being painted: {expected} -> {now}",
+                (now - *expected).length()
+            );
+        }
+    }
+    /// The same invariant with the bones rotated and scaled, and only *some*
+    /// vertices painted.
+    ///
+    /// The translation-only case passes even if the bind composes its two
+    /// affines the wrong way round — `A·B` and `B·A` agree for pure
+    /// translations. Rotation is where that shows, and a rig has rotation
+    /// everywhere. Painting part of a mesh is also the real gesture: a brush
+    /// covers some vertices and leaves the rest, and the two halves have to stay
+    /// put together.
+    #[test]
+    fn painting_part_of_a_rotated_mesh_does_not_move_it() {
+        let mut state = AppState::default();
+        state.dispatch(Box::new(CreateBone::new(posed_bone(
+            "a",
+            120.0,
+            -40.0,
+            0.7,
+            glam::vec2(1.3, 0.8),
+        ))));
+        state.dispatch(Box::new(CreateBone::new(posed_bone(
+            "b",
+            -80.0,
+            200.0,
+            -1.9,
+            glam::vec2(0.6, 1.4),
+        ))));
+        let first = state.doc.skeleton.update_order[0];
+        let second = state.doc.skeleton.update_order[1];
+
+        let mut slot_data = Slot::new("art".to_string(), first);
+        slot_data.attachment = Some("art".into());
+        let slot = state.doc.skeleton.slots.insert(slot_data);
+        state.doc.skeleton.draw_order.push(slot);
+        let skin = state.doc.skeleton.default_skin;
+        state.doc.skeleton.skins[skin]
+            .entries
+            .insert((slot, "art".to_string()), Attachment::Mesh(quad_mesh()));
+
+        let before: Vec<glam::Vec2> = {
+            let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot, "art")
+            else {
+                panic!("no mesh")
+            };
+            let bone_world = *state.pose.worlds.get(first).unwrap();
+            mesh.setup_vertices
+                .iter()
+                .map(|v| bone_world.transform_point(*v))
+                .collect()
+        };
+
+        // Only vertices 0 and 1 are under the brush.
+        let weights = {
+            let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot, "art")
+            else {
+                panic!("no mesh")
+            };
+            brush(
+                mesh,
+                second,
+                BrushMode::Add,
+                &[0.0, 0.0, 999.0, 999.0],
+                50.0,
+                1.0,
+                1.0,
+                &[],
+            )
+        };
+        state.dispatch(Box::new(PaintWeights::new(skin, slot, "art", weights)));
+
+        let bone_world = *state.pose.worlds.get(first).unwrap();
+        let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot, "art") else {
+            panic!("no mesh")
+        };
+        for (i, expected) in before.iter().enumerate() {
+            let now = mesh.skin_vertex_with_ffd(i, glam::Vec2::ZERO, &state.pose, &bone_world);
+            assert!(
+                (now - *expected).length() < 1e-3,
+                "vertex {i} moved {} units: {expected} -> {now}",
+                (now - *expected).length()
+            );
+        }
     }
 }

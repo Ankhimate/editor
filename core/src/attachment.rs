@@ -232,38 +232,55 @@ impl MeshAttachment {
     }
 
     /// Skin one vertex against an evaluated [`Pose`](crate::pose::Pose).
+    ///
+    /// `mesh_space` is the world affine of the bone the vertices are stored in —
+    /// the slot's bone — and is what a vertex with no usable influence falls
+    /// back to.
+    ///
+    /// That fallback is the whole reason this takes the argument. A mesh is
+    /// skinned as a unit: the moment *one* vertex has weights, every vertex goes
+    /// through here. Unweighted ones used to fall back to `setup_pos`, which is a
+    /// **local** coordinate being returned as a world one — so painting part of a
+    /// mesh left the painted vertices in place and collapsed the rest toward the
+    /// origin, tearing the artwork apart. Rigid placement is the correct
+    /// fallback, and it is exactly what the mesh drew a moment before it gained
+    /// its first weight.
     pub fn skin_vertex_with_ffd(
         &self,
         vertex_idx: usize,
         ffd_offset: Vec2,
         pose: &crate::pose::Pose,
+        mesh_space: &Affine2,
     ) -> Vec2 {
         let setup_pos = self.setup_vertices[vertex_idx] + ffd_offset;
+        let rigid = mesh_space.transform_point(setup_pos);
+
+        let Some(vertex_weights) = self
+            .weights
+            .get(vertex_idx)
+            .filter(|weights| !weights.is_empty())
+        else {
+            return rigid;
+        };
 
         let mut final_pos = Vec2::ZERO;
         let mut total_weight = 0.0;
-
-        if vertex_idx < self.weights.len() && !self.weights[vertex_idx].is_empty() {
-            for vw in &self.weights[vertex_idx] {
-                if let (Some(inv_bind), Some(world)) = (
-                    self.inverse_bind_matrices.get(&vw.bone),
-                    pose.worlds.get(vw.bone),
-                ) {
-                    let skin = world.mul(inv_bind);
-                    final_pos += skin.transform_point(setup_pos) * vw.weight;
-                    total_weight += vw.weight;
-                }
+        for vw in vertex_weights {
+            if let (Some(inv_bind), Some(world)) = (
+                self.inverse_bind_matrices.get(&vw.bone),
+                pose.worlds.get(vw.bone),
+            ) {
+                let skin = world.mul(inv_bind);
+                final_pos += skin.transform_point(setup_pos) * vw.weight;
+                total_weight += vw.weight;
             }
-            if total_weight > 0.0 {
-                final_pos /= total_weight;
-            } else {
-                final_pos = setup_pos;
-            }
-        } else {
-            final_pos = setup_pos;
         }
-
-        final_pos
+        // Every influence named a bone with no bind — a bone deleted since, or
+        // one whose setup affine will not invert. Rigid, not local.
+        if total_weight <= 0.0 {
+            return rigid;
+        }
+        final_pos / total_weight
     }
 }
 
@@ -676,7 +693,7 @@ mod tests {
 
         for (i, v) in mesh.setup_vertices.iter().enumerate() {
             let rigid = pose.world(hip).transform_point(*v);
-            let skinned = mesh.skin_vertex_with_ffd(i, Vec2::ZERO, &pose);
+            let skinned = mesh.skin_vertex_with_ffd(i, Vec2::ZERO, &pose, &pose.world(hip));
             assert!(
                 (rigid - skinned).length() < 1e-3,
                 "vertex {i}: rigid {rigid:?} but skinned {skinned:?}"
@@ -716,12 +733,12 @@ mod tests {
         let mut pose = Pose::new();
         evaluate(&skel, &[], &mut pose);
         mesh.bind_to_pose(&pose, pose.world(hip));
-        let before = mesh.skin_vertex_with_ffd(0, Vec2::ZERO, &pose);
+        let before = mesh.skin_vertex_with_ffd(0, Vec2::ZERO, &pose, &pose.world(hip));
 
         // Turn the hip a quarter turn and re-evaluate.
         skel.bones[hip].local_transform.rotation = std::f32::consts::FRAC_PI_2;
         evaluate(&skel, &[], &mut pose);
-        let after = mesh.skin_vertex_with_ffd(0, Vec2::ZERO, &pose);
+        let after = mesh.skin_vertex_with_ffd(0, Vec2::ZERO, &pose, &pose.world(hip));
 
         assert!(
             (before - Vec2::new(10.0, 100.0)).length() < 1e-3,

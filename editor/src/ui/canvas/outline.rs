@@ -214,17 +214,13 @@ fn mesh_world_vertices(
 ) -> Vec<glam::Vec2> {
     let name = state.pose.attachment_name(&state.doc.skeleton, slot_id);
     let deform = name.and_then(|n| state.pose.deforms.get(&(slot_id, n.to_string())));
-    let skinned = !mesh.weights.is_empty() && !mesh.inverse_bind_matrices.is_empty();
-    mesh.setup_vertices
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
+    // No `skinned` branch: `skin_vertex_with_ffd` falls back to rigid placement
+    // through `bone_world` for any vertex without usable influences, so an
+    // unweighted mesh and an unweighted vertex both come out right.
+    (0..mesh.setup_vertices.len())
+        .map(|i| {
             let offset = deform.and_then(|d| d.get(i).copied()).unwrap_or_default();
-            if skinned {
-                mesh.skin_vertex_with_ffd(i, offset, &state.pose)
-            } else {
-                bone_world.transform_point(*v + offset)
-            }
+            mesh.skin_vertex_with_ffd(i, offset, &state.pose, bone_world)
         })
         .collect()
 }

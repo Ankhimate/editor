@@ -85,17 +85,10 @@ impl CanvasTool for WeightPaintTool {
 
         // Distances are measured where the vertices are *drawn*, so the brush
         // covers what is under the cursor even on a posed rig.
-        let skinned = !mesh.weights.is_empty() && !mesh.inverse_bind_matrices.is_empty();
-        let distances: Vec<f32> = mesh
-            .setup_vertices
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let world = if skinned {
-                    mesh.skin_vertex_with_ffd(i, glam::Vec2::ZERO, &ctx.state.pose)
-                } else {
-                    bone_world.transform_point(*v)
-                };
+        let distances: Vec<f32> = (0..mesh.setup_vertices.len())
+            .map(|i| {
+                let world =
+                    mesh.skin_vertex_with_ffd(i, glam::Vec2::ZERO, &ctx.state.pose, &bone_world);
                 (cursor_world - world).length()
             })
             .collect();

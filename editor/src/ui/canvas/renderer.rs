@@ -253,22 +253,18 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
             }
             // A weighted vertex follows its bones (T-403); an unweighted one
             // rides its slot's bone rigidly. Both paths land in the same buffer.
-            let skinned = !mesh.weights.is_empty() && !mesh.inverse_bind_matrices.is_empty();
             // Deform offsets are applied to the setup vertex *before* skinning
             // (T-404): the shape is authored in local space, then the bones move
             // it. Skinning first would rotate the offsets with the bone.
+            //
+            // No rigid/skinned branch here: `skin_vertex_with_ffd` falls back to
+            // `bone_world` per vertex, so a mesh with no weights and a vertex
+            // with no weights are handled by the same path.
             let deform = mesh_deform(state, slot_id);
-            let vertices = mesh
-                .setup_vertices
-                .iter()
-                .enumerate()
-                .map(|(i, v)| {
+            let vertices = (0..mesh.setup_vertices.len())
+                .map(|i| {
                     let offset = deform.and_then(|d| d.get(i).copied()).unwrap_or_default();
-                    let world = if skinned {
-                        mesh.skin_vertex_with_ffd(i, offset, &state.pose)
-                    } else {
-                        bone_world.transform_point(*v + offset)
-                    };
+                    let world = mesh.skin_vertex_with_ffd(i, offset, &state.pose, bone_world);
                     let uv = mesh.uvs.get(i).copied().unwrap_or(glam::Vec2::ZERO);
                     MeshVertex {
                         position: [world.x, world.y],
@@ -930,17 +926,10 @@ pub fn render_bones(
             .resolve_slot_many(&state.session.skin_stack(), slot_id)
         && let Some(bone_world) = state.pose.worlds.get(slot.bone)
     {
-        let skinned = !mesh.weights.is_empty() && !mesh.inverse_bind_matrices.is_empty();
-        let points: Vec<egui::Pos2> = mesh
-            .setup_vertices
-            .iter()
-            .enumerate()
-            .map(|(index, vertex)| {
-                let world = if skinned {
-                    mesh.skin_vertex_with_ffd(index, glam::Vec2::ZERO, &state.pose)
-                } else {
-                    bone_world.transform_point(*vertex)
-                };
+        let points: Vec<egui::Pos2> = (0..mesh.setup_vertices.len())
+            .map(|index| {
+                let world =
+                    mesh.skin_vertex_with_ffd(index, glam::Vec2::ZERO, &state.pose, bone_world);
                 let screen = state.session.camera.world_to_screen(world, viewport_size);
                 egui::pos2(rect.min.x + screen.x, rect.min.y + screen.y)
             })

@@ -629,13 +629,8 @@ fn pick_attachment(
                 inside(c[0], c[1], c[2]) || inside(c[0], c[2], c[3])
             }
             Attachment::Mesh(m) => {
-                let skinned = !m.weights.is_empty() && !m.inverse_bind_matrices.is_empty();
                 let at = |i: usize| {
-                    if skinned {
-                        m.skin_vertex_with_ffd(i, glam::Vec2::ZERO, &state.pose)
-                    } else {
-                        bone_world.transform_point(m.setup_vertices[i])
-                    }
+                    m.skin_vertex_with_ffd(i, glam::Vec2::ZERO, &state.pose, &bone_world)
                 };
                 m.triangles.iter().any(|t| {
                     let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
