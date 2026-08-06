@@ -283,14 +283,13 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                     });
             }
             Tab::Weights => {
-                egui::ScrollArea::vertical()
-                    .id_salt("weights_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
-                            weights::ui(ui, self.state);
-                        });
-                    });
+                // No outer scroll: the bone list sizes itself from the height
+                // left over, and an ancestor that scrolls hands it an unbounded
+                // one. The controls above it are fixed height, so the pane only
+                // needs the list to flex.
+                egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                    weights::ui(ui, self.state);
+                });
             }
             Tab::Animations => {
                 egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {

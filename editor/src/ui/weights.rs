@@ -190,11 +190,15 @@ fn controls(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mes
     );
 }
 
-/// Which bones actually influence this mesh, strongest first.
+/// Which bones influence this mesh, strongest first.
 ///
-/// Spine calls this the bound-bones list and it is the thing that was missing
-/// most: without it there is no way to see that a stray bone picked up 2% of a
-/// mesh three sessions ago, and no way to lock, swap or remove one.
+/// A framed list that takes the rest of the panel, with the operations that act
+/// on a bone along its bottom edge. Loose rows followed by loose buttons gave no
+/// hint that the buttons acted on the rows above; a box with its own footer says
+/// so without a word of explanation.
+///
+/// Without this list there is no way to see that a stray bone picked up 2% of a
+/// mesh three sessions ago, and nothing to aim Swap or Remove at.
 fn bound_bones(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &MeshAttachment) {
     let mut totals: Vec<(BoneId, f32)> = Vec::new();
     for vertex in &mesh.weights {
@@ -207,71 +211,136 @@ fn bound_bones(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &
     }
     totals.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-    ui.label(
-        egui::RichText::new(format!("BOUND BONES  {}", totals.len()))
-            .size(10.5)
-            .strong()
-            .color(ui.visuals().weak_text_color()),
-    );
-    if totals.is_empty() {
-        ui.label(
-            egui::RichText::new("None yet — paint, or use Auto-weight")
-                .size(10.5)
-                .color(ui.visuals().weak_text_color()),
-        );
-        return;
-    }
-
-    let vertices = mesh.weights.len().max(1) as f32;
-    let active = state.session.active_bone();
     let mut select: Option<BoneId> = None;
     let mut toggle_lock: Option<BoneId> = None;
-    let mut remove: Option<BoneId> = None;
+    let mut action: Option<Action> = None;
 
-    for (bone, total) in &totals {
-        let Some(name) = state.doc.skeleton.bones.get(*bone).map(|b| b.name.clone()) else {
-            continue;
-        };
-        let locked = state.session.weight_paint_settings.locked.contains(bone);
-        ui.horizontal(|ui| {
-            let lock_icon = if locked {
-                crate::ui::icons::LOCKED
-            } else {
-                crate::ui::icons::UNLOCKED
-            };
+    // ── Header ──────────────────────────────────────────────────────────
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Bones:").size(11.5));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let pastable = state
+                .session
+                .weight_clipboard
+                .as_ref()
+                .is_some_and(|w| w.len() == mesh.setup_vertices.len());
             if ui
-                .selectable_label(locked, lock_icon)
-                .on_hover_text("Hold this bone's weight while painting others")
+                .add_enabled(
+                    pastable,
+                    egui::Button::new(crate::ui::icons::PASTE).small(),
+                )
+                .on_hover_text(
+                    "Paste weights onto this mesh.\nOnly between meshes with the same vertex count.",
+                )
                 .clicked()
             {
-                toggle_lock = Some(*bone);
+                action = Some(Action::Paste);
             }
             if ui
-                .selectable_label(active == Some(*bone), &name)
-                .on_hover_text("Aim the brush at this bone")
+                .add_enabled(
+                    !totals.is_empty(),
+                    egui::Button::new(crate::ui::icons::DUPLICATE).small(),
+                )
+                .on_hover_text("Copy this mesh's weights")
                 .clicked()
             {
-                select = Some(*bone);
+                action = Some(Action::Copy);
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .small_button(crate::ui::icons::DELETE)
-                    .on_hover_text("Remove this bone's influence from the mesh")
-                    .clicked()
-                {
-                    remove = Some(*bone);
-                }
-                // Mean influence across the mesh: enough to spot a bone holding
-                // 1% of everything, which is the shape a stray binding takes.
-                ui.label(
-                    egui::RichText::new(format!("{:.0}%", total / vertices * 100.0))
-                        .size(10.5)
-                        .color(ui.visuals().weak_text_color()),
-                );
-            });
         });
-    }
+    });
 
+    // ── The list ────────────────────────────────────────────────────────
+    // Reserves the rest of the panel minus the footer, so the box does not
+    // resize as bones come and go — a list that grows under the pointer moves
+    // the row you were about to click.
+    let footer = 30.0;
+    let height = (ui.available_height() - footer).clamp(80.0, 400.0);
+    egui::Frame::NONE
+        .fill(ui.visuals().extreme_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(4)
+        .inner_margin(egui::Margin::same(2))
+        .show(ui, |ui| {
+            ui.set_min_height(height);
+            ui.set_width(ui.available_width());
+            if totals.is_empty() {
+                ui.add_space(10.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        egui::RichText::new("No bones bound")
+                            .size(10.5)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                    ui.label(
+                        egui::RichText::new("Select bones and press Bind")
+                            .size(10.0)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                });
+                return;
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("bound_bones")
+                .max_height(height)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let vertices = mesh.weights.len().max(1) as f32;
+                    let active = state.session.active_bone();
+                    for (bone, total) in &totals {
+                        let Some(info) = state.doc.skeleton.bones.get(*bone) else {
+                            continue;
+                        };
+                        let (name, color) = (info.name.clone(), info.color);
+                        let locked = state.session.weight_paint_settings.locked.contains(bone);
+                        match bone_row(
+                            ui,
+                            &name,
+                            color,
+                            total / vertices,
+                            active == Some(*bone),
+                            locked,
+                        ) {
+                            RowClick::Select => select = Some(*bone),
+                            RowClick::ToggleLock => toggle_lock = Some(*bone),
+                            RowClick::None => {}
+                        }
+                    }
+                });
+        });
+
+    // ── Footer ──────────────────────────────────────────────────────────
+    let selected_bones = state.session.selected_bones.clone();
+    let active = state.session.active_bone();
+    ui.add_space(3.0);
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(!selected_bones.is_empty(), egui::Button::new("Bind"))
+            .on_hover_text(
+                "Add the selected bones to this mesh, computing starting weights from them.",
+            )
+            .clicked()
+        {
+            action = Some(Action::Bind);
+        }
+        if ui
+            .add_enabled(selected_bones.len() == 2, egui::Button::new("Swap"))
+            .on_hover_text(
+                "Exchange two bones' weights across the whole mesh.\nSelect exactly two bones first.",
+            )
+            .clicked()
+        {
+            action = Some(Action::Swap);
+        }
+        if ui
+            .add_enabled(active.is_some(), egui::Button::new("Remove"))
+            .on_hover_text("Remove the highlighted bone's influence from this mesh")
+            .clicked()
+        {
+            action = Some(Action::Remove);
+        }
+    });
+
+    // ── Apply, after the layout so nothing mutates mid-borrow ───────────
     if let Some(bone) = select {
         state.session.select_bone(Some(bone));
     }
@@ -284,52 +353,155 @@ fn bound_bones(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &
             None => locked.push(bone),
         }
     }
-    if let Some(bone) = remove {
-        let weights = remove_bone(&mesh.weights, bone);
-        dispatch(state, target, weights, "Remove Bone Weights");
-    }
-
-    // Swap needs exactly two bones named, and the selection is the natural way
-    // to name them.
-    let selected = state.session.selected_bones.clone();
-    ui.add_space(2.0);
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(selected.len() == 2, egui::Button::new("Swap").small())
-            .on_hover_text(
-                "Exchange two bones' weights across the whole mesh.\n\
-                 Select exactly two bones first.",
-            )
-            .clicked()
-        {
-            let weights = swap_bones(&mesh.weights, selected[0], selected[1]);
-            dispatch(state, target, weights, "Swap Bone Weights");
-        }
-        if ui
-            .add_enabled(!totals.is_empty(), egui::Button::new("Copy").small())
-            .on_hover_text("Copy this mesh's weights")
-            .clicked()
-        {
+    match action {
+        Some(Action::Copy) => {
             state.session.weight_clipboard = Some(mesh.weights.clone());
             state.session.set_status("Weights copied");
         }
-        let pastable = state
-            .session
-            .weight_clipboard
-            .as_ref()
-            .is_some_and(|w| w.len() == mesh.weights.len().max(mesh.setup_vertices.len()));
-        if ui
-            .add_enabled(pastable, egui::Button::new("Paste").small())
-            .on_hover_text(
-                "Paste weights onto this mesh.\n\
-                 Only between meshes with the same vertex count.",
-            )
-            .clicked()
-            && let Some(weights) = state.session.weight_clipboard.clone()
-        {
-            dispatch(state, target, weights, "Paste Weights");
+        Some(Action::Paste) => {
+            if let Some(weights) = state.session.weight_clipboard.clone() {
+                dispatch(state, target, weights, "Paste Weights");
+            }
         }
-    });
+        Some(Action::Bind) => auto_weight_mesh(state, target, mesh, &selected_bones, &[]),
+        Some(Action::Swap) => {
+            let weights = swap_bones(&mesh.weights, selected_bones[0], selected_bones[1]);
+            dispatch(state, target, weights, "Swap Bone Weights");
+        }
+        Some(Action::Remove) => {
+            if let Some(bone) = active {
+                let weights = remove_bone(&mesh.weights, bone);
+                dispatch(state, target, weights, "Remove Bone Weights");
+            }
+        }
+        None => {}
+    }
+}
+
+/// What the header or footer asked for this frame.
+enum Action {
+    Copy,
+    Paste,
+    Bind,
+    Swap,
+    Remove,
+}
+
+enum RowClick {
+    None,
+    Select,
+    ToggleLock,
+}
+
+/// One row of the bone list: swatch, name, share.
+///
+/// Painted rather than assembled from widgets so the highlight spans the full
+/// width. A `selectable_label` highlights only its own text, which on a row with
+/// a percentage on the far right leaves the selection looking like it covers
+/// half of what it covers.
+fn bone_row(
+    ui: &mut egui::Ui,
+    name: &str,
+    color: [f32; 4],
+    share: f32,
+    selected: bool,
+    locked: bool,
+) -> RowClick {
+    let height = 20.0;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    let visuals = ui.visuals().clone();
+    if selected {
+        ui.painter().rect_filled(rect, 3, visuals.selection.bg_fill);
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, 3, visuals.faint_bg_color);
+    }
+
+    // The bone's own colour, as in the tree — a swatch ties the row to the thing
+    // on the canvas without the name having to be read.
+    let swatch = egui::Rect::from_center_size(
+        egui::pos2(rect.min.x + 12.0, rect.center().y),
+        egui::vec2(11.0, 11.0),
+    );
+    ui.painter().rect_filled(
+        swatch,
+        2,
+        egui::Color32::from_rgb(
+            (color[0] * 255.0) as u8,
+            (color[1] * 255.0) as u8,
+            (color[2] * 255.0) as u8,
+        ),
+    );
+
+    let text_color = if selected {
+        visuals.strong_text_color()
+    } else {
+        visuals.text_color()
+    };
+    ui.painter().text(
+        egui::pos2(rect.min.x + 24.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        name,
+        egui::FontId::proportional(12.0),
+        text_color,
+    );
+
+    // Mean influence across the mesh: enough to spot a bone holding 1% of
+    // everything, which is the shape a stray binding takes. Left blank below
+    // half a percent rather than shown as "0%", which reads as a measurement.
+    if share >= 0.005 {
+        ui.painter().text(
+            egui::pos2(rect.max.x - 24.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            format!("{:.0}%", share * 100.0),
+            egui::FontId::proportional(11.0),
+            if selected {
+                text_color
+            } else {
+                visuals.weak_text_color()
+            },
+        );
+    }
+
+    // The lock, on the right edge. Drawn only when locked or hovered: a column
+    // of open padlocks down every row is noise for a setting almost nobody
+    // touches.
+    let mut click = if response.clicked() {
+        RowClick::Select
+    } else {
+        RowClick::None
+    };
+    if locked || response.hovered() {
+        let lock = egui::Rect::from_center_size(
+            egui::pos2(rect.max.x - 10.0, rect.center().y),
+            egui::vec2(16.0, height),
+        );
+        let lock_response = ui.interact(lock, response.id.with("lock"), egui::Sense::click());
+        ui.painter().text(
+            lock.center(),
+            egui::Align2::CENTER_CENTER,
+            if locked {
+                crate::ui::icons::LOCKED
+            } else {
+                crate::ui::icons::UNLOCKED
+            },
+            egui::FontId::proportional(11.0),
+            if locked {
+                visuals.warn_fg_color
+            } else {
+                visuals.weak_text_color()
+            },
+        );
+        if lock_response
+            .on_hover_text("Hold this bone's weight while painting others")
+            .clicked()
+        {
+            click = RowClick::ToggleLock;
+        }
+    }
+    click
 }
 
 fn apply_direct(

@@ -69,6 +69,7 @@ pub const TOOL_SHEAR: &str = f::ITALIC;
 pub const ADD: &str = f::PLUS;
 pub const DELETE: &str = f::TRASH_2;
 pub const DUPLICATE: &str = f::COPY;
+pub const PASTE: &str = f::CLIPBOARD;
 pub const UNDO: &str = f::UNDO_2;
 pub const REDO: &str = f::REDO_2;
 pub const CLOSE: &str = f::X;
