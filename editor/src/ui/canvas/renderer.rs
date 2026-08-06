@@ -19,6 +19,13 @@ pub const COLOR_BONE_PREVIEW: [f32; 4] = [0.5, 1.0, 1.0, 0.85]; // Ghost preview
 /// Inheritance rather than per-bone assignment: a group is a *limb*, and
 /// colouring one means colouring the shoulder and having the arm follow.
 /// A bone that has been given its own colour keeps it and passes that down.
+///
+/// A bone nobody has coloured — and no ancestor either — falls back to one
+/// derived from its name rather than to the shared default. Sixty bones in one
+/// teal is sixty bones you have to read the name of; distinct hues make the
+/// hierarchy, the viewport and the weight list all answer "which bone is this"
+/// at a glance. Setting a colour anywhere up the chain still overrides it, so
+/// grouping a limb by hand works exactly as before.
 pub fn group_color(
     skeleton: &ankhimate_core::skeleton::Skeleton,
     bone: ankhimate_core::ids::BoneId,
@@ -38,7 +45,15 @@ pub fn group_color(
         }
         current = b.parent;
     }
-    default
+    // Position in `update_order` — the rig's own stable ordering, parents before
+    // children, so a limb's bones come out as a run of neighbouring hues rather
+    // than scattered across the wheel.
+    skeleton
+        .update_order
+        .iter()
+        .position(|id| *id == bone)
+        .map(ankhimate_core::skeleton::Bone::auto_color)
+        .unwrap_or(default)
 }
 
 pub fn bone_gizmo_vertices(

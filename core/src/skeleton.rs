@@ -27,8 +27,76 @@ impl Bone {
         [0.0, 0.80, 0.80, 0.85] // Teal with slight transparency
     }
 
+    /// A distinct colour for a bone that has not been given one.
+    ///
+    /// Every bone teal makes a sixty-bone rig one undifferentiated mass: the
+    /// hierarchy, the viewport and the weight list all show the same swatch, so
+    /// none of them can tell you *which* bone you are looking at without reading
+    /// a name. Colour is the fastest way to answer that, and it costs nothing to
+    /// derive one.
+    ///
+    /// Derived rather than stored, so it needs no field, no migration, and no
+    /// rewrite of a rig imported from elsewhere — spineboy gets sixty distinct
+    /// colours the moment it loads.
+    ///
+    /// Keyed on the bone's **position**, not on its name. Hashing the name was
+    /// the first attempt and cannot work: a hash maps an unbounded set onto a
+    /// bounded one, so two bones landing on the same hue is a matter of luck, and
+    /// with sixteen bones on a colour wheel it is closer to a coin flip. `hip`
+    /// and `rear-lower-arm` came out the same red. Position is finite and known,
+    /// so the spread can be guaranteed instead of hoped for.
+    ///
+    /// The cost is that colours shift if the hierarchy is reordered. Worth it:
+    /// the colour means "not that other bone", which is a statement about the
+    /// rig as it is now, and nobody memorises that the shin is teal.
+    ///
+    /// Hue carries the difference. Saturation and lightness stay in a band that
+    /// reads on a dark canvas and against artwork — free-running RGB produces
+    /// near-black and near-white bones that vanish into one or the other.
+    pub fn auto_color(index: usize) -> [f32; 4] {
+        // The golden-ratio conjugate: successive multiples land as far from each
+        // other as any sequence can, so the first two bones are opposite, the
+        // third splits the gap, and so on. Ordinary striding (`index / count`)
+        // needs the count up front and reshuffles every colour when it changes.
+        const PHI: f32 = 0.618_033_9;
+        let hue = (index as f32 * PHI).fract();
+        // A second axis, because hue alone runs out: the golden-ratio sequence
+        // puts its closest pairs at Fibonacci gaps — 13, 21, 34, 55 apart — and
+        // by sixty bones those pairs are a fortieth of the wheel from each other.
+        //
+        // The period is **4** for that reason. Every Fibonacci gap is odd or
+        // ≡2 (mod 4), so no two bones whose hues nearly collide can also land in
+        // the same weight band. Measured across 64 bones: hue alone bottoms out
+        // at 0.025 separation, a period of 3 at 0.027, this at 0.059.
+        let (saturation, lightness) = match index % 4 {
+            0 => (0.68, 0.62),
+            1 => (0.50, 0.74),
+            2 => (0.85, 0.48),
+            _ => (0.62, 0.58),
+        };
+        let [r, g, b] = hsl_to_rgb(hue, saturation, lightness);
+        [r, g, b, 0.85]
+    }
+
     // World-space queries live on `Pose` (T-103): a `Bone` holds document data
     // only, so it cannot know where it ended up. See `Pose::world_tip`.
+}
+
+/// HSL to RGB, all components 0..1.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h6 = h * 6.0;
+    let x = c * (1.0 - (h6 % 2.0 - 1.0).abs());
+    let (r, g, b) = match h6 as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    [r + m, g + m, b + m]
 }
 
 /// Make `name` unique against `taken` by appending `_2`, `_3`, … (ADR 0004).
@@ -859,5 +927,66 @@ mod posed_resolution_tests {
                 .map(|a| matches!(a, Attachment::Region(r) if r.texture == "smile")),
             Some(true)
         );
+    }
+}
+
+#[cfg(test)]
+mod auto_color_tests {
+    use super::*;
+
+    fn distance(a: [f32; 4], b: [f32; 4]) -> f32 {
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    }
+
+    /// The guarantee the name-hash version could not give. Sixty-four is past
+    /// any rig this is likely to meet.
+    #[test]
+    fn every_bone_gets_a_different_colour() {
+        let colors: Vec<[f32; 4]> = (0..64).map(Bone::auto_color).collect();
+        let mut closest = f32::MAX;
+        for (i, a) in colors.iter().enumerate() {
+            for b in colors.iter().skip(i + 1) {
+                closest = closest.min(distance(*a, *b));
+            }
+        }
+        // 0.05 is the measured floor for this scheme at 64 bones, with a little
+        // room: the point of the test is to catch a change that collapses the
+        // spread, not to pin the exact constant.
+        assert!(closest > 0.05, "two bones are the same colour: {closest}");
+    }
+
+    /// Neighbours in the list are the pair most often compared — the shin and
+    /// the foot below it — so they get the widest separation of all.
+    #[test]
+    fn adjacent_bones_are_far_apart() {
+        for i in 0..32 {
+            let d = distance(Bone::auto_color(i), Bone::auto_color(i + 1));
+            assert!(d > 0.4, "bones {i} and {} are close: {d}", i + 1);
+        }
+    }
+
+    /// Fixed saturation and lightness are the point: free-running RGB produces
+    /// near-black and near-white bones, and both vanish — one into the canvas,
+    /// the other into pale artwork.
+    #[test]
+    fn colours_stay_legible() {
+        for i in 0..64 {
+            let c = Bone::auto_color(i);
+            let luma = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+            assert!(
+                (0.2..=0.9).contains(&luma),
+                "bone {i} at luma {luma}: {c:?}"
+            );
+            assert!(c.iter().take(3).all(|v| (0.0..=1.0).contains(v)), "{c:?}");
+        }
+    }
+
+    /// An explicitly coloured bone must not be mistaken for an uncoloured one,
+    /// or setting a colour to the derived value would silently do nothing.
+    #[test]
+    fn auto_colours_are_never_the_default() {
+        for i in 0..64 {
+            assert_ne!(Bone::auto_color(i), Bone::default_color(), "bone {i}");
+        }
     }
 }

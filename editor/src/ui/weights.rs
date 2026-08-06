@@ -290,7 +290,13 @@ fn bound_bones(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &
                         let Some(info) = state.doc.skeleton.bones.get(*bone) else {
                             continue;
                         };
-                        let (name, color) = (info.name.clone(), info.color);
+                        let name = info.name.clone();
+                        // Through `group_color`, not the raw field: an
+                        // uncoloured bone resolves to its derived hue there, and
+                        // reading `info.color` would show every one of them the
+                        // same default teal.
+                        let color =
+                            crate::ui::canvas::renderer::group_color(&state.doc.skeleton, *bone);
                         let locked = state.session.weight_paint_settings.locked.contains(bone);
                         match bone_row(
                             ui,
