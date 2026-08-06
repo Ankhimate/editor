@@ -248,59 +248,45 @@ pub fn swap_bones(weights: &[Vec<VertexWeight>], a: BoneId, b: BoneId) -> Vec<Ve
         .collect()
 }
 
-/// Give vertices that sit on top of each other the same weights.
+/// Make one mesh's weights match another's, wherever their vertices coincide.
 ///
 /// Two meshes that meet at a seam — a torso and a hip, a sleeve and a forearm —
-/// each own their own copy of the vertices along that seam. Weight them
-/// separately and the seam splits open the moment the joint bends, because the
-/// two edges are being pulled by slightly different mixes of bone. Averaging
-/// coincident vertices closes it, and keeps it closed under every pose.
+/// each own their own copy of the vertices along it. Weight them separately and
+/// the seam splits open the moment the joint bends, because the two edges are
+/// pulled by slightly different mixes of bone.
 ///
-/// Takes each mesh's vertices in a **common space** with its weights, and returns
-/// each mesh's new weight table. `epsilon` is how close counts as the same point.
-pub fn weld(
-    meshes: &[(Vec<glam::Vec2>, Vec<Vec<VertexWeight>>)],
+/// The **source** mesh is authority and is never modified. An average would have
+/// been the symmetric thing to do and is the wrong tool: it changes the mesh you
+/// already got right in order to meet the one you have not, so welding a good
+/// torso to a rough sleeve damages the torso.
+///
+/// Positions are in a **common space**; `epsilon` is how close counts as the same
+/// point. Returns the target's new weight table.
+pub fn weld_to_source(
+    source: (&[glam::Vec2], &[Vec<VertexWeight>]),
+    target: (&[glam::Vec2], &[Vec<VertexWeight>]),
     epsilon: f32,
-) -> Vec<Vec<Vec<VertexWeight>>> {
-    // Every (mesh, vertex) pair grouped into clusters of coincident points.
-    let mut clusters: Vec<(glam::Vec2, Vec<(usize, usize)>)> = Vec::new();
-    for (mesh_index, (positions, _)) in meshes.iter().enumerate() {
-        for (vertex_index, position) in positions.iter().enumerate() {
-            match clusters
-                .iter_mut()
-                .find(|(anchor, _)| (*anchor - *position).length() <= epsilon)
-            {
-                Some((_, members)) => members.push((mesh_index, vertex_index)),
-                None => clusters.push((*position, vec![(mesh_index, vertex_index)])),
-            }
-        }
-    }
+) -> Vec<Vec<VertexWeight>> {
+    let (source_positions, source_weights) = source;
+    let (target_positions, target_weights) = target;
 
-    let mut out: Vec<Vec<Vec<VertexWeight>>> =
-        meshes.iter().map(|(_, weights)| weights.clone()).collect();
-    for (_, members) in &clusters {
-        // A vertex that meets nothing keeps what it has; averaging a group of
-        // one would only cost it its exact values to floating point.
-        if members.len() < 2 {
-            continue;
-        }
-        let mut totals: Vec<VertexWeight> = Vec::new();
-        for (mesh_index, vertex_index) in members {
-            let Some(vertex) = meshes[*mesh_index].1.get(*vertex_index) else {
-                continue;
-            };
-            for w in vertex {
-                match totals.iter_mut().find(|t| t.bone == w.bone) {
-                    Some(t) => t.weight += w.weight,
-                    None => totals.push(*w),
-                }
-            }
-        }
-        normalize(&mut totals);
-        for (mesh_index, vertex_index) in members {
-            if let Some(slot) = out[*mesh_index].get_mut(*vertex_index) {
-                *slot = totals.clone();
-            }
+    let mut out: Vec<Vec<VertexWeight>> = target_weights.to_vec();
+    out.resize(target_positions.len(), Vec::new());
+
+    for (index, position) in target_positions.iter().enumerate() {
+        // Nearest within epsilon, not merely the first inside it: two source
+        // vertices can both be in range at a dense seam, and taking whichever
+        // came first in the list would pick by authoring order.
+        let nearest = source_positions
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, (*p - *position).length()))
+            .filter(|(_, d)| *d <= epsilon)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((source_index, _)) = nearest
+            && let Some(weights) = source_weights.get(source_index)
+        {
+            out[index] = weights.clone();
         }
     }
     out
@@ -542,6 +528,17 @@ pub const DEFAULT_MAX_BONES: usize = 4;
 /// multiply per vertex per frame.
 pub const DEFAULT_PRUNE_THRESHOLD: f32 = 0.01;
 
+/// Is this vertex influenced by more bones than the rig budgets for?
+///
+/// A diagnostic, not a rule — nothing stops it happening, and it is only a
+/// *problem* against a number the user chose. Runtimes budget a fixed number of
+/// influences per vertex, so a mesh that quietly exceeds it exports fine and
+/// deforms differently in the game than in the editor. Surfacing it in the
+/// viewport is the only way that gets noticed before then.
+pub fn over_influenced(weights: &[VertexWeight], limit: usize) -> bool {
+    weights.len() > limit
+}
+
 /// Drop the weakest influences from a vertex, then renormalize.
 ///
 /// Two knobs because they catch different things: `threshold` removes the dregs
@@ -569,10 +566,15 @@ pub fn prune(weights: &mut Vec<VertexWeight>, max_bones: usize, threshold: f32) 
 /// them that does not go all the way up and back down.
 ///
 /// The distances are geodesic; the falloff on top of them is unchanged.
+/// `vertices`, when non-empty, restricts the recompute to those indices —
+/// everything else keeps the weights it has. Recomputing a whole mesh to fix one
+/// badly-bound corner throws away every hand edit on it, which is why the
+/// selection has to be honoured rather than treated as a hint.
 pub fn auto_weight(
     mesh: &MeshAttachment,
     bones: &[(BoneId, glam::Vec2, glam::Vec2)],
     falloff: f32,
+    vertices: &[usize],
 ) -> Vec<Vec<VertexWeight>> {
     let adjacency = adjacency(mesh);
     let per_bone: Vec<Vec<f32>> = bones
@@ -580,8 +582,14 @@ pub fn auto_weight(
         .map(|(_, start, end)| geodesic(mesh, &adjacency, *start, *end))
         .collect();
 
+    let mut existing = mesh.weights.clone();
+    existing.resize(mesh.setup_vertices.len(), Vec::new());
+
     (0..mesh.setup_vertices.len())
         .map(|index| {
+            if !vertices.is_empty() && !vertices.contains(&index) {
+                return std::mem::take(&mut existing[index]);
+            }
             let mut influences: Vec<VertexWeight> = bones
                 .iter()
                 .enumerate()
@@ -1011,69 +1019,63 @@ mod tests {
     }
 
     #[test]
-    fn welding_averages_vertices_that_sit_on_each_other() {
+    fn welding_copies_the_source_onto_coincident_vertices() {
         let (a, b) = (bone_id(1), bone_id(2));
-        // Two meshes meeting at (0,0): one edge fully bound to a, the other to b.
-        let meshes = vec![
-            (
-                vec![glam::vec2(0.0, 0.0), glam::vec2(10.0, 0.0)],
-                vec![
-                    vec![VertexWeight {
-                        bone: a,
-                        weight: 1.0,
-                    }],
-                    Vec::new(),
-                ],
-            ),
-            (
-                // The seam vertex is a hair off, which is what an authored seam
-                // actually looks like.
-                vec![glam::vec2(0.001, 0.0), glam::vec2(-10.0, 0.0)],
-                vec![
-                    vec![VertexWeight {
-                        bone: b,
-                        weight: 1.0,
-                    }],
-                    Vec::new(),
-                ],
-            ),
+        // Source seam at the origin, fully bound to a.
+        let source_pos = vec![glam::vec2(0.0, 0.0), glam::vec2(10.0, 0.0)];
+        let source_w = vec![
+            vec![VertexWeight {
+                bone: a,
+                weight: 1.0,
+            }],
+            Vec::new(),
         ];
-        let welded = weld(&meshes, 0.01);
+        // The target's seam vertex is a hair off, which is what an authored
+        // seam actually looks like.
+        let target_pos = vec![glam::vec2(0.001, 0.0), glam::vec2(-10.0, 0.0)];
+        let target_w = vec![
+            vec![VertexWeight {
+                bone: b,
+                weight: 1.0,
+            }],
+            Vec::new(),
+        ];
 
-        for (mesh, welded) in welded.iter().enumerate().take(2) {
-            let seam = &welded[0];
-            assert_eq!(seam.len(), 2, "mesh {mesh} did not take both bones");
-            for w in seam {
-                assert!(
-                    (w.weight - 0.5).abs() < 1e-4,
-                    "mesh {mesh} bone {:?} at {}",
-                    w.bone,
-                    w.weight
-                );
-            }
-        }
-        // The far vertices met nothing, so they are untouched.
-        assert!(welded[0][1].is_empty());
-        assert!(welded[1][1].is_empty());
+        let welded = weld_to_source((&source_pos, &source_w), (&target_pos, &target_w), 0.01);
+
+        assert_eq!(welded[0].len(), 1, "the seam vertex took one influence");
+        assert_eq!(
+            welded[0][0].bone, a,
+            "it took the source's bone, not its own"
+        );
+        assert!((welded[0][0].weight - 1.0).abs() < 1e-6);
+        // The far vertex matched nothing, so it keeps what it had.
+        assert!(welded[1].is_empty());
     }
 
+    /// The source is authority and must come back untouched — an average would
+    /// damage the mesh you already got right in order to meet the rough one.
     #[test]
-    fn welding_leaves_vertices_that_meet_nothing_alone() {
+    fn welding_leaves_vertices_that_match_nothing_alone() {
         let a = bone_id(1);
-        let meshes = vec![
-            (
-                vec![glam::vec2(0.0, 0.0)],
-                vec![vec![VertexWeight {
-                    bone: a,
-                    weight: 1.0,
-                }]],
-            ),
-            (vec![glam::vec2(50.0, 0.0)], vec![Vec::new()]),
-        ];
-        let welded = weld(&meshes, 0.01);
-        assert_eq!(welded[0][0].len(), 1);
-        assert!((welded[0][0][0].weight - 1.0).abs() < 1e-6);
-        assert!(welded[1][0].is_empty());
+        let source_pos = vec![glam::vec2(0.0, 0.0)];
+        let source_w = vec![vec![VertexWeight {
+            bone: a,
+            weight: 1.0,
+        }]];
+        let target_pos = vec![glam::vec2(50.0, 0.0)];
+        let target_w = vec![vec![VertexWeight {
+            bone: bone_id(9),
+            weight: 1.0,
+        }]];
+
+        let welded = weld_to_source((&source_pos, &source_w), (&target_pos, &target_w), 0.01);
+        assert_eq!(welded[0].len(), 1);
+        assert_eq!(
+            welded[0][0].bone,
+            bone_id(9),
+            "an unmatched vertex kept its own"
+        );
     }
 
     #[test]
@@ -1150,7 +1152,7 @@ mod tests {
             (left, glam::vec2(-1.0, 5.0), glam::vec2(-1.0, 0.0)),
             (right, glam::vec2(1.0, 5.0), glam::vec2(1.0, 0.0)),
         ];
-        let weights = auto_weight(&mesh, &bones, 2.0);
+        let weights = auto_weight(&mesh, &bones, 2.0, &[]);
 
         // Vertex 4 is the bottom of the left leg. It is 2 units from the right
         // leg's bone in a straight line — closer than the top of its own leg —
@@ -1175,6 +1177,42 @@ mod tests {
     }
 
     #[test]
+    fn auto_weight_only_touches_the_selected_vertices() {
+        let mesh = quad();
+        let (left, right) = (bone_id(1), bone_id(2));
+        let bones = vec![
+            (left, glam::vec2(-50.0, 0.0), glam::vec2(-50.0, 10.0)),
+            (right, glam::vec2(50.0, 0.0), glam::vec2(50.0, 10.0)),
+        ];
+
+        // Vertex 3 is hand-weighted to something auto-weighting would never
+        // produce, then left out of the selection.
+        let mut mesh = mesh;
+        let sentinel = bone_id(99);
+        mesh.weights = vec![
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![VertexWeight {
+                bone: sentinel,
+                weight: 1.0,
+            }],
+        ];
+
+        let weights = auto_weight(&mesh, &bones, 2.0, &[0, 1]);
+        assert!(!weights[0].is_empty(), "selected vertex was recomputed");
+        assert!(
+            weights[2].is_empty(),
+            "unselected, unweighted vertex untouched"
+        );
+        assert_eq!(
+            weights[3].first().map(|w| w.bone),
+            Some(sentinel),
+            "recomputing the whole mesh threw away a hand edit"
+        );
+    }
+
+    #[test]
     fn auto_weight_binds_each_vertex_to_its_nearest_bone() {
         let mesh = quad();
         let (left, right) = (bone_id(1), bone_id(2));
@@ -1182,7 +1220,7 @@ mod tests {
             (left, glam::vec2(-50.0, 0.0), glam::vec2(-50.0, 10.0)),
             (right, glam::vec2(50.0, 0.0), glam::vec2(50.0, 10.0)),
         ];
-        let weights = auto_weight(&mesh, &bones, 2.0);
+        let weights = auto_weight(&mesh, &bones, 2.0, &[]);
 
         // Vertex 0 is the top-left corner: the left bone must dominate.
         let strongest = weights[0]

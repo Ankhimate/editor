@@ -362,31 +362,40 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
     let selected_vertices = state.session.selected_vertices.clone();
 
     ui.horizontal_wrapped(|ui| {
+        // One button, scoped by whatever is selected — which is what the
+        // selection is for. A separate "Bind" that differed only in reading the
+        // bone selection was two buttons for one idea.
+        let scope = match (selected_bones.is_empty(), selected_vertices.is_empty()) {
+            (true, true) => "every bone and vertex".to_string(),
+            (false, true) => format!("{} selected bones", selected_bones.len()),
+            (true, false) => format!("{} selected vertices", selected_vertices.len()),
+            (false, false) => format!(
+                "{} bones on {} vertices",
+                selected_bones.len(),
+                selected_vertices.len()
+            ),
+        };
         if ui
             .button("Auto")
-            .on_hover_text(
-                "Weight every vertex to nearby bones, measured across the mesh surface.
-                 A starting point to refine, not a finished rig.",
-            )
+            .on_hover_text(format!(
+                "Compute weights automatically, measuring across the mesh surface.
+                 Applies to {scope}.
+                 A starting point to refine, not a finished rig."
+            ))
             .clicked()
         {
-            auto_weight_mesh(state, target, mesh, None);
-        }
-        if ui
-            .add_enabled(!selected_bones.is_empty(), egui::Button::new("Bind"))
-            .on_hover_text(
-                "Same, but only from the bones you have selected.
-                 Select bones first.",
-            )
-            .clicked()
-        {
-            auto_weight_mesh(state, target, mesh, Some(&selected_bones));
+            auto_weight_mesh(
+                state,
+                target,
+                mesh,
+                &selected_bones,
+                &selected_vertices,
+            );
         }
         if ui
             .button("Smooth")
             .on_hover_text(
-                "Average each vertex with its neighbours.
-                 Applies to the selected vertices, or the whole mesh if none.",
+                "Blend the weights of the selected vertices, or all vertices if                  none are selected.",
             )
             .clicked()
         {
@@ -398,8 +407,8 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
                 egui::Button::new("Weld"),
             )
             .on_hover_text(
-                "Give vertices that sit on top of each other the same weights.
-                 Select two or more slots whose meshes meet at a seam.",
+                "Set this mesh's weights to match another mesh, wherever their                  vertices coincide.
+                 The **last** slot selected is the source; the rest are changed.",
             )
             .clicked()
         {
@@ -410,7 +419,9 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
     ui.horizontal_wrapped(|ui| {
         if ui
             .button("Prune")
-            .on_hover_text("Drop the weakest influences, by the limits below")
+            .on_hover_text(
+                "Remove weights below the threshold, from the selected vertices                  or all of them if none are selected.",
+            )
             .clicked()
         {
             let settings = &state.session.weight_paint_settings;
@@ -418,9 +429,12 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
             let weights = mesh
                 .weights
                 .iter()
-                .map(|vertex| {
+                .enumerate()
+                .map(|(i, vertex)| {
                     let mut vertex = vertex.clone();
-                    prune(&mut vertex, max_bones, threshold);
+                    if selected_vertices.is_empty() || selected_vertices.contains(&i) {
+                        prune(&mut vertex, max_bones, threshold);
+                    }
                     vertex
                 })
                 .collect();
@@ -429,8 +443,8 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
         if ui
             .button("Update")
             .on_hover_text(
-                "Recapture the bind pose from the current setup.
-                 Do this after moving a bone that already holds weight.",
+                "Store the current mesh vertices as the bind positions.
+                 Do this after moving a bone that already holds weight, or the                  art drifts away from it.",
             )
             .clicked()
         {
@@ -442,7 +456,9 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
         let mut bones = settings.max_bones as f32;
         if ui
             .add(egui::DragValue::new(&mut bones).range(1.0..=8.0).speed(0.1))
-            .on_hover_text("Prune: most bones allowed on one vertex")
+            .on_hover_text(
+                "Flags a vertex in the viewport when more than this many bones                  influence it. Also the ceiling Prune trims to.",
+            )
             .changed()
         {
             settings.max_bones = bones.round() as usize;
@@ -453,8 +469,27 @@ fn actions(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mesh
                 .speed(0.002)
                 .fixed_decimals(3),
         )
-        .on_hover_text("Prune: weights below this are dropped");
+        .on_hover_text("Prune: weights below this are removed");
     });
+
+    // The count, not just the rings. A ring is only found by looking at the
+    // right part of the mesh, and the whole point of a budget warning is that it
+    // reaches you when you were not looking for it.
+    let limit = state.session.weight_paint_settings.max_bones;
+    let over = mesh
+        .weights
+        .iter()
+        .filter(|w| weight_cmds::over_influenced(w, limit))
+        .count();
+    if over > 0 {
+        ui.label(
+            egui::RichText::new(format!(
+                "{over} vertices exceed {limit} bones — Prune trims them"
+            ))
+            .size(10.5)
+            .color(ui.visuals().warn_fg_color),
+        );
+    }
 }
 
 /// Smooth the selection, or the whole mesh when nothing is selected.
@@ -490,35 +525,30 @@ fn smooth_all(state: &mut AppState, target: &Target, mesh: &MeshAttachment, sele
     dispatch(state, target, weights, "Smooth Weights");
 }
 
-/// Weld every selected slot's mesh together along the seams they share.
+/// Copy the source mesh's weights onto every other selected slot's mesh.
+///
+/// The **last** slot selected is the source, matching every other multi-select
+/// action in the editor, where the last click is the active one. It is left
+/// untouched: one mesh is authority and the rest are brought to it, rather than
+/// everything being averaged into a compromise that damages the mesh you had
+/// already got right.
 fn weld_selected(state: &mut AppState) {
     let slots = state.session.selected_slots.clone();
-    let mut targets: Vec<Target> = Vec::new();
-    let mut inputs: Vec<(Vec<glam::Vec2>, Vec<Vec<VertexWeight>>)> = Vec::new();
+    let Some((&source_slot, target_slots)) = slots.split_last() else {
+        return;
+    };
 
-    for slot in slots {
-        let Some(name) = state
-            .doc
-            .skeleton
-            .slots
-            .get(slot)
-            .and_then(|s| s.attachment.clone())
-        else {
-            continue;
+    // World space: each mesh's vertices live in its own slot bone's frame, and
+    // two seams that touch on screen have quite different local coordinates.
+    let read = |state: &AppState,
+                slot: SlotId|
+     -> Option<(Target, Vec<glam::Vec2>, Vec<Vec<VertexWeight>>)> {
+        let name = state.doc.skeleton.slots.get(slot)?.attachment.clone()?;
+        let skin = owning_skin(&state.doc, state.session.active_skin, slot, &name)?;
+        let Attachment::Mesh(mesh) = state.doc.skeleton.skins[skin].get(slot, &name)? else {
+            return None;
         };
-        let Some(skin) = owning_skin(&state.doc, state.session.active_skin, slot, &name) else {
-            continue;
-        };
-        let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot, &name) else {
-            continue;
-        };
-        // Compared in world space: each mesh's vertices live in its own slot
-        // bone's frame, and two seams that touch on screen have quite different
-        // local coordinates.
-        let bone = state.doc.skeleton.slots[slot].bone;
-        let Some(world) = state.pose.worlds.get(bone).copied() else {
-            continue;
-        };
+        let world = *state.pose.worlds.get(state.doc.skeleton.slots[slot].bone)?;
         let positions: Vec<glam::Vec2> = mesh
             .setup_vertices
             .iter()
@@ -526,34 +556,42 @@ fn weld_selected(state: &mut AppState) {
             .collect();
         let mut weights = mesh.weights.clone();
         weights.resize(positions.len(), Vec::new());
-        inputs.push((positions, weights));
-        targets.push(Target { skin, slot, name });
-    }
+        Some((Target { skin, slot, name }, positions, weights))
+    };
 
-    if inputs.len() < 2 {
-        state
-            .session
-            .set_status("Select two or more slots with meshes to weld");
+    let Some((_, source_positions, source_weights)) = read(state, source_slot) else {
+        state.session.set_status("The source slot has no mesh");
         return;
-    }
+    };
 
-    // A pixel of slack. Seams are authored by eye or by tracing, so exact
-    // equality would match almost nothing.
-    let welded = weight_cmds::weld(&inputs, 1.0);
-    for (target, weights) in targets.iter().zip(welded) {
-        dispatch(state, target, weights, "Weld Weights");
+    let mut welded = 0;
+    for slot in target_slots.iter().copied() {
+        let Some((target, positions, weights)) = read(state, slot) else {
+            continue;
+        };
+        // A pixel of slack. Seams are authored by eye or by tracing, so exact
+        // equality would match almost nothing.
+        let new_weights = weight_cmds::weld_to_source(
+            (&source_positions, &source_weights),
+            (&positions, &weights),
+            1.0,
+        );
+        dispatch(state, &target, new_weights, "Weld Weights");
+        welded += 1;
     }
     state
         .session
-        .set_status(format!("Welded {} meshes", targets.len()));
+        .set_status(format!("Welded {welded} meshes to the source"));
 }
 
+/// Auto-weight this mesh, scoped by whatever bones and vertices are selected.
 /// Auto-weight this mesh, against the whole rig or just the bones given.
 fn auto_weight_mesh(
     state: &mut AppState,
     target: &Target,
     mesh: &MeshAttachment,
-    only: Option<&[BoneId]>,
+    only_bones: &[BoneId],
+    only_vertices: &[usize],
 ) {
     // Bones as segments in the mesh's local space, which is where its vertices
     // live: distance from a vertex to a *bone* means distance to its segment,
@@ -570,7 +608,7 @@ fn auto_weight_mesh(
         .skeleton
         .update_order
         .iter()
-        .filter(|id| only.is_none_or(|only| only.contains(id)))
+        .filter(|id| only_bones.is_empty() || only_bones.contains(id))
         .map(|&id| {
             let start = state.pose.world_position(id);
             let end = state.pose.world_tip(&state.doc.skeleton, id);
@@ -585,17 +623,16 @@ fn auto_weight_mesh(
         return;
     }
 
-    let label = if only.is_some() {
-        "Bind Bones"
+    let weights = auto_weight(mesh, &bones, 2.0, only_vertices);
+    let touched = if only_vertices.is_empty() {
+        weights.len()
     } else {
-        "Auto-weight"
+        only_vertices.len()
     };
-    let weights = auto_weight(mesh, &bones, 2.0);
-    let vertices = weights.len();
-    if dispatch(state, target, weights, label) {
+    if dispatch(state, target, weights, "Auto-weight") {
         state
             .session
-            .set_status(format!("Auto-weighted {vertices} vertices"));
+            .set_status(format!("Auto-weighted {touched} vertices"));
     }
 }
 

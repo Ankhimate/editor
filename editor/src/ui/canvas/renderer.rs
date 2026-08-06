@@ -1000,6 +1000,16 @@ pub fn render_bones(
                 painter.circle_filled(*p, 4.0, egui::Color32::from_black_alpha(120));
                 painter.circle_filled(*p, 3.0, color);
             }
+
+            // Over-influenced: more bones on this vertex than the rig budgets
+            // for. Runtimes take a fixed number of influences, so a mesh that
+            // quietly exceeds it exports fine and deforms differently in the
+            // game than in the editor. A ring is the only warning there is.
+            if mesh.weights.get(index).is_some_and(|w| {
+                crate::commands::weight_cmds::over_influenced(w, settings.max_bones)
+            }) {
+                painter.circle_stroke(*p, 7.0, egui::Stroke::new(1.5, ui.visuals().warn_fg_color));
+            }
         }
 
         // The brush itself. Painting with an invisible cursor footprint means
