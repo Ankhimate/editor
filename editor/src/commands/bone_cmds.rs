@@ -693,6 +693,139 @@ impl EditCommand for SetBoneColor {
     }
 }
 
+/// Set a bone's display length, optionally bringing its children with it
+/// (T-907).
+///
+/// # Why children move
+///
+/// A bone's length is where its *tip* is, and a child is conventionally placed
+/// at its parent's tip. Lengthening an upper arm without moving the elbow leaves
+/// the elbow floating mid-bone — the rig is still valid, it just no longer means
+/// what it looks like, and every child has to be dragged back by hand. Doing that
+/// on a finger chain is the kind of tedium that makes people stop adjusting
+/// lengths at all.
+///
+/// So the default carries them. Only children sitting **at the old tip** move,
+/// within a small tolerance: a child deliberately placed halfway down a bone (a
+/// muscle bulge, a strap) was put there on purpose and must stay, and one at the
+/// bone's origin is a branch point rather than a continuation.
+///
+/// `carry_children: false` is the escape hatch for exactly that case, and for
+/// resizing a bone purely to change how big its gizmo draws.
+pub struct SetBoneLength {
+    bone: BoneId,
+    after: f32,
+    carry_children: bool,
+    /// The length before the first `apply`, plus every child moved and where it
+    /// was. Captured on apply rather than in `new` so a merged drag reverts to
+    /// where the drag began, not to where its last frame began.
+    before: Option<(f32, Vec<(BoneId, glam::Vec2)>)>,
+}
+
+impl SetBoneLength {
+    pub fn new(bone: BoneId, after: f32, carry_children: bool) -> Self {
+        Self {
+            bone,
+            after,
+            carry_children,
+            before: None,
+        }
+    }
+}
+
+/// How close to the tip a child must sit to count as attached to it.
+///
+/// Proportional to the bone rather than absolute: a tenth of a unit is a lot on
+/// a 3-unit finger and nothing on a 300-unit spine.
+const TIP_TOLERANCE: f32 = 0.02;
+
+impl EditCommand for SetBoneLength {
+    fn apply(&mut self, doc: &mut Document) {
+        let Some(bone) = doc.skeleton.bones.get(self.bone) else {
+            return;
+        };
+        let old = bone.length;
+        if self.before.is_none() {
+            let mut moved = Vec::new();
+            if self.carry_children {
+                let tolerance = (old.abs() * TIP_TOLERANCE).max(1e-4);
+                for (id, child) in doc.skeleton.bones.iter() {
+                    if child.parent != Some(self.bone) {
+                        continue;
+                    }
+                    // Children live in the parent's local space, where the tip
+                    // is `(length, 0)`, so "at the tip" is a comparison against
+                    // the old length on the x axis alone.
+                    let position = child.local_transform.position;
+                    if (position.x - old).abs() <= tolerance {
+                        moved.push((id, position));
+                    }
+                }
+            }
+            self.before = Some((old, moved));
+        }
+
+        if let Some(bone) = doc.skeleton.bones.get_mut(self.bone) {
+            bone.length = self.after;
+        }
+        // Re-read rather than reuse the list from the first apply: a merged drag
+        // calls `apply` repeatedly, and each pass must place the children at the
+        // *current* target length.
+        if self.carry_children {
+            let carried: Vec<BoneId> = self
+                .before
+                .as_ref()
+                .map(|(_, moved)| moved.iter().map(|(id, _)| *id).collect())
+                .unwrap_or_default();
+            for id in carried {
+                if let Some(child) = doc.skeleton.bones.get_mut(id) {
+                    child.local_transform.position.x = self.after;
+                }
+            }
+        }
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        let Some((length, moved)) = self.before.take() else {
+            return;
+        };
+        if let Some(bone) = doc.skeleton.bones.get_mut(self.bone) {
+            bone.length = length;
+        }
+        for (id, position) in moved {
+            if let Some(child) = doc.skeleton.bones.get_mut(id) {
+                child.local_transform.position = position;
+            }
+        }
+    }
+
+    fn merge(&mut self, next: &dyn EditCommand) -> bool {
+        let Some(other) = next.as_any().downcast_ref::<SetBoneLength>() else {
+            return false;
+        };
+        // Same bone and same carry decision, or the two are different edits: a
+        // drag that started carrying children and ended not carrying them cannot
+        // be collapsed into one undo without losing which it was.
+        if other.bone != self.bone || other.carry_children != self.carry_children {
+            return false;
+        }
+        self.after = other.after;
+        true
+    }
+
+    fn label(&self) -> &str {
+        "Set Bone Length"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,6 +848,98 @@ mod tests {
         let mid = doc.skeleton.add_bone(bone("b_mid", Some(root)));
         let leaf = doc.skeleton.add_bone(bone("c_leaf", Some(mid)));
         (root, mid, leaf)
+    }
+
+    /// A parent, a child at its tip, and a child parked halfway down it.
+    fn parent_with_children(doc: &mut Document) -> (BoneId, BoneId, BoneId) {
+        let parent = doc.skeleton.add_bone(bone("upper_arm", None));
+        let at_tip = doc.skeleton.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(10.0, 0.0),
+                ..Transform::default()
+            },
+            ..bone("elbow", Some(parent))
+        });
+        let midway = doc.skeleton.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(5.0, 0.0),
+                ..Transform::default()
+            },
+            ..bone("strap", Some(parent))
+        });
+        (parent, at_tip, midway)
+    }
+
+    /// The T-907 case: lengthening a bone takes the child at its tip along, and
+    /// leaves one deliberately placed elsewhere alone.
+    #[test]
+    fn setting_a_length_carries_the_child_at_the_tip() {
+        let mut doc = Document::new();
+        let (parent, at_tip, midway) = parent_with_children(&mut doc);
+        let mut history = History::default();
+
+        history.push(Box::new(SetBoneLength::new(parent, 25.0, true)), &mut doc);
+
+        assert_eq!(doc.skeleton.bones[parent].length, 25.0);
+        assert_eq!(
+            doc.skeleton.bones[at_tip].local_transform.position.x, 25.0,
+            "the elbow follows the tip"
+        );
+        assert_eq!(
+            doc.skeleton.bones[midway].local_transform.position.x, 5.0,
+            "a bone parked mid-parent was put there on purpose"
+        );
+
+        history.undo(&mut doc);
+        assert_eq!(doc.skeleton.bones[parent].length, 10.0);
+        assert_eq!(
+            doc.skeleton.bones[at_tip].local_transform.position.x, 10.0,
+            "undo restores the child too, in one step"
+        );
+    }
+
+    /// Opting out leaves every child exactly where it was.
+    #[test]
+    fn a_length_change_can_decline_to_carry_children() {
+        let mut doc = Document::new();
+        let (parent, at_tip, _) = parent_with_children(&mut doc);
+        let mut history = History::default();
+
+        history.push(Box::new(SetBoneLength::new(parent, 25.0, false)), &mut doc);
+
+        assert_eq!(doc.skeleton.bones[parent].length, 25.0);
+        assert_eq!(
+            doc.skeleton.bones[at_tip].local_transform.position.x, 10.0,
+            "the child stayed put"
+        );
+    }
+
+    /// A drag is one undo step, and it reverts to where the drag *began*.
+    ///
+    /// The merge is what makes that true: without it a drag across twenty frames
+    /// is twenty undos, and with a naive one the child's saved position would be
+    /// overwritten each frame and undo would land mid-drag.
+    #[test]
+    fn dragging_a_length_merges_into_one_undo() {
+        let mut doc = Document::new();
+        let (parent, at_tip, _) = parent_with_children(&mut doc);
+        let mut history = History::default();
+
+        for length in [12.0, 18.0, 30.0] {
+            history.push(Box::new(SetBoneLength::new(parent, length, true)), &mut doc);
+        }
+        assert_eq!(doc.skeleton.bones[parent].length, 30.0);
+        assert_eq!(doc.skeleton.bones[at_tip].local_transform.position.x, 30.0);
+
+        history.undo(&mut doc);
+        assert_eq!(
+            doc.skeleton.bones[parent].length, 10.0,
+            "one undo returns to before the drag"
+        );
+        assert_eq!(
+            doc.skeleton.bones[at_tip].local_transform.position.x, 10.0,
+            "and the child with it"
+        );
     }
 
     #[test]

@@ -68,7 +68,35 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
 
     section_header(ui, crate::ui::icons::BONE, &bone_name);
     ui.add_space(2.0);
-    info_row(ui, "Length", &format!("{:.2}", bone_len));
+    // Length is editable (T-907), and editing it brings any child sitting at the
+    // tip along. Held with Alt it does not — for a child deliberately parked
+    // mid-bone, or for resizing a bone purely to change how big its gizmo draws.
+    {
+        let editable = state.session.can_edit_structure();
+        let mut length = bone_len;
+        ui.horizontal(|ui| {
+            ui.add_sized([LABEL_W, FIELD_H], egui::Label::new("Length"));
+            let carry = !ui.input(|i| i.modifiers.alt);
+            let changed = ui
+                .add_enabled(
+                    editable,
+                    egui::DragValue::new(&mut length)
+                        .speed(0.5)
+                        .range(0.0..=f32::MAX),
+                )
+                .on_hover_text(
+                    "How long the bone draws, and where its tip sits.\n\
+                     Children at the tip follow — hold Alt to leave them where \
+                     they are.",
+                )
+                .changed();
+            if changed {
+                state.dispatch(Box::new(crate::commands::bone_cmds::SetBoneLength::new(
+                    bone_id, length, carry,
+                )));
+            }
+        });
+    }
     if let Some(p) = &parent_name {
         info_row(ui, "Parent", p);
     }
