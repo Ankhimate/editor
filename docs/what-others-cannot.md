@@ -21,10 +21,25 @@ constraint over as many bones as you like.
 
 The objection is real, not an excuse: three or more bones have infinitely many
 solutions for a given target, so a solver has to be told which one you want.
-Spine answers by refusing. We answer with FABRIK for the solve and
-**`bend_direction`** for the ambiguity — it picks the side the chain converges
-from, and it is the control that makes a long chain predictable instead of
-floppy. It is the "Flip bend" checkbox in the IK inspector.
+Spine answers by refusing. We answer by seeding the solve with a **circular
+arc** from the root to the target — the shape whose bend is spread evenly over
+its whole length — and letting FABRIK converge to the nearest solution to that.
+**`bend_direction`** ("Flip bend" in the IK inspector) picks which side the arc
+curves to.
+
+The seed is the whole trick, and getting it wrong does not produce a wrong
+answer — it produces a valid one that looks broken. Seeded from the pose as
+authored, an eight-bone tentacle reaching a nearby target came out as seven
+straight bones and one 96° kink: correct lengths, tip exactly on target, nothing
+like a tentacle. `a_long_chain_distributes_its_bend` in `core/src/pose.rs` pins
+the shape, not just the reach.
+
+**Where it is still weaker than a two-bone solver.** At 99%+ of full extension
+the arc is nearly degenerate and the tip can sit a fraction of a unit short —
+about 0.15% of chain length on the shipped tentacle. Spine's closed-form two-bone
+solution has no such case: it is exact everywhere, every time, with no iteration.
+For an arm or a leg that determinism is worth more than the extra bones, and
+their cap is a defensible trade rather than a missing feature.
 
 **Try it:** open `samples/tentacle.ankh` and drag `tentacle-target`. Eight bones,
 one constraint. Play the `curl` animation — it keys only the target.
