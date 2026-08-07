@@ -436,6 +436,53 @@ mod tests {
         }
     }
 
+    /// Typed coordinates align a group of vertices on one axis (T-902).
+    ///
+    /// The gesture the inspector's position fields perform with several vertices
+    /// picked: set one axis on all of them, leave the other alone. It is how a
+    /// row is made *exactly* straight rather than straight-looking, which is the
+    /// thing dragging cannot do.
+    #[test]
+    fn setting_one_axis_aligns_a_group_without_touching_the_other() {
+        let (mut doc, skin, slot) = doc_with_mesh();
+        let before = mesh_of(&doc, skin, slot);
+        assert!(before.setup_vertices.len() >= 4, "quad mesh");
+
+        // Align every vertex to x = 7, keeping each one's own y.
+        let moves: Vec<(usize, glam::Vec2)> = before
+            .setup_vertices
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, glam::vec2(7.0, v.y)))
+            .collect();
+        let mut history = History::default();
+        history.push(
+            Box::new(EditMesh::new(
+                skin,
+                slot,
+                "art".to_string(),
+                MeshEdit::MoveVertices(moves),
+            )),
+            &mut doc,
+        );
+
+        let after = mesh_of(&doc, skin, slot);
+        for (i, vertex) in after.setup_vertices.iter().enumerate() {
+            assert!((vertex.x - 7.0).abs() < 1e-5, "vertex {i} did not align");
+            assert!(
+                (vertex.y - before.setup_vertices[i].y).abs() < 1e-5,
+                "vertex {i} moved on the axis that was not edited"
+            );
+        }
+
+        history.undo(&mut doc);
+        let reverted = mesh_of(&doc, skin, slot);
+        assert_eq!(
+            reverted.setup_vertices, before.setup_vertices,
+            "one undo restores every vertex"
+        );
+    }
+
     /// T-401 acceptance: a quad becomes a mesh, gains a vertex, and round-trips
     /// back to a region on undo.
     #[test]

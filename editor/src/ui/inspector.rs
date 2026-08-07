@@ -1233,6 +1233,304 @@ fn path_constraint_inspector(
 /// twitch in one frame of an animation. So: the numbers, editable, with the
 /// stray removable.
 ///
+/// Type a polygon vertex's position, and align a group of them (T-902).
+///
+/// The clipping / bounding-box counterpart to [`vertex_coordinates`], sharing
+/// its rules: blank where the selection disagrees, and typing sets that axis on
+/// every picked vertex. Separate because these store their points on the
+/// attachment rather than in a mesh and edit through `ClipEdit`; the alternative
+/// was one function branching on attachment kind at every step, which reads worse
+/// than two that each do one thing.
+fn polygon_coordinates(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    skin: ankhimate_core::ids::SkinId,
+    slot_id: ankhimate_core::ids::SlotId,
+    name: &str,
+    vertices: &[glam::Vec2],
+    is_bounding_box: bool,
+) {
+    let selected: Vec<usize> = state.session.selected_vertices.clone();
+    if selected.is_empty() {
+        return;
+    }
+    let points: Vec<(usize, glam::Vec2)> = selected
+        .iter()
+        .filter_map(|&i| vertices.get(i).map(|v| (i, *v)))
+        .collect();
+    if points.is_empty() {
+        return;
+    }
+
+    let common = |axis: fn(glam::Vec2) -> f32| {
+        let first = axis(points[0].1);
+        points
+            .iter()
+            .all(|(_, v)| (axis(*v) - first).abs() < 1e-4)
+            .then_some(first)
+    };
+    let setup = state.session.can_edit_structure();
+    let mut edit: Option<Vec<(usize, glam::Vec2)>> = None;
+
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(if points.len() == 1 {
+            format!("Position · vertex {}", points[0].0)
+        } else {
+            format!("Position · {} vertices", points.len())
+        })
+        .size(11.0)
+        .strong(),
+    );
+
+    let mut axis_row = |ui: &mut egui::Ui, label: &str, shared: Option<f32>, is_x: bool| {
+        ui.horizontal(|ui| {
+            ui.add_sized([LABEL_W, FIELD_H], egui::Label::new(label));
+            let mut value = shared.unwrap_or(0.0);
+            let widget = egui::DragValue::new(&mut value)
+                .speed(0.25)
+                .custom_formatter(|n, _| {
+                    if shared.is_some() {
+                        format!("{n:.2}")
+                    } else {
+                        "—".to_string()
+                    }
+                });
+            if ui
+                .add_enabled(setup, widget)
+                .on_hover_text(if points.len() > 1 {
+                    "Sets this axis on every selected vertex"
+                } else {
+                    "The vertex's position in the attachment's local space"
+                })
+                .changed()
+            {
+                edit = Some(
+                    points
+                        .iter()
+                        .map(|(i, v)| {
+                            let mut moved = *v;
+                            if is_x {
+                                moved.x = value;
+                            } else {
+                                moved.y = value;
+                            }
+                            (*i, moved)
+                        })
+                        .collect(),
+                );
+            }
+        });
+    };
+    axis_row(ui, "X", common(|v| v.x), true);
+    axis_row(ui, "Y", common(|v| v.y), false);
+
+    if let Some(moves) = edit {
+        let edit = crate::commands::clip_cmds::ClipEdit::MoveVertices(moves);
+        if is_bounding_box {
+            state.dispatch(Box::new(crate::commands::clip_cmds::EditBoundingBox::new(
+                skin,
+                slot_id,
+                name.to_string(),
+                edit,
+            )));
+        } else {
+            state.dispatch(Box::new(crate::commands::clip_cmds::EditClip::new(
+                skin,
+                slot_id,
+                name.to_string(),
+                edit,
+            )));
+        }
+    }
+}
+
+/// Type a mesh vertex's position, and align a group of them (T-902).
+///
+/// Every point in a mesh was draggable and nothing else — no way to say "put it
+/// at exactly 64, 0", and no way to make a row of vertices genuinely collinear
+/// rather than collinear-looking. Dragging is right for shaping a silhouette and
+/// wrong for anything that has to line up: a seam between two meshes, a hem that
+/// must sit flat, a vertex mirrored to a known coordinate.
+///
+/// With several vertices picked the fields show a value only where they already
+/// agree, and typing one **sets that axis on all of them** — which is the align
+/// gesture, and the reason multi-select is worth supporting here rather than
+/// bailing out the way [`influence_list`] does. Blank means "these differ";
+/// editing it is still a set, so the field never lies about what it will do.
+fn vertex_coordinates(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    skin: ankhimate_core::ids::SkinId,
+    slot_id: ankhimate_core::ids::SlotId,
+    name: &str,
+) {
+    use ankhimate_core::attachment::Attachment;
+
+    let selected: Vec<usize> = state.session.selected_vertices.clone();
+    if selected.is_empty() {
+        return;
+    }
+    let Some(Attachment::Mesh(mesh)) = state.doc.skeleton.skins[skin].get(slot_id, name) else {
+        return;
+    };
+    let points: Vec<(usize, glam::Vec2)> = selected
+        .iter()
+        .filter_map(|&i| mesh.setup_vertices.get(i).map(|v| (i, *v)))
+        .collect();
+    if points.is_empty() {
+        return;
+    }
+
+    // A shared value, or `None` when they disagree. Compared with a tolerance
+    // rather than exactly: vertices dragged onto a common edge are equal to the
+    // eye and differ in the last bits, and showing that as "mixed" would be
+    // technically true and useless.
+    let common = |axis: fn(glam::Vec2) -> f32| {
+        let first = axis(points[0].1);
+        points
+            .iter()
+            .all(|(_, v)| (axis(*v) - first).abs() < 1e-4)
+            .then_some(first)
+    };
+    let shared_x = common(|v| v.x);
+    let shared_y = common(|v| v.y);
+
+    let setup = state.session.can_edit_structure();
+    let mut edit: Option<Vec<(usize, glam::Vec2)>> = None;
+
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(if points.len() == 1 {
+            format!("Position · vertex {}", points[0].0)
+        } else {
+            format!("Position · {} vertices", points.len())
+        })
+        .size(11.0)
+        .strong(),
+    );
+
+    let mut axis_row = |ui: &mut egui::Ui, label: &str, shared: Option<f32>, is_x: bool| {
+        ui.horizontal(|ui| {
+            ui.add_sized([LABEL_W, FIELD_H], egui::Label::new(label));
+            let mut value = shared.unwrap_or(0.0);
+            let widget = egui::DragValue::new(&mut value)
+                .speed(0.25)
+                // Blank rather than 0 when they disagree: a zero would read as a
+                // measurement, and typing over it is how you align them.
+                .custom_formatter(|n, _| {
+                    if shared.is_some() {
+                        format!("{n:.2}")
+                    } else {
+                        "—".to_string()
+                    }
+                });
+            if ui
+                .add_enabled(setup, widget)
+                .on_hover_text(if points.len() > 1 {
+                    "Sets this axis on every selected vertex — how a row is made \
+                     exactly straight"
+                } else {
+                    "The vertex's position in the mesh's local space"
+                })
+                .changed()
+            {
+                edit = Some(
+                    points
+                        .iter()
+                        .map(|(i, v)| {
+                            let mut moved = *v;
+                            if is_x {
+                                moved.x = value;
+                            } else {
+                                moved.y = value;
+                            }
+                            (*i, moved)
+                        })
+                        .collect(),
+                );
+            }
+        });
+    };
+    axis_row(ui, "X", shared_x, true);
+    axis_row(ui, "Y", shared_y, false);
+
+    // UVs, same treatment. They are draggable in the UV editor and were
+    // otherwise unaddressable, which matters more here than for positions: a UV
+    // has a *correct* value read off an atlas, and eyeballing it to within a
+    // pixel is not the same as typing it.
+    let uvs: Vec<(usize, glam::Vec2)> = points
+        .iter()
+        .filter_map(|(i, _)| mesh.uvs.get(*i).map(|uv| (*i, *uv)))
+        .collect();
+    if !uvs.is_empty() {
+        let common_uv = |axis: fn(glam::Vec2) -> f32| {
+            let first = axis(uvs[0].1);
+            uvs.iter()
+                .all(|(_, v)| (axis(*v) - first).abs() < 1e-5)
+                .then_some(first)
+        };
+        let mut uv_edit: Option<Vec<(usize, glam::Vec2)>> = None;
+        ui.add_space(4.0);
+        let mut uv_row = |ui: &mut egui::Ui, label: &str, shared: Option<f32>, is_u: bool| {
+            ui.horizontal(|ui| {
+                ui.add_sized([LABEL_W, FIELD_H], egui::Label::new(label));
+                let mut value = shared.unwrap_or(0.0);
+                let widget = egui::DragValue::new(&mut value)
+                    .speed(0.002)
+                    // Normalised texture coordinates: outside 0..1 samples off
+                    // the atlas page, which is never what a typed value means.
+                    .range(0.0..=1.0)
+                    .custom_formatter(|n, _| {
+                        if shared.is_some() {
+                            format!("{n:.4}")
+                        } else {
+                            "—".to_string()
+                        }
+                    });
+                if ui
+                    .add_enabled(setup, widget)
+                    .on_hover_text("Texture coordinate, 0–1 across the atlas page")
+                    .changed()
+                {
+                    uv_edit = Some(
+                        uvs.iter()
+                            .map(|(i, v)| {
+                                let mut moved = *v;
+                                if is_u {
+                                    moved.x = value;
+                                } else {
+                                    moved.y = value;
+                                }
+                                (*i, moved)
+                            })
+                            .collect(),
+                    );
+                }
+            });
+        };
+        uv_row(ui, "U", common_uv(|v| v.x), true);
+        uv_row(ui, "V", common_uv(|v| v.y), false);
+        if let Some(moves) = uv_edit {
+            state.dispatch(Box::new(crate::commands::mesh_cmds::EditMesh::new(
+                skin,
+                slot_id,
+                name.to_string(),
+                crate::commands::mesh_cmds::MeshEdit::MoveUvs(moves),
+            )));
+        }
+    }
+
+    if let Some(moves) = edit {
+        state.dispatch(Box::new(crate::commands::mesh_cmds::EditMesh::new(
+            skin,
+            slot_id,
+            name.to_string(),
+            crate::commands::mesh_cmds::MeshEdit::MoveVertices(moves),
+        )));
+    }
+}
+
 /// Shown for a single selected vertex. Multi-select would have to average or
 /// list every combination, and neither reads as an answer.
 fn influence_list(
@@ -1884,6 +2182,7 @@ fn attachment_inspector(
                 )));
             }
         });
+        vertex_coordinates(ui, state, skin, slot_id, &name);
         influence_list(ui, state, skin, slot_id, &name);
         return;
     }
@@ -1891,6 +2190,7 @@ fn attachment_inspector(
     // Bounding boxes: the same polygon editor a clip uses, plus what makes them
     // different — whether they follow one bone or several.
     if let Some(Attachment::BoundingBox(bb)) = state.doc.skeleton.skins[skin].get(slot_id, &name) {
+        let points = bb.vertices.clone();
         let vertices = bb.vertices.len();
         let skinned = !bb.weights.is_empty();
         ui.add_space(10.0);
@@ -1929,6 +2229,7 @@ fn attachment_inspector(
             .size(10.5)
             .color(ui.visuals().weak_text_color()),
         );
+        polygon_coordinates(ui, state, skin, slot_id, &name, &points, true);
         return;
     }
 
@@ -1983,6 +2284,7 @@ fn attachment_inspector(
 
     // Clipping attachments (T-405): a polygon and the range of slots it masks.
     if let Some(Attachment::Clipping(clip)) = state.doc.skeleton.skins[skin].get(slot_id, &name) {
+        let points = clip.vertices.clone();
         let vertices = clip.vertices.len();
         let end_slot = clip.end_slot.clone();
         ui.add_space(10.0);
@@ -2047,6 +2349,7 @@ fn attachment_inspector(
                 crate::commands::clip_cmds::ClipEdit::SetEndSlot(end),
             )));
         }
+        polygon_coordinates(ui, state, skin, slot_id, &name, &points, false);
         return;
     }
 
