@@ -16,11 +16,13 @@ no runtime licence to buy, no copyleft to inherit.
 
 - **Setup and Animate modes** — structural edits belong to Setup, poses to
   Animate. The editor refuses the wrong one rather than quietly corrupting a rig.
-- **Bones** — hierarchy, FK, 2-bone IK, translate/rotate/scale/shear gizmos.
+- **Bones** — hierarchy, FK, translate/rotate/scale/shear gizmos, and IK chains
+  of **any length** (FABRIK), not the two most editors cap at.
 - **Slots, attachments and skins** — art is addressed through slots, so one
   skeleton drives many outfits.
 - **Meshes** — convert a region to a mesh, edit vertices, trace a silhouette
-  from the artwork's alpha, paint bone weights.
+  from the artwork's alpha, and paint bone weights with a real brush — radius,
+  feather, five blend modes, per-bone locking.
 - **Animation** — dopesheet, bezier interpolation, transform timelines, and
   free-form deform (FFD) timelines.
 - **Files** — `.ankh` projects (a zip of `project.json` + images) and image import.
@@ -65,6 +67,17 @@ cargo run -p ankhimate-editor                          # then open it
 
 See [`docs/rigging-walkthrough.md`](docs/rigging-walkthrough.md).
 
+An eight-bone IK chain, which a two-bone solver cannot express at all — drag
+`tentacle-target` and the whole thing curls:
+
+```bash
+cargo run -p ankhimate-formats --example gen_tentacle   # writes samples/tentacle.ankh
+```
+
+[`docs/what-others-cannot.md`](docs/what-others-cannot.md) is the short, honest
+list of where this goes further than the established editors — and where it does
+not.
+
 ## Contributing
 
 Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). Work is
@@ -100,4 +113,5 @@ runtime does not use.
 - [`docs/ARCHITECTURE_PLAN.md`](docs/ARCHITECTURE_PLAN.md) — normative architecture & roadmap
 - [`docs/TASKS.md`](docs/TASKS.md) — task breakdown and current status
 - [`docs/rigging-walkthrough.md`](docs/rigging-walkthrough.md) — how a rig is put together
+- [`docs/what-others-cannot.md`](docs/what-others-cannot.md) — where this goes past the established editors, and where it does not
 - [`docs/adr/`](docs/adr/) — architecture decision records

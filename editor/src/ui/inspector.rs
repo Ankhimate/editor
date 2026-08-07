@@ -764,7 +764,11 @@ fn ik_inspector(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_core
             let mut flipped = next.bend_direction < 0.0;
             if ui
                 .add_enabled(setup, egui::Checkbox::new(&mut flipped, "Flip bend"))
-                .on_hover_text("Which way the chain's elbow points")
+                .on_hover_text(
+                    "Which way the chain bends.\nOn a chain of three or more \
+                     this is what makes it predictable: a long chain has many \
+                     ways to reach the same target, and this picks the side.",
+                )
                 .changed()
             {
                 next.bend_direction = if flipped { -1.0 } else { 1.0 };
@@ -789,10 +793,15 @@ fn ik_inspector(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_core
     };
     if ui
         .add_enabled(can_create, egui::Button::new(label).small())
+        // The "any length" is not padding. Every other 2D editor caps IK at two
+        // bones, so a rigger arriving from one assumes the cap is universal and
+        // never selects a third — the capability is invisible unless the button
+        // says so. See docs/what-others-cannot.md.
         .on_hover_text(
             "Make a target bone at the chain's tip and an IK constraint that \
              reaches for it.\nSelect several bones (shift-click in the Hierarchy) \
-             to build a longer chain.",
+             to build a longer chain — any length, not just two.\nUse Flip bend \
+             to choose which way a long chain curls.",
         )
         .clicked()
         && let Some(&tip) = chain.last()
