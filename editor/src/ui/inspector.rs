@@ -775,6 +775,27 @@ fn ik_inspector(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_core
             }
         });
 
+        // Only 3+ bone chains have a seed to prefer: one and two bones are
+        // solved exactly, with nothing to iterate from. Showing a dead slider on
+        // an arm would invite tuning something that does nothing.
+        if next.bones.len() > 2 {
+            ui.horizontal(|ui| {
+                ui.label("Stiffness");
+                ui.add_enabled(
+                    setup,
+                    egui::Slider::new(&mut next.stiffness, 0.0..=1.0).fixed_decimals(2),
+                )
+                .on_hover_text(
+                    "How much the chain keeps the pose it is in.\n\
+                     0 — spread the bend evenly along the whole chain. \
+                     A tentacle, a tail, a rope.\n\
+                     1 — hold the posed shape and move only what must move. \
+                     A hand-posed spine, or a chain with keys you do not want \
+                     the solver rewriting.",
+                );
+            });
+        }
+
         if next != *props {
             edit = Some((*id, next));
         }

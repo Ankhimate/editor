@@ -34,12 +34,37 @@ straight bones and one 96° kink: correct lengths, tip exactly on target, nothin
 like a tentacle. `a_long_chain_distributes_its_bend` in `core/src/pose.rs` pins
 the shape, not just the reach.
 
-**Where it is still weaker than a two-bone solver.** At 99%+ of full extension
-the arc is nearly degenerate and the tip can sit a fraction of a unit short —
-about 0.15% of chain length on the shipped tentacle. Spine's closed-form two-bone
-solution has no such case: it is exact everywhere, every time, with no iteration.
-For an arm or a leg that determinism is worth more than the extra bones, and
-their cap is a defensible trade rather than a missing feature.
+**You get both solvers, picked by chain length — there is no setting.**
+
+| Chain | Solver | Exact? |
+|---|---|---|
+| 1 bone | aim | yes |
+| 2 bones | closed-form trigonometry | yes |
+| 3+ bones | FABRIK, arc-seeded | converges |
+
+One and two bones take the exact path — the *same* method Spine uses, with the
+same determinism. FABRIK only runs where trigonometry has no answer to give.
+
+This is deliberately not a user-facing choice. At every chain length one of these
+is simply correct, so a "solver" dropdown could only ever be set wrong.
+
+**Stiffness** is the one thing that *is* a preference, so it is a slider — per
+constraint, on 3+ bone chains only:
+
+* **0** — spread the bend evenly along the whole chain. A tentacle, a tail, a
+  rope.
+* **1** — hold the posed shape and move only what has to. A hand-posed spine, or
+  a chain carrying keys you do not want the solver rewriting every frame.
+
+Both are correct solves. Which one you want depends on what the chain *is*, which
+is why it is asked rather than assumed.
+
+**Where the iterative path is weaker.** Past ~99% of full extension the seeding
+arc is nearly degenerate and the tip can fall a fraction of a unit short — about
+0.15% of chain length on the shipped tentacle. That case cannot arise on an arm
+or a leg, which never reach the iterative solver at all. Spine's two-bone cap is
+a defensible engineering trade for the rigs it covers, not a missing feature;
+what it costs them is the rigs it does not cover.
 
 **Try it:** open `samples/tentacle.ankh` and drag `tentacle-target`. Eight bones,
 one constraint. Play the `curl` animation — it keys only the target.

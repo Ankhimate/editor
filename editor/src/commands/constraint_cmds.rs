@@ -398,6 +398,8 @@ pub struct IkProps {
     pub softness: f32,
     pub stretch: bool,
     pub stretch_limit: f32,
+    /// Long-chain seed preference; see `IkConstraint::stiffness`.
+    pub stiffness: f32,
 }
 
 impl IkProps {
@@ -410,6 +412,7 @@ impl IkProps {
             softness: ik.softness,
             stretch: ik.stretch,
             stretch_limit: ik.stretch_limit,
+            stiffness: ik.stiffness,
         }
     }
 
@@ -421,6 +424,7 @@ impl IkProps {
         ik.softness = self.softness;
         ik.stretch = self.stretch;
         ik.stretch_limit = self.stretch_limit;
+        ik.stiffness = self.stiffness;
     }
 }
 
@@ -923,6 +927,7 @@ mod order_tests {
                     softness: 0.0,
                     stretch: false,
                     stretch_limit: 1.1,
+                    stiffness: 0.0,
                 }))
             })
             .collect();
@@ -961,6 +966,7 @@ mod order_tests {
                 softness: 0.0,
                 stretch: false,
                 stretch_limit: 1.1,
+                stiffness: 0.0,
             }));
         doc.skeleton.constraints.remove(ghost);
 

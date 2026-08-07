@@ -502,6 +502,7 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
             softness: 0.0,
             stretch: false,
             stretch_limit: 1.1,
+            stiffness: 0.0,
         }));
         summary.constraints += 1;
     }

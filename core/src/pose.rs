@@ -15,7 +15,7 @@
 
 use crate::animation::{self, Animation, Timeline};
 use crate::constraints::{
-    Constraint, IkConstraint, soften_target, solve_aim, solve_fabrik, solve_two_bone_ik,
+    Constraint, IkConstraint, soften_target, solve_aim, solve_fabrik_stiff, solve_two_bone_ik,
     stretch_factor,
 };
 use crate::ids::{BoneId, ConstraintId, SlotId};
@@ -1056,7 +1056,13 @@ fn apply_fabrik(
         return;
     }
 
-    let mut solved = solve_fabrik(&joints, &lengths, target_pos, ik.bend_direction);
+    let mut solved = solve_fabrik_stiff(
+        &joints,
+        &lengths,
+        target_pos,
+        ik.bend_direction,
+        ik.stiffness,
+    );
     // Reaching the target is one constraint; which way the knee breaks is
     // another, and only the second is a matter of taste the rig has to state.
     crate::constraints::enforce_bend(&mut solved, ik.bend_direction);
@@ -2299,6 +2305,66 @@ mod tests {
         assert!(
             worst < mean * 2.5,
             "one joint took {worst:.1}° against a {mean:.1}° mean: {turns:?}"
+        );
+    }
+
+    /// Stiffness decides whether a long chain re-spreads its bend or keeps the
+    /// pose it was put in.
+    ///
+    /// Both answers are correct solves — same lengths, same target — so this
+    /// asserts the *difference* rather than either shape. A slider that changed
+    /// nothing would pass every reach-and-length test there is.
+    #[test]
+    fn stiffness_trades_spreading_for_keeping_the_pose() {
+        use crate::constraints::solve_fabrik_stiff;
+
+        let lengths = [20.0f32, 18.0, 16.0, 14.0, 12.0];
+        // A chain already posed with all its bend at the base — the shape a
+        // stiff solve has to preserve and a slack one has to redistribute.
+        let mut joints = vec![glam::Vec2::ZERO];
+        let mut angle: f32 = 0.0;
+        for (i, &length) in lengths.iter().enumerate() {
+            angle += if i == 0 { 0.9 } else { 0.0 };
+            joints.push(joints[i] + glam::vec2(angle.cos(), angle.sin()) * length);
+        }
+        let target = glam::vec2(38.0, 30.0);
+
+        let spread = solve_fabrik_stiff(&joints, &lengths, target, 1.0, 0.0);
+        let kept = solve_fabrik_stiff(&joints, &lengths, target, 1.0, 1.0);
+
+        // Both must actually solve, or the comparison is between two failures.
+        for (label, solved) in [("spread", &spread), ("kept", &kept)] {
+            for (i, &length) in lengths.iter().enumerate() {
+                let got = (solved[i + 1] - solved[i]).length();
+                assert!(
+                    (got - length).abs() < 1e-2,
+                    "{label} stretched segment {i} to {got}"
+                );
+            }
+        }
+
+        // How unevenly the bend is distributed, as the spread of per-joint turns.
+        let unevenness = |solved: &Vec<glam::Vec2>| {
+            let turns: Vec<f32> = solved
+                .windows(3)
+                .map(|w| {
+                    let a = (w[1] - w[0]).normalize();
+                    let b = (w[2] - w[1]).normalize();
+                    a.perp_dot(b).atan2(a.dot(b)).abs()
+                })
+                .collect();
+            let mean = turns.iter().sum::<f32>() / turns.len() as f32;
+            turns
+                .iter()
+                .fold(0.0f32, |acc, t| acc.max((t - mean).abs()))
+        };
+
+        assert!(
+            unevenness(&spread) < unevenness(&kept),
+            "stiffness 0 should spread the bend more evenly than stiffness 1 \
+             (spread {:.3} vs kept {:.3})",
+            unevenness(&spread),
+            unevenness(&kept)
         );
     }
 

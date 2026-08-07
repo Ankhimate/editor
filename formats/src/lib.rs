@@ -309,6 +309,7 @@ mod tests {
             softness: 0.0,
             stretch: false,
             stretch_limit: 1.1,
+            stiffness: 0.0,
         }));
         let mut cape = Skin::new("cape");
         cape.bones.push(arm);
