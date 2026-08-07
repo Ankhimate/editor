@@ -555,6 +555,49 @@ mod tests {
         assert_eq!(json1, json2, "round trip is a fixed point");
     }
 
+    /// The N-bone IK sample. Regenerate with the `gen_tentacle` example.
+    const TENTACLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../samples/tentacle.ankh");
+
+    /// The shipped sample really does carry a chain longer than two bones, and
+    /// the chain really does reach (T-908).
+    ///
+    /// Both halves matter. The sample exists to show a capability every other
+    /// editor lacks, so a version of it that loads but does not solve — or that
+    /// quietly lost bones off its chain in a schema change — would advertise the
+    /// opposite of what it is for.
+    #[test]
+    fn the_tentacle_sample_ships_a_long_ik_chain_that_reaches() {
+        let (doc, _) = load(std::path::Path::new(TENTACLE)).unwrap();
+        assert!(doc.report.is_clean(), "sample loads cleanly");
+
+        let ik = doc
+            .skeleton
+            .constraints
+            .values()
+            .find_map(|c| match c {
+                ankhimate_core::constraints::Constraint::Ik(ik) => Some(ik),
+                _ => None,
+            })
+            .expect("sample has an IK constraint");
+        assert!(
+            ik.bones.len() > 2,
+            "the whole point is a chain no two-bone solver can express, got {}",
+            ik.bones.len()
+        );
+
+        let mut pose = ankhimate_core::pose::Pose::new();
+        ankhimate_core::pose::evaluate(&doc.skeleton, &[], &mut pose);
+
+        // The target is inside the chain's reach by construction, so the tip
+        // should arrive at it rather than merely point that way.
+        let tip = pose.world_tip(&doc.skeleton, *ik.bones.last().unwrap());
+        let goal = pose.world_position(ik.target);
+        assert!(
+            (tip - goal).length() < 1.0,
+            "tip {tip:?} should reach target {goal:?}"
+        );
+    }
+
     #[test]
     fn unknown_top_level_field_survives_round_trip() {
         // The golden carries a hand-added `editor_note` the schema does not know.
