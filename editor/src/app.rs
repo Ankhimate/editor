@@ -1027,6 +1027,44 @@ impl eframe::App for AnkhimateApp {
             );
         }
 
+        // ── Startup page (T-304) ─────────────────────────────────────────
+        // Drawn *instead of* the workspace, not over it. A launcher floating on
+        // a fully-drawn editor showed a new user a busy tool they had not asked
+        // for yet, half-visible around the dialog's edges. Taking the whole
+        // central area states the truth: nothing is open, and this is where you
+        // choose. The title bar stays so the window controls do.
+        if self.show_startup {
+            let mut choice = crate::ui::startup::StartupChoice::None;
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::NONE
+                        .fill(self.theme.window_background())
+                        .inner_margin(egui::Margin::same(24)),
+                )
+                .show(ctx, |ui| {
+                    choice = crate::ui::startup::ui(ui, &mut self.config);
+                });
+            match choice {
+                crate::ui::startup::StartupChoice::None => {}
+                crate::ui::startup::StartupChoice::NewProject => {
+                    file_action = Some(FileAction::New);
+                    self.show_startup = false;
+                }
+                crate::ui::startup::StartupChoice::OpenDialog => {
+                    file_action = Some(FileAction::Open);
+                    self.show_startup = false;
+                }
+                crate::ui::startup::StartupChoice::Open(path) => {
+                    file_action = Some(FileAction::OpenPath(path));
+                    self.show_startup = false;
+                }
+            }
+            // The workspace does not run at all this frame — no tool rail, no
+            // tiles, no panes. Anything queued above still resolves below.
+            self.resolve_frame(file_action, trigger_undo, trigger_redo);
+            return;
+        }
+
         // The tool rail. Vertical and on the left because tools are chosen with
         // the pointer already over the viewport — a horizontal strip at the top
         // is the longest trip from where the hand is.
@@ -1145,36 +1183,7 @@ impl eframe::App for AnkhimateApp {
             self.show_settings = open;
         }
 
-        // ── Startup window (T-304) ───────────────────────────────────────
-        // Drawn last so it sits over the editor, which stays usable behind it.
-        if self.show_startup {
-            match crate::ui::startup::ui(ctx, &mut self.config, &self.theme) {
-                crate::ui::startup::StartupChoice::None => {}
-                crate::ui::startup::StartupChoice::NewProject => {
-                    file_action = Some(FileAction::New);
-                    self.show_startup = false;
-                }
-                crate::ui::startup::StartupChoice::OpenDialog => {
-                    file_action = Some(FileAction::Open);
-                    self.show_startup = false;
-                }
-                crate::ui::startup::StartupChoice::Open(path) => {
-                    file_action = Some(FileAction::OpenPath(path));
-                    self.show_startup = false;
-                }
-                crate::ui::startup::StartupChoice::Dismiss => self.show_startup = false,
-            }
-        }
-
-        if trigger_undo {
-            self.state.undo();
-        }
-        if trigger_redo {
-            self.state.redo();
-        }
-        if let Some(action) = file_action {
-            self.run_file_action(action);
-        }
+        self.resolve_frame(file_action, trigger_undo, trigger_redo);
     }
 
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
@@ -1215,6 +1224,30 @@ enum FileAction {
 }
 
 impl AnkhimateApp {
+    /// Everything a frame defers until its UI is built.
+    ///
+    /// Undo, redo and file actions all mutate state that the layout borrowed, or
+    /// open a native dialog that must not run mid-layout. Factored out because
+    /// the startup page returns early and still has to resolve its own choice —
+    /// two copies of this tail is one chance for the launcher's "Open…" to
+    /// silently do nothing.
+    fn resolve_frame(
+        &mut self,
+        file_action: Option<FileAction>,
+        trigger_undo: bool,
+        trigger_redo: bool,
+    ) {
+        if trigger_undo {
+            self.state.undo();
+        }
+        if trigger_redo {
+            self.state.redo();
+        }
+        if let Some(action) = file_action {
+            self.run_file_action(action);
+        }
+    }
+
     fn run_file_action(&mut self, action: FileAction) {
         use crate::fileops::{self, FileOutcome};
         let outcome = match action {
