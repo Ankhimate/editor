@@ -94,9 +94,26 @@ pub fn vertex_screen_positions(
 pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
     let viewport_size = glam::Vec2::new(ctx.rect.width(), ctx.rect.height());
     let Some(target) = target(ctx.state) else {
+        // Nothing to edit means nothing under the cursor to name (T-913); a
+        // stale index here would have the label describing a mesh that is no
+        // longer open.
+        ctx.state.session.hovered_vertex = None;
         return;
     };
     let positions = vertex_screen_positions(&target, ctx.state, viewport_size);
+
+    // Which vertex a click would take. Recorded rather than recomputed at paint
+    // time (T-913): the renderer's highlight and the hover label are two readers
+    // of one answer, and two searches could disagree by a frame.
+    ctx.state.session.hovered_vertex = mouse_screen.and_then(|mouse| {
+        positions
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, (*p - mouse).length()))
+            .filter(|(_, d)| *d <= VERTEX_HIT)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    });
 
     // ── Keyboard ─────────────────────────────────────────────────────────
     let (delete, escape, edge) = ctx.ui.input(|i| {

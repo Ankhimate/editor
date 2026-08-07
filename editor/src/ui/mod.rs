@@ -132,6 +132,9 @@ pub struct AppBehavior<'a> {
     /// opened it next.
     pub grid: &'a crate::config::GridSettings,
     pub fonts: &'a crate::config::FontSettings,
+    /// Name the thing under the cursor in the viewport (T-913). A `Config` flag
+    /// like `grid`, and passed the same way rather than read from a global.
+    pub hover_labels: bool,
     /// Tabs whose close button was clicked this frame.
     ///
     /// Collected rather than acted on in place: `tab_ui` is handed the tiles it
@@ -204,7 +207,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         let margin = egui::Margin::same(8);
         match pane {
             Tab::Canvas => {
-                canvas::ui(ui, self.state, self.theme, self.grid);
+                canvas::ui(ui, self.state, self.theme, self.grid, self.hover_labels);
             }
             Tab::Inspector => {
                 egui::ScrollArea::vertical()
@@ -684,6 +687,7 @@ mod layout_tests {
                     theme: &theme,
                     grid: &grid,
                     fonts: &fonts,
+                    hover_labels: true,
                     compact_tabs: &Default::default(),
                     close_requests: &mut Vec::new(),
                 };

@@ -1040,6 +1040,7 @@ impl eframe::App for AnkhimateApp {
                     theme: &self.theme,
                     grid: &self.config.grid,
                     fonts: &self.config.fonts,
+                    hover_labels: self.config.hover_labels,
                     compact_tabs: &compact_tabs,
                     close_requests: &mut close_requests,
                 };

@@ -17,7 +17,15 @@ use std::path::{Path, PathBuf};
 /// short enough that the startup list stays scannable.
 const MAX_RECENT: usize = 12;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// `Default` is written out rather than derived so it agrees with `serde`.
+///
+/// Fields whose correct default is not their type's zero — `ui_scale` at 1.0,
+/// `hover_labels` at `true` — get it from a `default_*` function when a file is
+/// deserialized. A derived `Default` would not call those, so
+/// `Config::default()` (used for the in-memory config before any file is read)
+/// would disagree with a loaded one: labels off, scale zero. Two defaults for
+/// one field is the bug; this keeps there being one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Most-recently-opened first.
     #[serde(default)]
@@ -40,10 +48,36 @@ pub struct Config {
     /// not do that — a 20pt glyph at 1× is still rasterised once per pixel.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
+    /// Name the thing under the cursor in the viewport (T-913).
+    ///
+    /// On by default: a rig where nothing tells you what you are pointing at is
+    /// the state this was written to fix, so opting *out* is the deliberate
+    /// choice. Alt still summons a label while it is off, which is what makes
+    /// turning it off cheap rather than a loss.
+    #[serde(default = "default_hover_labels")]
+    pub hover_labels: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            recent_files: Vec::new(),
+            skip_startup: false,
+            theme_name: None,
+            grid: GridSettings::default(),
+            fonts: FontSettings::default(),
+            ui_scale: default_ui_scale(),
+            hover_labels: default_hover_labels(),
+        }
+    }
 }
 
 fn default_ui_scale() -> f32 {
     1.0
+}
+
+fn default_hover_labels() -> bool {
+    true
 }
 
 /// The viewport's transparency checker.

@@ -90,6 +90,11 @@ pub fn ui(
                     {
                         config.grid = Default::default();
                         config.fonts = Default::default();
+                        // Lives on the Grid page but is not part of `GridSettings`,
+                        // so resetting that struct would leave it behind — and a
+                        // reset button that skips a control on its own page reads
+                        // as broken.
+                        config.hover_labels = Config::default().hover_labels;
                         state.session.set_status("Grid and fonts reset");
                     }
                 });
@@ -251,6 +256,17 @@ fn grid(ui: &mut egui::Ui, config: &mut Config) {
             .size(10.5)
             .color(ui.visuals().weak_text_color()),
     );
+
+    ui.add_space(12.0);
+    ui.separator();
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new("Viewport").strong());
+    ui.add_space(4.0);
+    ui.checkbox(&mut config.hover_labels, "Name what the cursor is over")
+        .on_hover_text(
+            "Show the name and kind of whatever the pointer rests on.\n\
+             Hold Alt to summon one on demand while this is off.",
+        );
 }
 
 fn fonts(ui: &mut egui::Ui, config: &mut Config) {

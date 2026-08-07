@@ -1,4 +1,5 @@
 pub mod camera;
+pub mod hover_label;
 pub mod outline;
 pub mod overlays;
 pub mod renderer;
@@ -17,6 +18,7 @@ pub fn ui(
     state: &mut AppState,
     theme: &Theme,
     grid: &crate::config::GridSettings,
+    hover_labels: bool,
 ) {
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
@@ -105,6 +107,11 @@ pub fn ui(
     //   Animate — accent border (red while auto-key is armed, the universal
     //             "recording" cue), clip name + frame in the corner.
     draw_mode_chrome(ui, rect, state);
+
+    // 8. Name whatever the cursor is over (T-913). Last, so the label is above
+    // the artwork, the gizmos and the weight overlay — a tooltip that something
+    // else can cover is not doing its job.
+    hover_label::draw(ui, rect, state, hover_labels);
 }
 
 /// Import images dropped onto the viewport (T-301).

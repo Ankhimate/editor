@@ -201,6 +201,13 @@ pub struct Session {
     pub vertex_box_start: Option<glam::Vec2>,
     /// Vertex being dragged, if any.
     pub dragging_vertex: Option<usize>,
+    /// The mesh vertex under the cursor, by index into setup_vertices (T-913).
+    ///
+    /// The renderer worked this out for its own highlight and threw it away each
+    /// frame. Kept here so the hover label can name the vertex and list what
+    /// holds it without repeating the search — and so anything else that wants
+    /// "what is the pointer on" has one place to ask.
+    pub hovered_vertex: Option<usize>,
 
     /// Whether canvas transforms drive the selected bone or the selected slot's
     /// artwork (T-307). Setup-mode concept: attachment placement is rig data.
@@ -391,6 +398,7 @@ impl Session {
             mesh_edit: false,
             selected_vertices: Vec::new(),
             dragging_vertex: None,
+            hovered_vertex: None,
             vertex_box_start: None,
             edit_target: EditTarget::Bone,
             active_transform_tool: TransformTool::Translate,
