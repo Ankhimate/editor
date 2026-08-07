@@ -32,7 +32,13 @@ pub struct IkConstraint {
     pub name: String,
     /// The bone whose world position the chain reaches for.
     pub target: BoneId,
-    /// Bones in the chain, root first. Length 1 = aim, length 2 = two-bone IK.
+    /// Bones in the chain, root first. **Any length.**
+    ///
+    /// 1 is an aim constraint and 2 has a closed-form solution, so those two get
+    /// their own constructors; 3 and beyond go through FABRIK and are just as
+    /// supported. Stated explicitly because every other 2D editor caps this at
+    /// two and riggers arrive assuming the cap is universal — a tentacle or a
+    /// tail is one constraint here, not a hand-chained stack of them.
     pub bones: Vec<BoneId>,
     /// `1.0` for positive bend, `-1.0` for negative bend.
     pub bend_direction: f32,
@@ -61,6 +67,31 @@ impl IkConstraint {
             name: name.into(),
             target,
             bones: chain.to_vec(),
+            bend_direction: 1.0,
+            mix: 1.0,
+            softness: 0.0,
+            stretch: false,
+            stretch_limit: default_stretch_limit(),
+        }
+    }
+
+    /// An IK constraint over a chain of any length.
+    ///
+    /// The general case, and the one worth reaching for first. `two_bone` and
+    /// `aim` are the two lengths that have their own names because they have
+    /// their own closed-form solvers; every other length goes through FABRIK and
+    /// needs no special constructor. A chain of three or more is the case a
+    /// two-bone limit cannot express at all — a tentacle, a tail, a spine that
+    /// reaches — and nothing here restricts it.
+    ///
+    /// `bend_direction` is what makes a long chain controllable: three or more
+    /// bones have infinitely many solutions for a given target, and the bend
+    /// picks the side to converge from. See [`solve_fabrik`].
+    pub fn chain(name: impl Into<String>, target: BoneId, bones: Vec<BoneId>) -> Self {
+        Self {
+            name: name.into(),
+            target,
+            bones,
             bend_direction: 1.0,
             mix: 1.0,
             softness: 0.0,
