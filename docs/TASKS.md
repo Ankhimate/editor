@@ -907,6 +907,222 @@ cannot work are disabled rather than broken.
 
 ---
 
+## Phase 9 — Beyond parity (T-9xx)
+
+> Phases 0–8 chase *parity*: the reference feature set, observed as behavior. This phase chases
+> *advantage*. Every task below answers a grievance that practitioners have filed against the
+> established editors — most of them sourced from EsotericSoftware's own public issue tracker
+> (`github.com/EsotericSoftware/spine-editor/issues`), where the complaint is on the record, dated,
+> and often years old without a fix.
+>
+> **Why these and not others.** A feature nobody has asked for is a guess. Each task here cites the
+> evidence that someone wanted it and could not have it. Where an issue has sat open for most of a
+> decade (T-901's weight brush was filed in 2016; T-902's numeric vertex entry in 2016), that age is
+> itself the argument: it is not an oversight, it is a thing the incumbent has decided not to do, and
+> therefore a thing we can be better at without racing them.
+>
+> **Two are already won.** Worth stating plainly so nobody re-litigates them:
+> - *N-bone IK.* The reference implementation caps IK chains at 2 bones and documents the cap as
+>   deliberate ("nondeterministic and would be difficult to control"). `core/src/constraints.rs`
+>   solves chains of any length with FABRIK, with `bend_dir` resolving the ambiguity that the cap
+>   exists to avoid. This is the single largest rigging-capability gap in our favour.
+> - *Brush weight painting.* Requested since 2016 and repeatedly since (forum threads d/4251,
+>   d/13441, d/15276), still slider-only there. We have radius + feather brush painting, locking,
+>   and per-mesh colour coding.
+>
+> Both need to be *visible* — see T-908 — because an advantage nobody knows about converts nobody.
+>
+> **Clean-room rule still applies (PLAN §0).** These tasks describe *behavior we want*, derived from
+> public complaints. Nothing here licenses reading or porting another editor's source.
+
+### T-901 ∥ Bulk rename with sequential numbering
+**Deps:** T-206 · **Refs:** PLAN §2 · **Evidence:** spine-editor#330
+- Multi-select any homogeneous set (bones, slots, attachments, constraints) → rename dialog with a
+  pattern (`tail_{n}`), a start index, a step, and a zero-pad width. `{n}` numbers by **selection
+  order**, not tree order, so a user clicking down a tail gets 1..N in the order they meant.
+- Live preview list (old → new) before applying, so a 40-bone rename is verified, not gambled.
+- Find/replace mode across the same selection, with a regex toggle.
+- **Rename safety** (the reference tool has three separate filed bugs here — #227, #825, and the
+  path-rename issue): renaming a name field must never silently rewrite an attachment *path*.
+  Show path and name as distinct fields; if a rename would orphan an attachment, refuse and say
+  which. One undo step for the whole batch.
+**Accept:** renaming 40 bones is one command and one undo; a rename that would break an attachment
+reference is blocked with a message naming the attachment; property tests confirm name and path
+never move together unless both were explicitly edited.
+
+### T-902 ∥ ★ Numeric entry for every vertex and handle
+**Deps:** T-401 · **Refs:** PLAN §2 · **Evidence:** spine-editor#77 (open since 2016)
+- Mesh vertices, UV coordinates, bounding-box points and path points all become type-able: an
+  inspector field pair for the current selection, accepting expressions (`120/2`) as the existing
+  numeric fields do.
+- Multi-select → editing one axis sets it on all (align), with a relative mode (`+=`) for nudging.
+- Snap-to-value and snap-to-neighbour so a row of vertices can be made exactly collinear.
+**Accept:** every draggable point in the editor has a keyboard path to an exact value; a mesh can be
+authored to exact pixel coordinates with the mouse untouched.
+
+### T-903 ∥ Isolation (solo) mode
+**Deps:** T-207 · **Refs:** PLAN §2 · **Evidence:** spine-editor#604
+- `Shift+H` (or similar) isolates the selection: everything not in it dims to a configurable opacity
+  or hides entirely. Applies to the viewport, and optionally filters the hierarchy and the dopesheet
+  to the isolated set.
+- Isolation is a **view state, not document state** — it lives in Session, never serializes, and
+  cannot be saved into a `.ankh`. A user must never ship a rig with things hidden by accident.
+- A persistent, obvious badge while isolation is active, with one click to exit. The failure mode to
+  design against is a user who forgets they are isolated and concludes their rig is broken.
+**Accept:** isolating a 60-bone rig to one limb is one keystroke; the badge is visible in every
+screenshot of the isolated state; round-tripping a file while isolated changes nothing on disk.
+
+### T-904 ∥ Selection sets panel
+**Deps:** T-206 · **Refs:** PLAN §2 · **Evidence:** spine-editor#409
+- Named, saved selections (a "left arm" set, a "face" set), listed in their own panel: create from
+  current selection, rename, delete, reorder, and select-on-click. Additive and subtractive click
+  modifiers.
+- Sets are document state (they describe the rig, and a rigger hands them to an animator), so they
+  serialize — a new optional table in the format, absent in old files.
+- Composable with T-903: select a set, isolate it.
+**Accept:** a rigger can hand over a file where "left arm" is one click; loading a pre-T-904 file
+produces no sets and no warning.
+
+### T-905 Non-destructive timeline offset
+**Deps:** T-201, T-208 · **Refs:** PLAN §2 · **Evidence:** spine-editor#153
+- A per-track (and per-selection) **time offset** that shifts evaluation without moving keys: the
+  data is untouched, the playback is phase-shifted. The cited use is secondary motion — a scarf, a
+  tail, hair — where every strand wants the same curve a few frames apart.
+- Offsets are keyable? **No.** Deliberately: an animatable offset on top of animated tracks is a
+  second time dimension and it makes debugging a rig impossible. Offset is authored, static, and
+  visible as a labelled marker on the track header.
+- Negative offsets must work, which means evaluation has to tolerate negative time — the underlying
+  ask in the filed issue.
+**Accept:** ten strands of hair animate from one authored curve plus nine offsets; clearing every
+offset restores the original animation byte-for-byte.
+
+### T-906 ∥ Timeline markers
+**Deps:** T-201 · **Refs:** PLAN §2 · **Evidence:** spine-editor#531
+- Named, coloured markers on the timeline ruler: add at playhead, drag to move, rename, delete.
+  Snap the playhead and dragged keys to them.
+- Distinct from events (T-506): an event fires into the game at runtime; a marker is a note to the
+  animator that never leaves the editor. Conflating the two is the mistake to avoid — keep them in
+  separate rows with separate styling.
+- Per-animation, serialized.
+**Accept:** a walk cycle can be annotated "contact / down / passing / up" and those labels survive
+save/load; markers never appear in any runtime export.
+
+### T-907 Bone length edit carries its children
+**Deps:** T-103, T-206 · **Refs:** PLAN §2 · **Evidence:** spine-editor#566
+- Dragging a bone's length currently should — and after this task, does — offer to bring child bones
+  along so they stay at the tip. Modifier-held drag toggles the behavior; the default is the one
+  users expect (children follow), with the opposite available, and the choice remembered.
+- Same for the numeric length field in the inspector.
+- Undo restores both the length and every child position in one step.
+**Accept:** lengthening an upper arm keeps the elbow at the tip without touching the elbow; the
+modifier reliably produces the old behavior; one undo reverts both.
+
+### T-908 ★ Make the existing advantages discoverable
+**Deps:** T-403, T-104 · **Refs:** PLAN §0, §5
+- We already beat the reference on N-bone IK and brush weight painting (see the phase preamble) and
+  neither is advertised anywhere a user would look.
+  - IK constraint UI: show the chain length, allow 3+ explicitly, and document `bend_dir` as the
+    control that resolves multi-bone ambiguity. A rigger arriving from another tool assumes 2 is the
+    ceiling and will not try 3 unless told.
+  - Weight painting: the brush settings (radius, feather, lock, paint modes) need a visible home and
+    a one-line explanation each. Users arriving from slider-only weighting do not know to look for a
+    brush.
+- `docs/` gains a short "what this does that others don't" page, and the samples exercise a 3-bone
+  IK chain so it ships visible in `samples/`.
+**Accept:** a new user rigs a 3-bone chain without reading source; the weights panel explains its own
+brush without a tutorial; a sample demonstrates N-bone IK on open.
+
+### T-909 ∥ Rig transfer between skeletons
+**Deps:** T-209, T-501 · **Refs:** PLAN §2 · **Evidence:** spine-editor#582
+- Copy a subtree — bones, their slots and attachments, their constraints, **and their animation
+  keys** — and paste it into another open skeleton. The filed complaint is that transferring rigging
+  loses keys and forces manual recreation, and that move-vs-copy is ambiguous when dragging.
+- Explicit move and copy as separate commands with separate names. No modifier-guessing.
+- Name collisions resolved by a dialog listing them, with rename-on-paste, not by silently renaming
+  (the reference tool's "duplicate" workaround renames unexpectedly, which is the bug being cited).
+- Constraints referencing bones outside the copied subtree are reported and dropped, not silently
+  broken.
+**Accept:** a rigged and animated arm moves to a second skeleton with its keys intact; every dropped
+constraint is named in a summary; the operation is one undo step.
+
+### T-910 ∥ Multi-window / multi-monitor
+**Deps:** T-207 · **Refs:** PLAN §3.1 · **Evidence:** spine-editor#266
+- Tear off a panel (viewport, timeline, graph) into its own OS window; layout including window
+  positions persists across sessions.
+- A second *viewport* on the same document is the highest-value case: front view and side view, or
+  setup pose and animate pose, at once.
+- Constraint to respect: one document, one undo stack, N views. Two windows must never diverge.
+**Accept:** the timeline can live on a second monitor across restarts; edits in either viewport
+appear in both immediately and undo once.
+
+### T-911 Physics stability harness
+**Deps:** T-503 · **Refs:** PLAN §2 · **Evidence:** clustered forum reports of jitter at high
+framerate, jitter under unclear conditions, and CPU cost, against the reference implementation's
+physics feature
+- The reference tool shipped physics and drew a cluster of independent instability reports. Ours is
+  newer and less exercised; assume it has the same failure modes until measured.
+- Deterministic tests: fixed-step accumulator so simulation is framerate-independent by construction
+  (the specific complaint is jitter *at higher framerates*); energy-decay assertions so a settled
+  chain provably settles; a soak test over 10k frames asserting no NaN and bounded velocity.
+- A physics debug overlay: per-bone velocity, and a "not yet settled" indicator.
+- Also fix the class of bug behind spine-editor#995 by test: a constraint of one kind must never
+  silently disable an unrelated editing operation on an unrelated attachment. Assert that mesh
+  deformation stays available with physics active.
+**Accept:** the same animation renders identically at 30/60/144 fps; a 10k-frame soak stays finite;
+mesh editing is provably unaffected by an unrelated active physics constraint.
+
+### T-912 ∥ Graph editor ergonomics review
+**Deps:** T-704 · **Refs:** PLAN §2 · **Evidence:** a five-year cluster of independent forum threads
+against the reference tool's graph editor — unexpected snapping, extreme curves, curves not visible,
+and an explicit request for a different interaction model altogether
+- This is the one theme where the evidence is title-level rather than quoted (the source forum is
+  JS-rendered and resisted extraction), so treat the *specific* claims as unconfirmed. What is
+  confirmed is the shape: independent users, several years, same feature, no resolution.
+- Therefore the task is a **review with a usability bar**, not a feature list:
+  - Curves must always be visible — auto-frame the value range, and never let a selected curve be
+    off-screen with no indication.
+  - Snapping is opt-in and its state is always visible. Silent snapping is the specific complaint.
+  - Extreme tangents are clamped or flagged, never silently produce a curve that overshoots the
+    keyed values without the animator noticing.
+  - Direct numeric entry for tangent values (pairs with T-902).
+- Deliverable includes a short written rationale in `docs/` for each interaction chosen, so the next
+  change does not undo it by accident.
+**Accept:** a selected curve is never invisible; snapping state is readable at a glance; an
+overshooting tangent is visually distinct from a well-behaved one.
+
+### T-913 ∥ ★ Name the thing under the cursor
+**Deps:** T-206, T-301 · **Refs:** PLAN §2 · **Evidence:** the naming-and-selection cluster
+(spine-editor#330, #409, #604) — each of those is a symptom of the same root problem, that a dense
+rig gives you no cheap way to answer "what am I looking at"
+- Hovering anything in the viewport shows its **name** near the cursor: bones, slots, attachments,
+  mesh vertices (index), constraints, IK targets, path and clipping points, event and point
+  attachments.
+- The state is already tracked — `session.hovered_bone`, `hovered_attachment`, `hovered_gizmo`, and
+  the mesh-vertex hover in the renderer — and today it only changes a colour. This task spends that
+  existing signal on a label; it should not need new hit-testing.
+- Show the **kind** alongside the name where a name alone is ambiguous, because a bone, a slot and an
+  attachment routinely share one name (`front-foot` is all three in `samples/spineboy.ankh`, which is
+  exactly the case where a label earns its place). Use the hierarchy's icons so the two read as one
+  vocabulary.
+- On a mesh vertex, the influence list is the useful readout: bone name and weight per influence, in
+  the per-mesh rank colours. That answers "why is this vertex moving" without opening a panel.
+- Constraints driving the hovered bone are worth naming too — a bone that will not move by hand is
+  usually a bone something else is driving, and the label is the cheapest place to say so.
+- **Do not let it become noise.** A label under the cursor on every mouse move is the failure mode:
+  - a short delay before it appears, so passing over a rig does not strobe;
+  - never covering the thing being hovered — offset, and flipped near a viewport edge;
+  - suppressed entirely while dragging, since during a drag the cursor is busy and the label lies
+    about what is under it;
+  - a settings toggle (T-701) and a modifier to summon it on demand, for users who want it only when
+    asked.
+- Legibility over artwork: the label needs its own background, not just a text colour, because it
+  sits on whatever the user imported.
+**Accept:** hovering any object in the viewport names it once the delay elapses; a bone, a slot and
+an attachment sharing a name stay distinguishable; a mesh vertex reports its influences with weights;
+no label is drawn during a drag; the whole thing can be switched off.
+
+---
+
 ## Dependency overview
 
 ```
@@ -920,6 +1136,9 @@ Phase 5: T-501 ∥ T-502 ∥ T-503 ∥ T-505 ∥ T-506 ∥ T-507 ; T-504 after T
 Phase 6: T-601 → T-602 ; T-603 (after T-507) → T-604 → T-605
 Phase 7: all ∥ (T-704 after T-203 ; T-706 after T-301)
 Phase 8: T-801 → T-802 ; T-803 after T-604
+Phase 9: T-908 (free, do first) ; { T-901 ∥ T-902 ∥ T-903 ∥ T-904 ∥ T-906 ∥ T-910 ∥ T-913 } ;
+         T-905 after T-208 ; T-907 after T-206 ; T-909 after T-209 ;
+         T-911 after T-503 ; T-912 after T-704
 ```
 
 Critical path to a usable 1.0: **T-207 → T-301 → T-401/T-403 → T-603 → T-604**. Everything else is
@@ -969,3 +1188,30 @@ Beyond parity (features the open-source alternatives lack): slot/skin model (T-1
 timelines
 (T-404), clipping (T-405), transform + path constraints (T-501/T-502), events (T-506), two-color
 tint and blend modes (T-505), curve editor (T-704), embeddable MIT/Apache runtime (T-604).
+
+## Advantage checklist (Phase 9)
+
+> Parity is the table above. This is the other direction: things the *commercial* reference does
+> badly or not at all, each traceable to a filed complaint. Sources are public issue numbers on
+> `EsotericSoftware/spine-editor` unless noted.
+
+| Their gap | Evidence | Ours |
+|---|---|---|
+| IK capped at 2 bones, documented as deliberate | vendor docs | **already shipped** — FABRIK, any length, `bend_dir` disambiguates |
+| Weight painting is slider-only | #139, open since 2016; forum d/4251, d/13441, d/15276 | **already shipped** — radius/feather brush, locking, per-mesh colours |
+| No sequential bulk rename | #330 | T-901 |
+| No numeric entry for mesh/UV/path vertices | #77, open since 2016 | T-902 |
+| No isolation / solo mode | #604 | T-903 |
+| Saved selections are opaque and unmanageable | #409 | T-904 |
+| Timeline offset is destructive; no negative time | #153 | T-905 |
+| No timeline markers | #531 | T-906 |
+| Resizing a bone strands its children | #566 | T-907 |
+| Rig transfer between files loses animation keys | #582 | T-909 |
+| No multi-monitor support | #266 | T-910 |
+| Physics jitter at high framerate; physics silently blocks mesh edit | forum cluster; #995 | T-911 |
+| Graph editor: silent snapping, invisible curves, extreme tangents | 5-year forum cluster (title-level evidence only) | T-912 |
+| Renaming rewrites paths / collapses names / breaks re-import | #227, #825, + path-rename issue | T-901 (safety half) |
+| Nothing in the viewport tells you what it is without clicking it | same cluster as #330/#409/#604 | T-913 |
+
+Two entries above are already true today and are the reason T-908 exists: an advantage the user
+cannot find is worth nothing.
