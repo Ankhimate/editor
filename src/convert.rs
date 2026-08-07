@@ -259,6 +259,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 softness: ik.softness,
                 stretch: ik.stretch,
                 stretch_limit: ik.stretch_limit,
+                stiffness: ik.stiffness,
                 mixes: None,
                 offsets: None,
                 local: false,
@@ -280,6 +281,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 softness: 0.0,
                 stretch: false,
                 stretch_limit: 1.1,
+                stiffness: 0.0,
                 mixes: Some([tc.mix_rotate, tc.mix_translate, tc.mix_scale, tc.mix_shear]),
                 // Angles are degrees at the document boundary (ADR 0002), the
                 // same as every rotation key.
@@ -314,6 +316,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 softness: 0.0,
                 stretch: false,
                 stretch_limit: 1.1,
+                stiffness: 0.0,
                 mixes: None,
                 offsets: None,
                 local: false,
@@ -336,6 +339,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 softness: 0.0,
                 stretch: false,
                 stretch_limit: 1.1,
+                stiffness: 0.0,
                 mixes: None,
                 offsets: None,
                 local: false,
@@ -936,6 +940,7 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
                 softness: c.softness,
                 stretch: c.stretch,
                 stretch_limit: c.stretch_limit,
+                stiffness: c.stiffness,
             }),
             other => {
                 report.dangling("constraint type", other);

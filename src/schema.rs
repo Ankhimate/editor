@@ -327,6 +327,11 @@ pub struct Constraint {
     /// Most a stretching chain may grow, as a factor of its natural length.
     #[serde(default = "stretch_limit_default")]
     pub stretch_limit: f32,
+    /// How much a 3+ bone chain keeps its current pose instead of redistributing
+    /// its bend. Defaults to 0, which is how every rig written before this field
+    /// existed was solved, so an older file still looks the same.
+    #[serde(default)]
+    pub stiffness: f32,
 
     // ── Transform constraints (T-501) ────────────────────────────────────
     // Defaulted and skipped when empty, so an IK constraint's JSON is
