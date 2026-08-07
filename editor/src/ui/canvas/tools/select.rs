@@ -600,8 +600,12 @@ fn pick_attachment(
             continue;
         };
         // Hidden slots are not clickable — they are not on screen to click.
+        // Ghosted art outside an isolation is not clickable either (T-903):
+        // it is drawn only as a silhouette to place the isolated limb against,
+        // and clicking through to it would defeat the point of isolating.
         if state.pose.slot_visible.get(slot_id) == Some(&false)
             || state.session.hidden_slots.contains(&slot_id)
+            || !state.session.is_isolated_in(slot.bone)
         {
             continue;
         }

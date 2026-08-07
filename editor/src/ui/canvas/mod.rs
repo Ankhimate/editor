@@ -274,13 +274,42 @@ fn draw_mode_chrome(ui: &egui::Ui, rect: egui::Rect, state: &AppState) {
     painter.galley(pos + egui::vec2(6.0, 3.0), galley, chip);
 
     // Unkeyed edits are easy to lose; say so where the user is looking.
+    let mut below = bg.left_bottom() + egui::vec2(0.0, 6.0);
     if animating && state.session.has_pending_pose() {
         painter.text(
-            bg.left_bottom() + egui::vec2(0.0, 6.0),
+            below,
             egui::Align2::LEFT_TOP,
             "unkeyed pose — press K",
             egui::FontId::proportional(11.0),
             egui::Color32::from_rgb(230, 170, 60),
         );
+        below.y += 17.0;
+    }
+
+    // Isolation is a state the user can forget they are in, and forgetting it
+    // means concluding the rig is broken (T-903). So the badge is loud, always
+    // on screen while it applies, and says how to leave — a quiet indicator
+    // would be worse than none, because it would look like the rig.
+    if state.session.is_isolating() {
+        let n = state.session.isolated_bones.len();
+        let color = egui::Color32::from_rgb(120, 190, 255);
+        let galley = painter.layout_no_wrap(
+            format!("ISOLATED · {n} bone(s) · Shift+H to exit"),
+            egui::FontId::proportional(11.0),
+            color,
+        );
+        let chip = egui::Rect::from_min_size(below, galley.size() + egui::vec2(12.0, 6.0));
+        painter.rect_filled(
+            chip,
+            egui::epaint::CornerRadius::same(3),
+            ui.visuals().extreme_bg_color.gamma_multiply(0.9),
+        );
+        painter.rect_stroke(
+            chip,
+            egui::epaint::CornerRadius::same(3),
+            egui::Stroke::new(1.0, color.gamma_multiply(0.6)),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(below + egui::vec2(6.0, 3.0), galley, color);
     }
 }

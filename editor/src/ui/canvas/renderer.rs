@@ -8,6 +8,13 @@ pub const BONE_WIDTH_RATIO: f32 = 0.015;
 
 // ── Colors ──────────────────────────────────────────────────────────────
 
+/// Alpha multiplier for artwork outside an isolation (T-903).
+///
+/// Low enough that the isolated limb is unmistakably the subject, high enough
+/// that the rest of the character still reads as a silhouette to place it
+/// against.
+pub const ISOLATION_GHOST: f32 = 0.18;
+
 pub const COLOR_BONE_NORMAL: [f32; 4] = [0.0, 0.78, 0.78, 0.90];
 pub const COLOR_BONE_SELECTED: [f32; 4] = [1.0, 0.65, 0.0, 0.95];
 pub const COLOR_BONE_HOVERED: [f32; 4] = [0.2, 0.95, 0.95, 0.95];
@@ -259,12 +266,19 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
     }
 
     let bone_world = state.pose.worlds.get(slot.bone)?;
-    let color = state
+    let mut color = state
         .pose
         .slot_colors
         .get(slot_id)
         .copied()
         .unwrap_or(slot.color);
+    // Art outside an isolation dims rather than disappears (T-903), the opposite
+    // of what the bones do. A bone outside the isolation is clutter, but the art
+    // is the silhouette — posing a limb against a character that has vanished is
+    // guesswork, and the ghost is what makes the limb's placement legible.
+    if !state.session.is_isolated_in(slot.bone) {
+        color[3] *= ISOLATION_GHOST;
+    }
     // `dark.a` is the amount, so an absent two-color tint is all zeroes and the
     // shader's second term vanishes without a branch.
     let dark = state
@@ -828,6 +842,12 @@ pub fn render_bones(
     for (bone_id, bone) in state.doc.skeleton.bones.iter() {
         if !state.session.show_bones {
             break;
+        }
+        // Isolation hides rather than dims (T-903). Dimming a sixty-bone rig
+        // leaves sixty bones drawn over the limb being worked on, which is the
+        // problem isolation was reached for.
+        if !state.session.is_isolated_in(bone_id) {
+            continue;
         }
         let is_selected = state.session.is_bone_selected(bone_id);
         let is_hovered = state.session.hovered_bone == Some(bone_id);

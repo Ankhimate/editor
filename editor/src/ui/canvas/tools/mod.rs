@@ -68,6 +68,12 @@ pub fn update_hover_state(ctx: &mut ToolContext) {
         let mut best_depth = 0;
 
         for (bone_id, bone) in ctx.state.doc.skeleton.bones.iter() {
+            // Same rule as `show_bones` above: a bone that is not drawn must not
+            // be clickable either, or isolation only half works and the half
+            // left behind is the confusing one (T-903).
+            if !ctx.state.session.is_isolated_in(bone_id) {
+                continue;
+            }
             let dist = hit_test_bone(
                 cursor_screen,
                 &ctx.state.session.camera,

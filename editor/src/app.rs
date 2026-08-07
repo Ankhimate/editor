@@ -458,16 +458,19 @@ impl eframe::App for AnkhimateApp {
             // `!ctrl` so Ctrl+S stays Save.
             {
                 use crate::session::TransformTool;
-                let (t, r, s, h, ctrl) = ctx.input(|i| {
+                let (t, r, s, h, ctrl, shift) = ctx.input(|i| {
                     (
                         i.key_pressed(egui::Key::T),
                         i.key_pressed(egui::Key::R),
                         i.key_pressed(egui::Key::S),
                         i.key_pressed(egui::Key::H),
                         i.modifiers.ctrl,
+                        i.modifiers.shift,
                     )
                 });
-                if !ctrl {
+                // Shift excluded as well as Ctrl: Shift+H is isolation (T-903),
+                // and without this the bare-key match would fire Shear too.
+                if !ctrl && !shift {
                     if t {
                         self.state.session.active_transform_tool = TransformTool::Translate;
                     }
@@ -479,6 +482,25 @@ impl eframe::App for AnkhimateApp {
                     }
                     if h {
                         self.state.session.active_transform_tool = TransformTool::Shear;
+                    }
+                }
+                // Shift+H isolates the viewport to the selection, or leaves
+                // isolation when there is nothing selected or it is already on
+                // (T-903). One key both ways: there is nothing to remember, and
+                // no way to end up isolated with no idea which key gets you out.
+                if h && shift && !ctrl {
+                    if self.state.session.is_isolating() {
+                        self.state.session.clear_isolation();
+                        self.state.session.set_status("Showing the whole rig");
+                    } else {
+                        let bones = self.state.session.selected_bones.clone();
+                        self.state.session.isolate(&self.state.doc.skeleton, &bones);
+                        let n = self.state.session.isolated_bones.len();
+                        self.state.session.set_status(if n == 0 {
+                            "Select a bone to isolate".to_string()
+                        } else {
+                            format!("Isolated {n} bone(s) — Shift+H to exit")
+                        });
                     }
                 }
             }
@@ -808,6 +830,17 @@ impl eframe::App for AnkhimateApp {
                                         .clicked()
                                     {
                                         self.state.session.hidden_slots.clear();
+                                        ui.close();
+                                    }
+                                }
+                                if self.state.session.is_isolating() {
+                                    let n = self.state.session.isolated_bones.len();
+                                    if ui
+                                        .button(format!("Exit isolation ({n} bone(s))"))
+                                        .on_hover_text("Show the whole rig again — Shift+H")
+                                        .clicked()
+                                    {
+                                        self.state.session.clear_isolation();
                                         ui.close();
                                     }
                                 }

@@ -316,6 +316,23 @@ pub struct Session {
     /// `None` (the slot shows nothing) and from a `SlotVisible` key (the
     /// animation hides it) — both of those are things the rig actually does.
     pub hidden_slots: std::collections::HashSet<SlotId>,
+    /// Bones the viewport is isolated to, with their descendants (T-903).
+    ///
+    /// Empty means not isolated. When it is not empty, everything outside the
+    /// set — bones, and the art hanging off them — dims or disappears, so one
+    /// limb can be worked on without the other fifty bones drawn over it.
+    ///
+    /// Kept apart from `hidden_slots` on purpose, even though both end in
+    /// "do not draw this". Hiding is a per-item decision the user made and
+    /// expects to persist; isolation is a temporary lens on a *selection*, and
+    /// leaving it entangled with hiding would mean exiting isolation had to
+    /// guess which slots the user had hidden by hand beforehand.
+    ///
+    /// Like hiding, it is a way of looking: never touches the document, never
+    /// lands on the undo stack, never serialized. That last one matters more
+    /// than it sounds — a rig saved mid-isolation that reopened with most of
+    /// itself missing would read as data loss.
+    pub isolated_bones: std::collections::HashSet<BoneId>,
     /// Substring the hierarchy filters rows by. Empty shows everything.
     ///
     /// A 67-bone rig is not browsable by scrolling. Matching is on the name only
@@ -434,6 +451,7 @@ impl Session {
             slot_edit_grab_kind: None,
             selected_event: None,
             hidden_slots: std::collections::HashSet::new(),
+            isolated_bones: std::collections::HashSet::new(),
             tree_filter: String::new(),
             reveal_selection: false,
             show_artwork: true,
@@ -496,6 +514,54 @@ impl Session {
     /// Is this bone locked against viewport edits / auto-key (T-206)?
     pub fn is_bone_locked(&self, bone: BoneId) -> bool {
         self.locked_bones.get(bone).copied().unwrap_or(false)
+    }
+
+    /// Is the viewport currently isolated to part of the rig (T-903)?
+    pub fn is_isolating(&self) -> bool {
+        !self.isolated_bones.is_empty()
+    }
+
+    /// Isolate the viewport to `bones` and everything under them (T-903).
+    ///
+    /// Descendants are included because a limb is what people mean by "this
+    /// bone": isolating a shoulder and losing the arm would be a worse answer
+    /// than not isolating at all.
+    ///
+    /// Called with an empty selection this clears isolation rather than
+    /// isolating to nothing — an empty viewport is never what the user wanted,
+    /// and making the keystroke a toggle costs no extra binding.
+    pub fn isolate(&mut self, skeleton: &ankhimate_core::skeleton::Skeleton, bones: &[BoneId]) {
+        self.isolated_bones.clear();
+        for &root in bones {
+            // `update_order` is topologically sorted parents-first, so one pass
+            // catches a whole subtree: by the time a bone is reached its parent
+            // has already been added if it belonged.
+            self.isolated_bones.insert(root);
+        }
+        if self.isolated_bones.is_empty() {
+            return;
+        }
+        for &id in &skeleton.update_order {
+            if let Some(bone) = skeleton.bones.get(id)
+                && let Some(parent) = bone.parent
+                && self.isolated_bones.contains(&parent)
+            {
+                self.isolated_bones.insert(id);
+            }
+        }
+    }
+
+    /// Leave isolation, showing the whole rig again.
+    pub fn clear_isolation(&mut self) {
+        self.isolated_bones.clear();
+    }
+
+    /// Should this bone be drawn at full strength?
+    ///
+    /// True when not isolating at all, so callers can ask unconditionally rather
+    /// than branching on the mode first.
+    pub fn is_isolated_in(&self, bone: BoneId) -> bool {
+        self.isolated_bones.is_empty() || self.isolated_bones.contains(&bone)
     }
 
     /// Replace the selection with a single bone (a plain click).
@@ -571,6 +637,12 @@ impl Session {
         {
             self.hovered_bone = None;
         }
+        // Deleting the last isolated bone leaves isolation on with nothing in
+        // it, which draws an empty viewport and a badge that cannot be reasoned
+        // about. Retaining rather than clearing outright: deleting one bone of
+        // an isolated limb should not throw away the isolation.
+        self.isolated_bones
+            .retain(|&b| skeleton.bones.contains_key(b));
     }
 
     /// Stage a live drag value for a bone without touching the document.
@@ -666,6 +738,78 @@ mod tests {
 
         assert_eq!(s.selected_bones, vec![keep]);
         assert!(s.hovered_bone.is_none(), "stale hover must clear");
+    }
+
+    /// Isolating a bone takes its whole subtree (T-903).
+    ///
+    /// A limb is what people mean by "this bone": isolating a shoulder and
+    /// losing the arm would be a worse answer than not isolating at all.
+    #[test]
+    fn isolation_takes_the_whole_subtree() {
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root"));
+        let shoulder = skel.add_bone(Bone {
+            parent: Some(root),
+            ..bone("shoulder")
+        });
+        let elbow = skel.add_bone(Bone {
+            parent: Some(shoulder),
+            ..bone("elbow")
+        });
+        let wrist = skel.add_bone(Bone {
+            parent: Some(elbow),
+            ..bone("wrist")
+        });
+        let other = skel.add_bone(Bone {
+            parent: Some(root),
+            ..bone("leg")
+        });
+
+        let mut s = session();
+        assert!(!s.is_isolating(), "starts off");
+        assert!(
+            s.is_isolated_in(other),
+            "not isolating means everything shows"
+        );
+
+        s.isolate(&skel, &[shoulder]);
+        assert!(s.is_isolating());
+        for b in [shoulder, elbow, wrist] {
+            assert!(s.is_isolated_in(b), "the whole arm is in");
+        }
+        assert!(!s.is_isolated_in(other), "the leg is out");
+        assert!(!s.is_isolated_in(root), "so is the parent");
+
+        // Isolating nothing leaves isolation rather than isolating to an empty
+        // viewport, which is never what was wanted.
+        s.isolate(&skel, &[]);
+        assert!(!s.is_isolating());
+        assert!(s.is_isolated_in(other));
+    }
+
+    /// Isolation is a lens, never a document edit: it must not survive into a
+    /// saved file, and a deleted bone must not leave it stuck on nothing.
+    #[test]
+    fn isolation_drops_deleted_bones() {
+        let mut skel = Skeleton::new();
+        let a = skel.add_bone(bone("a"));
+        let b = skel.add_bone(bone("b"));
+
+        let mut s = session();
+        s.isolate(&skel, &[a, b]);
+        assert_eq!(s.isolated_bones.len(), 2);
+
+        skel.remove_bone(b);
+        s.prune_selection(&skel);
+        assert_eq!(s.isolated_bones.len(), 1, "stale id dropped");
+        assert!(s.is_isolating(), "the surviving bone keeps it on");
+
+        skel.remove_bone(a);
+        s.prune_selection(&skel);
+        assert!(
+            !s.is_isolating(),
+            "isolating nothing at all must switch itself off"
+        );
     }
 
     /// Attachment editing needs all three conditions; any one missing and a drag

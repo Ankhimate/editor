@@ -315,6 +315,23 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
             ui.close();
         }
         ui.separator();
+        // Isolation, reachable without knowing the shortcut (T-903). The menu
+        // acts on the right-clicked bone rather than the selection, which is
+        // what a context menu means everywhere else.
+        if state.session.is_isolating() {
+            if ui.button("Exit isolation").clicked() {
+                state.session.clear_isolation();
+                ui.close();
+            }
+        } else if ui
+            .button("Isolate this limb")
+            .on_hover_text("Show only this bone and everything under it — Shift+H")
+            .clicked()
+        {
+            state.session.isolate(&state.doc.skeleton, &[bone_id]);
+            ui.close();
+        }
+        ui.separator();
         if ui.button("Rename").clicked() {
             ui.data_mut(|d| d.insert_temp(id.with("renaming"), true));
             ui.close();
