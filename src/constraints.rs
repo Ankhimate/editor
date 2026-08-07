@@ -58,6 +58,31 @@ pub struct IkConstraint {
     /// this defaults to a tenth rather than to infinity (T-504).
     #[serde(default = "default_stretch_limit")]
     pub stretch_limit: f32,
+    /// How much a 3+ bone chain resists redistributing its bend. `0` spreads the
+    /// curl evenly; `1` keeps the pose it is already in.
+    ///
+    /// The one genuine preference in a long-chain solve, and the reason it is a
+    /// field rather than a constant. FABRIK converges to the solution nearest
+    /// where it starts, so *where it starts* is the whole control:
+    ///
+    /// * At `0` the chain is seeded from a circular arc — constant curvature, so
+    ///   the bend lands spread over every joint. What a tentacle, a tail or a
+    ///   rope wants.
+    /// * At `1` it is seeded from the pose as it stands, so the chain keeps the
+    ///   shape the animator posed and only the joints that must move do. What a
+    ///   hand-posed spine or a chain with authored keys wants, because a solver
+    ///   that re-spreads the curl every frame quietly discards that work.
+    ///
+    /// Between the two it interpolates the seed, so a mostly-arc chain with a
+    /// little memory of its pose is expressible.
+    ///
+    /// Ignored for 1- and 2-bone chains: those have exact solutions with no seed
+    /// and nothing to prefer.
+    ///
+    /// Defaults to `0`. A rig authored before this existed was solved from an
+    /// arc, so that is what keeps it looking the same.
+    #[serde(default)]
+    pub stiffness: f32,
 }
 
 impl IkConstraint {
@@ -72,6 +97,7 @@ impl IkConstraint {
             softness: 0.0,
             stretch: false,
             stretch_limit: default_stretch_limit(),
+            stiffness: 0.0,
         }
     }
 
@@ -97,6 +123,7 @@ impl IkConstraint {
             softness: 0.0,
             stretch: false,
             stretch_limit: default_stretch_limit(),
+            stiffness: 0.0,
         }
     }
 
@@ -111,6 +138,7 @@ impl IkConstraint {
             softness: 0.0,
             stretch: false,
             stretch_limit: default_stretch_limit(),
+            stiffness: 0.0,
         }
     }
 }
@@ -515,7 +543,33 @@ fn seed_arc(points: &mut [Vec2], root: Vec2, target: Vec2, lengths: &[f32], tota
 /// no gimbal-adjacent failure at full extension — the cases where a CCD chain
 /// visibly judders. It is also deterministic and allocation-free here, which
 /// `evaluate`'s contract requires (PLAN §2.6).
+/// As [`solve_fabrik`], with control over how much of the chain's current pose
+/// the seed keeps — see [`IkConstraint::stiffness`].
+///
+/// `0` seeds from a pure arc (bend spread evenly), `1` seeds from the pose as
+/// given (bend stays where the animator put it), and between them the two seeds
+/// are mixed per joint.
+pub fn solve_fabrik_stiff(
+    joints: &[Vec2],
+    lengths: &[f32],
+    target: Vec2,
+    bend_dir: f32,
+    stiffness: f32,
+) -> Vec<Vec2> {
+    solve_inner(joints, lengths, target, bend_dir, stiffness)
+}
+
 pub fn solve_fabrik(joints: &[Vec2], lengths: &[f32], target: Vec2, bend_dir: f32) -> Vec<Vec2> {
+    solve_inner(joints, lengths, target, bend_dir, 0.0)
+}
+
+fn solve_inner(
+    joints: &[Vec2],
+    lengths: &[f32],
+    target: Vec2,
+    bend_dir: f32,
+    stiffness: f32,
+) -> Vec<Vec2> {
     let mut points = joints.to_vec();
     if points.len() < 2 || lengths.len() + 1 != points.len() {
         return points;
@@ -544,8 +598,20 @@ pub fn solve_fabrik(joints: &[Vec2], lengths: &[f32], target: Vec2, bend_dir: f3
     // is the shape whose bend is spread evenly over its whole length, so the
     // nearest solution to it is a distributed one; and it commits to a side, so
     // there is no tie for noise to break. `bend_dir` picks which side.
-    if bend_dir != 0.0 && points.len() > 2 {
-        seed_arc(&mut points, root, target, lengths, total, bend_dir);
+    // Stiffness decides how much of the arc is used. At 1 the pose is the seed
+    // untouched, so the arc is not computed at all.
+    let blend = 1.0 - stiffness.clamp(0.0, 1.0);
+    if bend_dir != 0.0 && points.len() > 2 && blend > 0.0 {
+        let mut arc = points.clone();
+        seed_arc(&mut arc, root, target, lengths, total, bend_dir);
+        // Mixed per joint rather than choosing one seed or the other, so the
+        // slider is continuous. The result is not itself a valid chain — a
+        // lerp between two length-correct chains generally is not — but it is
+        // only a starting point, and FABRIK's first forward pass restores every
+        // length before anything reads it.
+        for (point, arc_point) in points.iter_mut().zip(arc.iter()) {
+            *point = point.lerp(*arc_point, blend);
+        }
     }
 
     // Out of reach: there is one answer and it is exact — point straight at the
