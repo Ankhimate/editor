@@ -2240,6 +2240,68 @@ mod tests {
         }
     }
 
+    /// A long chain with slack bends along its **whole length**, not at one
+    /// joint.
+    ///
+    /// The regression this pins: FABRIK converges to the solution nearest its
+    /// seed, and seeding from the pose as authored — a near-straight chain — let
+    /// the backward pass satisfy the target using only the joints nearest the
+    /// effector. An eight-bone tentacle came out as seven collinear bones and one
+    /// 96° kink. Every length was right and the tip was on the target, so
+    /// reaching-and-lengths tests both passed while the result looked broken.
+    ///
+    /// Reaching was never the interesting property for a long chain. This asserts
+    /// the shape.
+    #[test]
+    fn a_long_chain_distributes_its_bend() {
+        let (mut skel, chain, target) = ik_chain(8);
+        // Comfortably inside the 80-unit reach and off-axis, so there is slack
+        // to distribute and a real bend to distribute.
+        skel.bones[target].local_transform.position = glam::vec2(30.0, 26.0);
+        skel.add_constraint(Constraint::Ik(IkConstraint {
+            bones: chain.clone(),
+            ..IkConstraint::aim("curl", target, chain[0])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+
+        // Turn angle at each interior joint, in degrees.
+        let joints: Vec<glam::Vec2> = chain
+            .iter()
+            .map(|&b| pose.world_position(b))
+            .chain(std::iter::once(
+                pose.world_tip(&skel, *chain.last().unwrap()),
+            ))
+            .collect();
+        let turns: Vec<f32> = joints
+            .windows(3)
+            .map(|w| {
+                let a = (w[1] - w[0]).normalize();
+                let b = (w[2] - w[1]).normalize();
+                a.perp_dot(b).atan2(a.dot(b)).to_degrees()
+            })
+            .collect();
+
+        // Every joint contributes. The kink produced three dead-straight joints
+        // at the base, so a floor above zero is what catches it.
+        for (i, turn) in turns.iter().enumerate() {
+            assert!(
+                turn.abs() > 1.0,
+                "joint {i} did not bend ({turn:.1}°) — bend pooled elsewhere: {turns:?}"
+            );
+        }
+        // And no single joint hoards it. The kink was 96° against neighbours
+        // near zero; a well-spread chain stays within a small multiple of its
+        // own mean.
+        let mean = turns.iter().map(|t| t.abs()).sum::<f32>() / turns.len() as f32;
+        let worst = turns.iter().fold(0.0f32, |acc, t| acc.max(t.abs()));
+        assert!(
+            worst < mean * 2.5,
+            "one joint took {worst:.1}° against a {mean:.1}° mean: {turns:?}"
+        );
+    }
+
     /// Out of reach, a chain should point straight at the target rather than
     /// curling: every joint on the line from root to target.
     #[test]

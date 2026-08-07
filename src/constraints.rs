@@ -371,16 +371,26 @@ pub fn stretch_factor(root_pos: Vec2, target_pos: Vec2, reach: f32, limit: f32) 
 
 /// Enforce the requested bend side on a solved chain.
 ///
-/// FABRIK's nudge above chooses the side it converges *from*; this checks the
-/// side it actually landed on and mirrors the interior joints across the
+/// The arc seed in [`solve_fabrik`] commits the chain to a side before the first
+/// iteration, so this rarely fires — it is the backstop for a chain that was
+/// already bent the wrong way hard enough to converge back there. It checks the
+/// side actually landed on and mirrors the **interior** joints across the
 /// root→tip axis if they disagree. Reflection preserves every segment length
 /// exactly, so the mirrored chain still reaches, and the result is deterministic
 /// rather than dependent on how the iteration happened to go.
+///
+/// The endpoints are excluded rather than reflected along with everything else.
+/// They define the mirror, so reflecting them is a no-op *in exact arithmetic* —
+/// but FABRIK stops on a tolerance, not on equality, so the tip sits a hair off
+/// the axis it helped define, and mirroring moved it by twice that. On a chain
+/// solved to 0.01 that was a visible sub-unit error; the tip is now left exactly
+/// where the solver put it.
 pub fn enforce_bend(points: &mut [Vec2], bend_dir: f32) {
     if bend_dir == 0.0 || points.len() < 3 {
         return;
     }
-    let (root, tip) = (points[0], points[points.len() - 1]);
+    let last = points.len() - 1;
+    let (root, tip) = (points[0], points[last]);
     let axis = tip - root;
     if axis.length_squared() < 1e-9 {
         return;
@@ -394,7 +404,7 @@ pub fn enforce_bend(points: &mut [Vec2], bend_dir: f32) {
         return;
     }
     let unit = axis.normalize_or_zero();
-    for point in &mut points[1..] {
+    for point in &mut points[1..last] {
         let offset = *point - root;
         let along = offset.dot(unit);
         // Reflect across the chord: keep the component along it, flip the rest.
@@ -408,9 +418,85 @@ pub fn enforce_bend(points: &mut [Vec2], bend_dir: f32) {
 /// under five passes — and the loop also exits early once it is close enough.
 /// The cap only bounds the pathological case (a target the chain cannot reach
 /// while its root is pinned), where extra passes buy nothing.
-pub const FABRIK_ITERATIONS: usize = 12;
+///
+/// Raised from 12 when the arc seed landed: seeding from a distributed curve
+/// rather than from the setup pose starts a near-extended chain further from its
+/// answer, and the last few hundredths of a unit take passes that a straight
+/// start did not need. Measured worst case over the shipped tentacle is inside
+/// this with room to spare.
+pub const FABRIK_ITERATIONS: usize = 48;
 /// How close to the target counts as solved, in world units.
 pub const FABRIK_TOLERANCE: f32 = 0.01;
+
+/// Lay `points` along a circular arc from the root to the target.
+///
+/// The seed FABRIK iterates from — see the call site for why the seed decides
+/// the result's shape. An arc is chosen because its curvature is constant, so
+/// the bend is spread evenly across every joint rather than pooled in whichever
+/// ones happen to sit near the effector.
+///
+/// # The arc
+///
+/// One arc passes through both endpoints with a given arc length: the one whose
+/// half-angle `h` satisfies `sin(h)/h = chord/total`. That has no closed form,
+/// so it is bisected — `sin(h)/h` decreases monotonically on `(0, π)`, which
+/// makes bisection both correct and quick. Forty rounds takes `h` well below
+/// what `f32` can represent, so the result is exact to the type.
+///
+/// A chain longer than the straight-line distance bulges; one barely longer is
+/// nearly straight. Both fall out of the same solve.
+fn seed_arc(points: &mut [Vec2], root: Vec2, target: Vec2, lengths: &[f32], total: f32, bend: f32) {
+    let chord = (target - root).length();
+    // Degenerate: target on the root, or a chain with no length. Leaving the
+    // seed alone is right — there is no arc, and the caller's straight-line
+    // fallbacks handle it.
+    if chord < 1e-6 || total < 1e-6 {
+        return;
+    }
+    let ratio = (chord / total).clamp(0.0, 1.0);
+    let (mut lo, mut hi) = (1e-4f32, std::f32::consts::PI - 1e-4);
+    for _ in 0..40 {
+        let mid = 0.5 * (lo + hi);
+        if mid.sin() / mid > ratio {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let half_angle = 0.5 * (lo + hi);
+    let radius = total / (2.0 * half_angle);
+
+    let direction = (target - root) / chord;
+    let normal = Vec2::new(-direction.y, direction.x) * bend.signum();
+    // The centre sits off the chord's midpoint by the triangle's other leg.
+    // Clamped at zero because `radius` and `chord/2` can cross by a rounding
+    // error on an almost-straight chain, and a NaN here would poison the pose.
+    let midpoint = root + direction * (chord * 0.5);
+    let offset = (radius * radius - chord * chord * 0.25).max(0.0).sqrt();
+    let centre = midpoint - normal * offset;
+
+    let start = (root - centre).y.atan2((root - centre).x);
+    let sweep_sign = bend.signum();
+    let mut angle = start;
+    for (i, &length) in lengths.iter().enumerate() {
+        // Step by the angle whose **chord** is this segment's length, not by its
+        // share of the arc. Those differ — a chord is always shorter than the arc
+        // it subtends — and stepping by arc length lays the joints too far apart,
+        // so the seed's segments come out longer than the bones. FABRIK then
+        // spends its iterations reaching the target and converges with that
+        // length error still in the chain: the tip lands, and the rig is a
+        // fraction of a unit longer than it should be. Chord placement seeds a
+        // chain whose segments are already exactly right.
+        //
+        // `length / (2 * radius)` can exceed 1 for a segment longer than the
+        // circle's diameter, which only happens when the arc is nearly straight;
+        // clamping falls back to a half-turn there, and the iteration corrects
+        // the rest.
+        let step = 2.0 * (length / (2.0 * radius)).clamp(-1.0, 1.0).asin();
+        angle += step * sweep_sign;
+        points[i + 1] = centre + Vec2::new(angle.cos(), angle.sin()) * radius;
+    }
+}
 
 /// Solve an N-bone chain with FABRIK (Forward And Backward Reaching Inverse
 /// Kinematics).
@@ -437,27 +523,29 @@ pub fn solve_fabrik(joints: &[Vec2], lengths: &[f32], target: Vec2, bend_dir: f3
     let root = points[0];
     let total: f32 = lengths.iter().sum();
 
-    // Which side the chain folds toward is *not* decided by reaching the target:
-    // a chain of three or more bones has infinitely many solutions, and FABRIK
-    // converges to whichever is nearest where it started. A rig authored with
-    // every rotation at zero — a flat, fully-extended chain — starts exactly on
-    // the boundary, so the elbow picks a side by floating-point noise and a leg
-    // can bend backwards.
+    // Where the chain *starts* decides the shape it ends in, because FABRIK
+    // converges to the solution nearest its seed. That is the whole ballgame for
+    // a long chain, and getting it wrong is not a wrong answer — it is a valid
+    // one that looks broken.
     //
-    // Nudging the interior joints off the axis before iterating removes the
-    // ambiguity: `bend_dir` chooses the side, and FABRIK converges to the
-    // nearest solution, which is now the intended one.
+    // Two failures come from seeding with the pose as authored:
+    //
+    // * A flat, fully-extended chain (every rotation zero, which is how rigs are
+    //   built) sits exactly on the boundary between bending up and bending down,
+    //   so the elbow picks a side by floating-point noise and a leg can bend
+    //   backwards.
+    // * With slack in the chain — the target well inside reach — the backward
+    //   pass satisfies the constraint using the joints nearest the effector and
+    //   leaves the rest straight. An eight-bone tentacle came out as seven
+    //   collinear bones and one 96° kink. Every length is right, the tip is on
+    //   the target, and it looks nothing like a tentacle.
+    //
+    // Seeding from a circular arc that spans root to target fixes both. The arc
+    // is the shape whose bend is spread evenly over its whole length, so the
+    // nearest solution to it is a distributed one; and it commits to a side, so
+    // there is no tie for noise to break. `bend_dir` picks which side.
     if bend_dir != 0.0 && points.len() > 2 {
-        let axis = target - root;
-        if axis.length_squared() > 1e-9 {
-            let normal = glam::vec2(-axis.y, axis.x).normalize_or_zero() * bend_dir.signum();
-            // A fraction of the shortest segment: enough to break the tie, small
-            // enough that an already-bent chain keeps the shape it had.
-            let nudge = lengths.iter().cloned().fold(f32::MAX, f32::min) * 0.05;
-            for point in &mut points[1..lengths.len()] {
-                *point += normal * nudge;
-            }
-        }
+        seed_arc(&mut points, root, target, lengths, total, bend_dir);
     }
 
     // Out of reach: there is one answer and it is exact — point straight at the
