@@ -154,6 +154,30 @@ impl MeshAttachment {
         }
     }
 
+    /// The bones influencing this mesh and their total weight, strongest first.
+    ///
+    /// Defined here rather than in the editor because the *order* is what
+    /// colours are keyed on: the weight list, the vertex pies and the paint
+    /// overlay all have to name the same bone the same colour, and they can only
+    /// do that if they agree on this ranking. Two copies of the sort is two
+    /// chances for them to drift apart.
+    ///
+    /// Ties break on `BoneId` so the order is stable across calls — a rank that
+    /// depends on hash iteration would repaint the mesh on every frame.
+    pub fn bound_bones(&self) -> Vec<(BoneId, f32)> {
+        let mut totals: Vec<(BoneId, f32)> = Vec::new();
+        for vertex in &self.weights {
+            for w in vertex {
+                match totals.iter_mut().find(|(bone, _)| *bone == w.bone) {
+                    Some((_, total)) => *total += w.weight,
+                    None => totals.push((w.bone, w.weight)),
+                }
+            }
+        }
+        totals.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        totals
+    }
+
     /// The mesh's bounding box in local space, for UV mapping and framing.
     pub fn bounds(&self) -> (Vec2, Vec2) {
         let mut min = Vec2::splat(f32::MAX);
@@ -747,6 +771,103 @@ mod tests {
         assert!(
             (after - Vec2::new(0.0, 110.0)).length() < 1e-3,
             "swung with it: {after:?}"
+        );
+    }
+
+    /// Rank is what the weight list, the vertex pies and the paint overlay all
+    /// colour by, so it has to be one order and the same order every call.
+    #[test]
+    fn bound_bones_ranks_by_influence_and_stays_stable() {
+        use crate::skeleton::{Bone, Skeleton};
+
+        let mut skel = Skeleton::new();
+        let mut add = |name: &str| {
+            skel.add_bone(Bone {
+                name: name.into(),
+                parent: None,
+                length: 10.0,
+                local_transform: Default::default(),
+                inherit: Default::default(),
+                color: Bone::default_color(),
+            })
+        };
+        let weak = add("weak");
+        let strong = add("strong");
+        let middle = add("middle");
+
+        let w = |bone, weight| VertexWeight { bone, weight };
+        let mesh = MeshAttachment {
+            texture: "art".into(),
+            setup_vertices: vec![Vec2::ZERO; 2],
+            uvs: vec![Vec2::ZERO; 2],
+            triangles: vec![],
+            // Totals across the mesh, not per vertex: `middle` outranks `weak`
+            // only once both vertices are counted.
+            weights: vec![
+                vec![w(weak, 0.1), w(middle, 0.2), w(strong, 0.7)],
+                vec![w(middle, 0.4), w(strong, 0.6)],
+            ],
+            ..MeshAttachment::default()
+        };
+
+        let ranked: Vec<_> = mesh.bound_bones().iter().map(|(b, _)| *b).collect();
+        assert_eq!(ranked, vec![strong, middle, weak], "strongest first");
+
+        // A bone the mesh does not use never appears, so it has no rank and no
+        // colour — it must not borrow rank 0's and read as bound.
+        let stranger = add("stranger");
+        assert!(!ranked.contains(&stranger));
+
+        // Same order twice: colours that shuffle between frames are worse than
+        // no colours.
+        assert_eq!(mesh.bound_bones(), mesh.bound_bones());
+    }
+
+    /// Equal totals still have to come out in one fixed order.
+    #[test]
+    fn bound_bones_breaks_ties_deterministically() {
+        use crate::skeleton::{Bone, Skeleton};
+
+        let mut skel = Skeleton::new();
+        let mut add = |name: &str| {
+            skel.add_bone(Bone {
+                name: name.into(),
+                parent: None,
+                length: 10.0,
+                local_transform: Default::default(),
+                inherit: Default::default(),
+                color: Bone::default_color(),
+            })
+        };
+        let first = add("a");
+        let second = add("b");
+
+        let mesh = MeshAttachment {
+            texture: "art".into(),
+            setup_vertices: vec![Vec2::ZERO],
+            uvs: vec![Vec2::ZERO],
+            triangles: vec![],
+            weights: vec![vec![
+                VertexWeight {
+                    bone: second,
+                    weight: 0.5,
+                },
+                VertexWeight {
+                    bone: first,
+                    weight: 0.5,
+                },
+            ]],
+            ..MeshAttachment::default()
+        };
+
+        // Tied on weight, so the id decides — and the id, not the order the
+        // weights happened to be stored in.
+        assert_eq!(
+            mesh.bound_bones()
+                .iter()
+                .map(|(b, _)| *b)
+                .collect::<Vec<_>>(),
+            vec![first, second]
         );
     }
 }
