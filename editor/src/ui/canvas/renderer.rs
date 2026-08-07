@@ -56,6 +56,50 @@ pub fn group_color(
         .unwrap_or(default)
 }
 
+/// The fixed palette weight colours are drawn from, by rank.
+///
+/// Fixed, not derived. A generated hue sequence gives every rank a different
+/// colour but never the *same* colour twice across sessions or meshes, so
+/// "the sky-blue one is the first bone" is never learnable. These are constant:
+/// rank 0 is always sky, rank 1 always pink, and reading a pie stops needing the
+/// list open beside it.
+///
+/// Chosen to stay apart at the size these are actually read at — a weight pie a
+/// dozen pixels across. Adjacent entries differ in hue *and* in lightness, so
+/// neighbouring wedges separate even where the hue difference is small.
+const RANK_PALETTE: [[f32; 4]; 12] = [
+    [0.36, 0.72, 1.00, 1.0], // sky
+    [1.00, 0.44, 0.72, 1.0], // pink
+    [0.55, 0.87, 0.35, 1.0], // green
+    [1.00, 0.71, 0.24, 1.0], // amber
+    [0.69, 0.55, 1.00, 1.0], // violet
+    [0.25, 0.84, 0.78, 1.0], // teal
+    [1.00, 0.42, 0.36, 1.0], // coral
+    [0.85, 0.82, 0.32, 1.0], // olive
+    [0.45, 0.58, 0.95, 1.0], // indigo
+    [0.95, 0.55, 0.95, 1.0], // orchid
+    [0.40, 0.78, 0.58, 1.0], // jade
+    [0.92, 0.60, 0.45, 1.0], // clay
+];
+
+/// The colour a rank from [`MeshAttachment::bound_bones`] maps to, if it has one.
+///
+/// `None` for a bone the mesh does not use. Deliberately not a fallback colour:
+/// an unbound bone drawn in *any* colour reads as bound, and "which bones hold
+/// this mesh" is the question the whole overlay exists to answer.
+///
+/// Past the palette's length the entries repeat. A mesh with more than twelve
+/// influences is already past what a colour can disambiguate, and cycling keeps
+/// the low ranks — the ones carrying the weight — on their fixed colours.
+///
+/// Takes a rank rather than a bone so a caller drawing hundreds of vertices can
+/// rank the mesh's bones once and colour from that, instead of re-ranking per
+/// lookup — `pie` runs per vertex and the quadratic version was visible as frame
+/// time.
+pub fn color_for_rank(rank: Option<usize>) -> Option<[f32; 4]> {
+    rank.map(|r| RANK_PALETTE[r % RANK_PALETTE.len()])
+}
+
 pub fn bone_gizmo_vertices(
     origin: glam::Vec2,
     angle: f32,
@@ -438,12 +482,15 @@ impl ShearFrame {
 /// answers the other question — "what is holding this vertex at all" — which is
 /// the one you have when a vertex moves and you do not know what moved it.
 /// Bone colours rather than a heat ramp, so a wedge is traceable back to a row
-/// in the tree without a legend.
+/// in the weight list without a legend.
+///
+/// `ranks` maps a bone to its position in this mesh's influence ranking, built
+/// once by the caller — see [`color_for_rank`].
 fn pie(
     painter: &egui::Painter,
     center: egui::Pos2,
     weights: Option<&Vec<ankhimate_core::attachment::VertexWeight>>,
-    skeleton: &ankhimate_core::skeleton::Skeleton,
+    ranks: &std::collections::HashMap<ankhimate_core::ids::BoneId, usize>,
 ) {
     const RADIUS: f32 = 6.0;
     let Some(weights) = weights.filter(|w| !w.is_empty()) else {
@@ -466,17 +513,18 @@ fn pie(
     let mut start = -std::f32::consts::FRAC_PI_2;
     for w in weights {
         let sweep = w.weight / total * std::f32::consts::TAU;
-        let color = skeleton
-            .bones
-            .get(w.bone)
-            .map(|b| {
-                egui::Color32::from_rgb(
-                    (b.color[0] * 255.0) as u8,
-                    (b.color[1] * 255.0) as u8,
-                    (b.color[2] * 255.0) as u8,
-                )
-            })
-            .unwrap_or(egui::Color32::GRAY);
+        // Unreachable in practice — `ranks` is built from these same weights —
+        // but the wedge is skipped rather than given a stand-in colour, which
+        // would claim a rank this bone does not hold.
+        let Some(rgba) = color_for_rank(ranks.get(&w.bone).copied()) else {
+            start += sweep;
+            continue;
+        };
+        let color = egui::Color32::from_rgb(
+            (rgba[0] * 255.0) as u8,
+            (rgba[1] * 255.0) as u8,
+            (rgba[2] * 255.0) as u8,
+        );
 
         // Fanned as a triangle strip from the centre. Steps scale with the
         // wedge so a thin slice is not spent on twelve segments it cannot show.
@@ -514,23 +562,58 @@ fn pie(
     );
 }
 
-/// Weight to colour for the influence overlay.
+/// One vertex's influences mixed into a single colour for the surface overlay.
 ///
-/// Blue (unbound) through green to red (fully bound) — the convention every
-/// rigging tool uses, so it needs no legend.
+/// *Every* bone on the vertex, not just the active one. Shading the active
+/// bone's weight from black to full was the earlier version, and it made a
+/// correctly weighted mesh look broken: where a neighbouring bone takes over,
+/// the active bone's weight is near zero, so a perfectly good foot faded into a
+/// black wedge with nothing to say what was holding it. Mixing means the same
+/// area comes out in the neighbour's colour instead — which is the actual
+/// answer, and the one the pies and the weight list already give.
 ///
-/// Translucent, and increasingly so toward zero: the overlay sits on the artwork
-/// and an opaque one hides the thing being weighted. Unbound areas fade out
-/// entirely, which also makes "nothing here holds this bone" read at a glance
-/// instead of as a wash of blue.
-fn heat(weight: f32) -> egui::Color32 {
-    let w = weight.clamp(0.0, 1.0);
-    let green = (60.0 + 140.0 * (1.0 - (w - 0.5).abs() * 2.0).max(0.0)) as u8;
-    egui::Color32::from_rgba_unmultiplied(
-        (w * 255.0) as u8,
-        green,
-        ((1.0 - w) * 255.0) as u8,
-        (60.0 + 110.0 * w) as u8,
+/// Weighted mean in the palette's colours, so a vertex split evenly between the
+/// sky and pink bones lands halfway between them, and the gradient across a
+/// joint reads as one colour handing over to the other.
+///
+/// Fully opaque. Translucency was tried and it made the one thing this overlay
+/// is for — reading *how much* sits where — a guess: a strong weight over dark
+/// artwork and a weak one over light artwork came out the same on screen,
+/// because half of what you were looking at was the drawing underneath. Hiding
+/// the artwork is the point while weighting; the art is one keypress away.
+///
+/// Black is kept for one case only, and it now means what it looks like: a
+/// vertex nothing holds. Unweighted geometry does not deform, so it is worth
+/// showing as starkly as an error.
+fn heat(
+    weights: Option<&Vec<ankhimate_core::attachment::VertexWeight>>,
+    ranks: &std::collections::HashMap<ankhimate_core::ids::BoneId, usize>,
+) -> egui::Color32 {
+    let Some(weights) = weights.filter(|w| !w.is_empty()) else {
+        return egui::Color32::BLACK;
+    };
+    let mut total = 0.0;
+    let mut mixed = [0.0f32; 3];
+    for w in weights {
+        let Some(rgba) = color_for_rank(ranks.get(&w.bone).copied()) else {
+            continue;
+        };
+        for channel in 0..3 {
+            mixed[channel] += rgba[channel] * w.weight;
+        }
+        total += w.weight;
+    }
+    if total <= 1e-6 {
+        return egui::Color32::BLACK;
+    }
+    // Normalised by the total rather than assuming it is 1. Weights are not
+    // required to sum to one while they are being painted, and an un-normalised
+    // mix would read as "darker" purely because the vertex is under-weighted —
+    // which is a different fault, and one the over-influence ring already flags.
+    egui::Color32::from_rgb(
+        (mixed[0] / total * 255.0) as u8,
+        (mixed[1] / total * 255.0) as u8,
+        (mixed[2] / total * 255.0) as u8,
     )
 }
 
@@ -701,6 +784,12 @@ pub fn render_bones(
     // every window too, so the handles floated on top of open dialogs.
     let canvas_painter = ui.painter_at(rect);
     let artwork_slot = canvas_painter.add(egui::Shape::Noop);
+    // The weight surface is opaque, so anything drawn before it is simply gone —
+    // and the bones were, which left weight painting with no way to see the
+    // thing being painted *with*. Reserved here for the same reason as the
+    // artwork: it is built much further down, once the mesh has been resolved,
+    // but it belongs underneath every gizmo.
+    let weight_surface_slot = canvas_painter.add(egui::Shape::Noop);
     let painter = canvas_painter.clone();
     let viewport_size = glam::Vec2::new(rect.width(), rect.height());
 
@@ -710,6 +799,31 @@ pub fn render_bones(
     // with it: removing a wgpu pass is its own change with its own risk, and
     // this is the seam any future GPU-side mesh overlay would plug into.
     let mesh_draws = Vec::new();
+
+    // Which bones hold the mesh being weighted, and in what order — empty unless
+    // the weight tool is up with a mesh under it.
+    //
+    // Computed here rather than inside the weight overlay below because the bone
+    // gizmos need it too: while weighting, a bone is drawn in the colour it has
+    // *on this mesh*, so that the stick on the canvas, its wedge in a vertex pie
+    // and its row in the weight list are all the same colour. Ranked once, since
+    // both readers would otherwise re-walk every weight in the mesh.
+    let weight_ranks: std::collections::HashMap<ankhimate_core::ids::BoneId, usize> =
+        if state.session.tool == crate::session::Tool::WeightPaint
+            && let Some(slot_id) = state.session.active_slot()
+            && let Some(Attachment::Mesh(mesh)) = state
+                .doc
+                .skeleton
+                .resolve_slot_many(&state.session.skin_stack(), slot_id)
+        {
+            mesh.bound_bones()
+                .iter()
+                .enumerate()
+                .map(|(rank, (bone, _))| (*bone, rank))
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
 
     for (bone_id, bone) in state.doc.skeleton.bones.iter() {
         if !state.session.show_bones {
@@ -736,19 +850,48 @@ pub fn render_bones(
                 egui::Color32::from_rgb(150, 255, 255),
             )
         } else {
-            // Group colour (T-505): the bone's own, inherited from the nearest
+            // While weighting, the bone's colour *on the mesh being painted*;
+            // otherwise its group colour (T-505), inherited from the nearest
             // ancestor that set one. Selection and hover still win — knowing
             // what is selected matters more than knowing which group it is in.
-            let [r, g, b, a] = group_color(&state.doc.skeleton, bone_id);
+            //
+            // The swap matters because a group colour says "this is the left
+            // arm", which is not the question in front of you while weighting.
+            // There the question is "which of these sticks is the pink in the
+            // mesh", and only the rank colour answers it. A bone with no weight
+            // on this mesh has no rank and keeps its group colour, which is also
+            // what marks it out as not yet bound.
+            let ranked = color_for_rank(weight_ranks.get(&bone_id).copied());
+            let [r, g, b, a] = ranked.unwrap_or_else(|| group_color(&state.doc.skeleton, bone_id));
             let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8;
+            // Opaque over the weight surface. The usual 40% fill is right over
+            // artwork, where a see-through stick keeps the art readable, and
+            // wrong over the overlay: a sky-coloured bone at 40% sitting on the
+            // sky-coloured region it owns is invisible in exactly the place you
+            // most need to find it. The dark outline below is what separates the
+            // two.
+            let fill_alpha = if ranked.is_some() { a } else { a * 0.4 };
             (
-                egui::Color32::from_rgba_unmultiplied(to_u8(r), to_u8(g), to_u8(b), to_u8(a * 0.4)),
                 egui::Color32::from_rgba_unmultiplied(
-                    to_u8(r * 0.7),
-                    to_u8(g * 0.7),
-                    to_u8(b * 0.7),
-                    255,
+                    to_u8(r),
+                    to_u8(g),
+                    to_u8(b),
+                    to_u8(fill_alpha),
                 ),
+                if ranked.is_some() {
+                    // Near-black rather than a darker shade of the fill: the
+                    // shade separates a bone from artwork, but not from the
+                    // overlay region painted in that same colour, which is the
+                    // one case that matters here.
+                    egui::Color32::from_rgb(20, 20, 24)
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(
+                        to_u8(r * 0.7),
+                        to_u8(g * 0.7),
+                        to_u8(b * 0.7),
+                        255,
+                    )
+                },
                 egui::Color32::from_rgba_unmultiplied(to_u8(r), to_u8(g), to_u8(b), 255),
             )
         };
@@ -965,13 +1108,26 @@ pub fn render_bones(
                 egui::pos2(rect.min.x + screen.x, rect.min.y + screen.y)
             })
             .collect();
-        let weight_at = |index: usize| {
-            mesh.weights
-                .get(index)
-                .and_then(|w| w.iter().find(|w| w.bone == bone))
-                .map(|w| w.weight)
-                .unwrap_or(0.0)
-        };
+        // The same ranking the bone gizmos were drawn from, so a stick and the
+        // wedges it owns cannot come out different colours.
+        let ranks = &weight_ranks;
+        // The active bone's colour, for the brush ring. The surface itself is
+        // mixed from every bone, so the ring is the only thing left saying which
+        // one a stroke will land on.
+        //
+        // A bone with no rank holds nothing on this mesh yet, which is the
+        // ordinary state a moment before the first stroke. It has no palette
+        // colour to borrow — taking one would put it in another rank's place —
+        // so the brush goes white until the first stroke gives it a rank.
+        let bone_color = color_for_rank(ranks.get(&bone).copied())
+            .map(|rgba| {
+                egui::Color32::from_rgb(
+                    (rgba[0] * 255.0) as u8,
+                    (rgba[1] * 255.0) as u8,
+                    (rgba[2] * 255.0) as u8,
+                )
+            })
+            .unwrap_or(egui::Color32::WHITE);
 
         let settings = &state.session.weight_paint_settings;
 
@@ -985,7 +1141,7 @@ pub fn render_bones(
                 fill.vertices.push(egui::epaint::Vertex {
                     pos: *p,
                     uv: egui::epaint::WHITE_UV,
-                    color: heat(weight_at(index)),
+                    color: heat(mesh.weights.get(index), ranks),
                 });
             }
             for tri in &mesh.triangles {
@@ -994,7 +1150,10 @@ pub fn render_bones(
                 }
             }
             if !fill.indices.is_empty() {
-                painter.add(egui::Shape::mesh(fill));
+                // Into the slot reserved before the gizmos, not appended here:
+                // the fill is opaque and would otherwise bury every bone on the
+                // canvas — including the ones it is colour-coded to match.
+                painter.set(weight_surface_slot, egui::Shape::mesh(fill));
             }
         }
 
@@ -1002,16 +1161,17 @@ pub fn render_bones(
             !settings.show_selected_only || state.session.selected_vertices.contains(&index)
         };
 
-        // Vertices on top, opaque: the fill is translucent so the art stays
-        // readable, and at low weights that leaves the dots too faint to aim at.
+        // Vertices on top of the surface fill: the fill interpolates between
+        // vertices, so the vertex itself is the only place the mix is exact, and
+        // that is what you aim a stroke at.
         for (index, p) in points.iter().enumerate() {
             if !shown(index) {
                 continue;
             }
             if settings.show_pies {
-                pie(&painter, *p, mesh.weights.get(index), &state.doc.skeleton);
+                pie(&painter, *p, mesh.weights.get(index), ranks);
             } else {
-                let color = heat(weight_at(index)).to_opaque();
+                let color = heat(mesh.weights.get(index), ranks);
                 painter.circle_filled(*p, 4.0, egui::Color32::from_black_alpha(120));
                 painter.circle_filled(*p, 3.0, color);
             }
@@ -1031,6 +1191,10 @@ pub fn render_bones(
         // guessing what a stroke will touch, and the feathered part of the
         // radius behaves differently enough from the solid core to be worth
         // drawing separately.
+        //
+        // In the bone's colour, like everything else here: the cursor is what
+        // you are looking at while painting, so it is the cheapest place to say
+        // which bone the stroke will land on.
         if let Some(cursor) = ui.input(|i| i.pointer.hover_pos())
             && rect.contains(cursor)
         {
@@ -1040,13 +1204,13 @@ pub fn render_bones(
             painter.circle_stroke(
                 cursor,
                 outer,
-                egui::Stroke::new(1.0, egui::Color32::from_white_alpha(180)),
+                egui::Stroke::new(1.0, bone_color.gamma_multiply(0.9)),
             );
             if solid > 1.0 {
                 painter.circle_stroke(
                     cursor,
                     solid,
-                    egui::Stroke::new(1.0, egui::Color32::from_white_alpha(70)),
+                    egui::Stroke::new(1.0, bone_color.gamma_multiply(0.45)),
                 );
             }
         }
@@ -1109,17 +1273,11 @@ pub fn render_bones(
         }
 
         // Whichever vertex a click would take, so the handle lights up before
-        // the grab rather than after it.
-        let hovered = ui.ctx().pointer_latest_pos().and_then(|cursor| {
-            let local = glam::Vec2::new(cursor.x - rect.min.x, cursor.y - rect.min.y);
-            positions
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (i, (*p - local).length()))
-                .filter(|(_, d)| *d <= crate::ui::canvas::tools::mesh_edit::VERTEX_HIT)
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(i, _)| i)
-        });
+        // the grab rather than after it. Found by the mesh-edit tool, which runs
+        // before painting and owns `&mut` — this used to repeat the search here,
+        // and once the hover label wanted the same answer (T-913) a single
+        // source became worth more than the duplicated loop.
+        let hovered = state.session.hovered_vertex;
 
         for (index, position) in positions.iter().enumerate() {
             let selected = state.session.selected_vertices.contains(&index);

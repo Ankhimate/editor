@@ -200,16 +200,10 @@ fn controls(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &Mes
 /// Without this list there is no way to see that a stray bone picked up 2% of a
 /// mesh three sessions ago, and nothing to aim Swap or Remove at.
 fn bound_bones(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &MeshAttachment) {
-    let mut totals: Vec<(BoneId, f32)> = Vec::new();
-    for vertex in &mesh.weights {
-        for w in vertex {
-            match totals.iter_mut().find(|(bone, _)| *bone == w.bone) {
-                Some((_, total)) => *total += w.weight,
-                None => totals.push((w.bone, w.weight)),
-            }
-        }
-    }
-    totals.sort_by(|a, b| b.1.total_cmp(&a.1));
+    // Ranked in core, not here: the rank is what the swatch colour is keyed on,
+    // and the canvas pies and paint overlay key on the same one. Ranking twice
+    // is how the list and the mesh end up disagreeing about which bone is green.
+    let totals: Vec<(BoneId, f32)> = mesh.bound_bones();
 
     let mut select: Option<BoneId> = None;
     let mut toggle_lock: Option<BoneId> = None;
@@ -286,17 +280,23 @@ fn bound_bones(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &
                 .show(ui, |ui| {
                     let vertices = mesh.weights.len().max(1) as f32;
                     let active = state.session.active_bone();
-                    for (bone, total) in &totals {
+                    for (rank, (bone, total)) in totals.iter().enumerate() {
                         let Some(info) = state.doc.skeleton.bones.get(*bone) else {
                             continue;
                         };
                         let name = info.name.clone();
-                        // Through `group_color`, not the raw field: an
-                        // uncoloured bone resolves to its derived hue there, and
-                        // reading `info.color` would show every one of them the
-                        // same default teal.
-                        let color =
-                            crate::ui::canvas::renderer::group_color(&state.doc.skeleton, *bone);
+                        // From the bone's rank on *this mesh*, which is what the
+                        // vertex pies and the paint overlay colour by too. Not
+                        // `group_color`: that answers "which limb", so a limb
+                        // given one colour makes every row here the same swatch,
+                        // and the rows exist to be told apart from each other.
+                        // Every row is a bound bone, so every row has a rank —
+                        // `color_for_rank` only returns `None` for bones this
+                        // mesh does not use, which cannot appear in this list.
+                        let Some(color) = crate::ui::canvas::renderer::color_for_rank(Some(rank))
+                        else {
+                            continue;
+                        };
                         let locked = state.session.weight_paint_settings.locked.contains(bone);
                         match bone_row(
                             ui,
@@ -441,8 +441,12 @@ fn bone_row(
         ),
     );
 
+    // On a selected row the fill is the theme's primary, which is a light
+    // accent in the shipped themes — `strong_text_color()` is near-white and
+    // vanished into it. `selection.stroke.color` is the theme's own answer to
+    // "what reads on top of primary", so it stays legible whatever primary is.
     let text_color = if selected {
-        visuals.strong_text_color()
+        visuals.selection.stroke.color
     } else {
         visuals.text_color()
     };
@@ -494,10 +498,12 @@ fn bone_row(
                 crate::ui::icons::UNLOCKED
             },
             egui::FontId::proportional(11.0),
-            if locked {
-                visuals.warn_fg_color
-            } else {
-                visuals.weak_text_color()
+            // Same reason as the name: on a selected row the dimmed colours are
+            // the ones that disappear into the accent fill.
+            match (locked, selected) {
+                (true, _) => visuals.warn_fg_color,
+                (false, true) => text_color,
+                (false, false) => visuals.weak_text_color(),
             },
         );
         if lock_response
