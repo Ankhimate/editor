@@ -385,9 +385,32 @@ pub struct Animation {
     /// Named triggers for the runtime (T-506).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<Event>,
+    /// Editor-only ruler labels (T-906). Written but never exported to a
+    /// runtime — see [`Marker`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<Marker>,
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,
+}
+
+/// A label on the timeline ruler (T-906).
+///
+/// Editor furniture, not runtime data: it is saved into the project so an
+/// animator's notes survive a reopen, and it is exported by nothing. The
+/// distinction from [`Event`] is deliberate — one fires into the game, the other
+/// never leaves the tool.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Marker {
+    pub time: f32,
+    pub name: String,
+    /// RGBA. Defaulted so a marker written without one still loads.
+    #[serde(default = "marker_color_default")]
+    pub color: [f32; 4],
+}
+
+fn marker_color_default() -> [f32; 4] {
+    [0.95, 0.72, 0.30, 1.0]
 }
 
 /// A named trigger at a point in a clip (T-506).

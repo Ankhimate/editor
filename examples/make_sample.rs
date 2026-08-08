@@ -12,7 +12,7 @@
 //! draw order, keyframes, an IK constraint and an event together, which makes it
 //! a decent smoke test for the whole pipeline.
 
-use ankhimate_core::animation::{Animation, EventKey, Interp, Key, Timeline};
+use ankhimate_core::animation::{Animation, EventKey, Interp, Key, Marker, Timeline};
 use ankhimate_core::assets::{AssetDb, ImageAsset};
 use ankhimate_core::attachment::{Attachment, Rect, RegionAttachment};
 use ankhimate_core::constraints::{Constraint, IkConstraint};
@@ -366,6 +366,14 @@ fn main() {
         name: "walk".into(),
         duration: 1.0,
         looping: true,
+        // The four poses a walk cycle is built from, named on the ruler so the
+        // sample also demonstrates markers (T-906).
+        markers: vec![
+            Marker::new(0.0, "contact"),
+            Marker::new(0.25, "down"),
+            Marker::new(0.5, "passing"),
+            Marker::new(0.75, "up"),
+        ],
         events: vec![
             EventKey {
                 time: 0.0,
@@ -447,6 +455,7 @@ fn main() {
         duration: 1.0,
         looping: true,
         events: Vec::new(),
+        markers: Vec::new(),
         timelines: vec![Timeline::BoneTranslate {
             bone: foot_target,
             keys: [

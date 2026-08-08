@@ -379,6 +379,15 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                     balance: e.balance,
                 })
                 .collect(),
+            markers: a
+                .markers
+                .iter()
+                .map(|m| schema::Marker {
+                    time: m.time,
+                    name: m.name.clone(),
+                    color: m.color,
+                })
+                .collect(),
             extra: Default::default(),
         })
         .collect();
@@ -1004,6 +1013,22 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
                     balance: e.balance,
                 })
                 .collect(),
+            // Sorted on the way in rather than trusted: the invariant everything
+            // downstream relies on is "ordered by time", and a hand-edited or
+            // third-party file has made no such promise.
+            markers: {
+                let mut markers: Vec<ankhimate_core::animation::Marker> = a
+                    .markers
+                    .iter()
+                    .map(|m| ankhimate_core::animation::Marker {
+                        time: m.time,
+                        name: m.name.clone(),
+                        color: m.color,
+                    })
+                    .collect();
+                markers.sort_by(|x, y| x.time.total_cmp(&y.time));
+                markers
+            },
             looping: a.looping,
         });
     }
