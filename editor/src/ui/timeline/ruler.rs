@@ -92,12 +92,22 @@ pub fn ui(
         })
         .unwrap_or_default();
 
+    // **One** interaction for the whole strip, branching inside. Markers and the
+    // scrub used to register two `interact` calls over the same rect; egui gives
+    // the pointer to whichever was registered last, so the scrub silently ate
+    // every click the markers needed — including the right-click that opens the
+    // rename menu, which therefore never opened at all.
     let marker_response = ui.interact(
         sheet_rect,
-        ui.id().with("tl_markers"),
+        ui.id().with("tl_ruler"),
         egui::Sense::click_and_drag(),
     );
-    let pointer = marker_response.interact_pointer_pos();
+    // `hover_pos` as well as `interact_pointer_pos`: the former is `None` unless
+    // a button is down, and the menu has to know which flag was under the cursor
+    // on the frame the right-click landed.
+    let pointer = marker_response
+        .interact_pointer_pos()
+        .or_else(|| ui.ctx().pointer_latest_pos());
     let grabbed = pointer.and_then(|p| {
         markers
             .iter()
@@ -108,6 +118,10 @@ pub fn ui(
     });
 
     let mut marker_edit: Option<(usize, MarkerEdit)> = None;
+    // A drag that *starts* on a flag moves the flag; one that starts anywhere
+    // else scrubs, even if it passes over a flag on the way. Deciding that once
+    // at drag start is what keeps a scrub from snagging on every marker it
+    // crosses.
     if marker_response.drag_started() {
         state.session.dragging_marker = grabbed;
     }
@@ -266,14 +280,12 @@ pub fn ui(
         state.dispatch(Box::new(EditMarker::new(anim, index, edit)));
     }
 
-    // Scrub — but not while a marker is being dragged, and not on the click that
-    // grabbed one.
-    let resp = ui.interact(
-        sheet_rect,
-        ui.id().with("tl_scrub"),
-        egui::Sense::click_and_drag(),
-    );
-    let marker_has_the_pointer = state.session.dragging_marker.is_some() || grabbed.is_some();
+    // Scrub, on the same response — but not while a marker is being dragged, and
+    // not on the click that grabbed one.
+    let resp = &marker_response;
+    // Only an actual marker drag blocks the scrub. Merely hovering near a flag
+    // must not, or the ruler would go dead in a band around every marker.
+    let marker_has_the_pointer = state.session.dragging_marker.is_some();
     if !marker_has_the_pointer
         && let Some(pos) = resp.interact_pointer_pos()
         && (resp.clicked() || resp.dragged())
