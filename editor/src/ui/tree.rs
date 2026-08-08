@@ -1099,6 +1099,18 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
         }
 
         for child in children {
+            // A child filed into a folder is drawn there, not here. Without
+            // this a grouped bone appeared twice — once inside its folder and
+            // once under its parent — which is also what made egui report the
+            // widget-id clash: two rows for one bone.
+            if state
+                .doc
+                .skeleton
+                .group_of(ankhimate_core::skeleton::GroupMember::Bone(child))
+                .is_some()
+            {
+                continue;
+            }
             render_bone_node(ui, state, child, depth + 1);
         }
     }
@@ -1454,6 +1466,94 @@ mod tests {
             }),
         );
         state
+    }
+
+    /// Every bone is drawn exactly once, whether or not it is in a folder.
+    ///
+    /// The bug this pins shipped: a grouped bone with a parent was drawn inside
+    /// its folder *and* under its parent, and two rows for one bone is what made
+    /// egui paint "First use of widget ID …" across every panel. The id clash
+    /// was the symptom; this is the cause.
+    ///
+    /// **Weaker than it looks.** `render_bone_node` needs a live `Ui`, so this
+    /// re-states its walk rather than calling it — which means it checks the
+    /// *rule* is right, not that the panel obeys it. A change to the real
+    /// recursion that forgot the skip would leave this passing. Pinning it
+    /// properly needs the row list extracted from the drawing, which is worth
+    /// doing and is not this fix.
+    #[test]
+    fn a_grouped_bone_is_drawn_once() {
+        use ankhimate_core::skeleton::{Group, GroupMember};
+
+        let mut state = AppState::default();
+        let root = state.doc.skeleton.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 10.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        // A *child*, not a root — the case the first fix missed, because it only
+        // filtered the top-level list.
+        let head = state.doc.skeleton.add_bone(Bone {
+            name: "head".into(),
+            parent: Some(root),
+            length: 10.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let group = state.doc.skeleton.add_group(Group::new("test"));
+        state
+            .doc
+            .skeleton
+            .assign_to_group(GroupMember::Bone(head), Some(group));
+
+        // What the panel would draw: the roots it lists, plus each folder's
+        // members, recursing exactly as `render_bone_node` does.
+        fn walk(state: &AppState, bone: BoneId, out: &mut Vec<BoneId>) {
+            out.push(bone);
+            let children: Vec<BoneId> = state
+                .doc
+                .skeleton
+                .bones
+                .iter()
+                .filter_map(|(id, b)| (b.parent == Some(bone)).then_some(id))
+                .collect();
+            for child in children {
+                if state
+                    .doc
+                    .skeleton
+                    .group_of(GroupMember::Bone(child))
+                    .is_some()
+                {
+                    continue;
+                }
+                walk(state, child, out);
+            }
+        }
+
+        let mut drawn = Vec::new();
+        for (id, bone) in state.doc.skeleton.bones.iter() {
+            let grouped = state.doc.skeleton.group_of(GroupMember::Bone(id)).is_some();
+            if bone.parent.is_none() && !grouped {
+                walk(&state, id, &mut drawn);
+            }
+        }
+        for member in &state.doc.skeleton.groups[group].members {
+            if let GroupMember::Bone(b) = member {
+                walk(&state, *b, &mut drawn);
+            }
+        }
+
+        assert_eq!(
+            drawn.iter().filter(|b| **b == head).count(),
+            1,
+            "the grouped bone is drawn once, not in both places"
+        );
+        assert_eq!(drawn.iter().filter(|b| **b == root).count(), 1);
+        assert_eq!(drawn.len(), 2, "every bone accounted for, none twice");
     }
 
     /// Shift-click selects the span between the active bone and the clicked one,
