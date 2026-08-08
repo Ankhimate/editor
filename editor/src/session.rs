@@ -197,6 +197,11 @@ pub struct Session {
     pub mesh_edit: bool,
     /// Vertices picked in mesh edit mode, by index into setup_vertices.
     pub selected_vertices: Vec<usize>,
+    /// Where a bone box-select began, in canvas-local screen space.
+    ///
+    /// Dragging from empty canvas sweeps a rectangle over the bones, which is
+    /// how a limb gets selected without clicking eight sticks in turn.
+    pub bone_box_start: Option<glam::Vec2>,
     /// Where a mesh box-select began, in canvas-local screen space (T-401).
     pub vertex_box_start: Option<glam::Vec2>,
     /// Vertex being dragged, if any.
@@ -299,7 +304,6 @@ pub struct Session {
     /// which owns the dialog — the tree cannot reach it directly.
     pub request_bulk_rename: bool,
     /// A panel asked to name and save the current selection (T-904).
-    pub request_save_selection_set: bool,
     /// A panel asked to create a folder from the selection.
     pub request_new_group: bool,
     /// A folder edit a tree row asked for, resolved by the app.
@@ -429,6 +433,7 @@ impl Session {
             selected_vertices: Vec::new(),
             dragging_vertex: None,
             hovered_vertex: None,
+            bone_box_start: None,
             vertex_box_start: None,
             edit_target: EditTarget::Bone,
             active_transform_tool: TransformTool::Translate,
@@ -461,7 +466,6 @@ impl Session {
             pending_atlas: None,
             focus_tab: None,
             request_bulk_rename: false,
-            request_save_selection_set: false,
             request_new_group: false,
             group_request: None,
             slot_edit: None,

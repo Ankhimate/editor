@@ -58,7 +58,6 @@ mod tests {
             constraints: Vec::new(),
             constraint_order: Vec::new(),
             animations: Vec::new(),
-            selection_sets: Vec::new(),
             groups: Vec::new(),
             extra: Default::default(),
         }

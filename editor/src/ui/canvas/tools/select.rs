@@ -264,6 +264,78 @@ impl CanvasTool for SelectTool {
             return;
         }
 
+        // ── Box select ───────────────────────────────────────────────────
+        // A drag that starts on empty canvas sweeps a rectangle over the bones.
+        // Starting it anywhere else would fight posing, which is what a drag on
+        // a bone or a gizmo already means — so the gate is "nothing under the
+        // cursor", checked once when the drag begins.
+        if ctx.response.drag_started()
+            && ctx.state.session.dragging_gizmo == crate::session::GizmoInteraction::None
+            && ctx.state.session.hovered_bone.is_none()
+            && let Some(m) = mouse_screen
+        {
+            ctx.state.session.bone_box_start = Some(m);
+        }
+        if let Some(start) = ctx.state.session.bone_box_start {
+            if let Some(m) = mouse_screen {
+                let rect = egui::Rect::from_two_pos(
+                    egui::pos2(ctx.rect.min.x + start.x, ctx.rect.min.y + start.y),
+                    egui::pos2(ctx.rect.min.x + m.x, ctx.rect.min.y + m.y),
+                );
+                let visuals = ctx.ui.visuals();
+                let painter = ctx.ui.painter_at(ctx.rect);
+                painter.rect_filled(rect, 0.0, visuals.selection.bg_fill.gamma_multiply(0.15));
+                painter.rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(1.0, visuals.selection.bg_fill),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if ctx.ui.input(|i| i.pointer.primary_released()) {
+                if let Some(m) = mouse_screen {
+                    let lo = start.min(m);
+                    let hi = start.max(m);
+                    // A bone counts as inside when its *origin* is: testing the
+                    // whole stick would sweep in every parent whose tip happens
+                    // to cross the box, which is not what a rectangle drawn
+                    // around a hand means.
+                    let picked: Vec<ankhimate_core::ids::BoneId> = ctx
+                        .state
+                        .doc
+                        .skeleton
+                        .bones
+                        .keys()
+                        .filter(|id| {
+                            let world = ctx.state.pose.world_position(*id);
+                            let p = ctx
+                                .state
+                                .session
+                                .camera
+                                .world_to_screen(world, viewport_size);
+                            p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y
+                        })
+                        .collect();
+                    // A sweep that caught nothing clears, matching a click on
+                    // empty space; adding modifiers keeps what was there.
+                    let additive = ctx.ui.input(|i| i.modifiers.ctrl || i.modifiers.shift);
+                    if !additive {
+                        ctx.state.session.selected_bones.clear();
+                    }
+                    for bone in picked {
+                        if !ctx.state.session.selected_bones.contains(&bone) {
+                            ctx.state.session.selected_bones.push(bone);
+                        }
+                    }
+                    if let Some(&last) = ctx.state.session.selected_bones.last() {
+                        ctx.state.session.selection = Some(crate::session::Selection::Bone(last));
+                    }
+                }
+                ctx.state.session.bone_box_start = None;
+            }
+            return;
+        }
+
         // Handle Drag Release — commit the accumulated preview as ONE command so
         // the whole drag is a single undo step and the document was never touched
         // mid-drag (PLAN §3.2, defect D7).

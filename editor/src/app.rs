@@ -24,7 +24,6 @@ pub struct AnkhimateApp {
     /// Its settings, kept while it is open.
     rename: crate::ui::rename::RenameState,
     /// In-progress name for a new selection set (T-904).
-    naming_set: Option<String>,
     /// In-progress name for a folder: `(existing group, name)`.
     naming_group: Option<(Option<ankhimate_core::ids::GroupId>, String)>,
     /// Panes drawn in their own OS window (T-910).
@@ -350,7 +349,6 @@ impl Default for AnkhimateApp {
             show_settings: false,
             show_rename: false,
             rename: Default::default(),
-            naming_set: None,
             naming_group: None,
             torn_off: Vec::new(),
             logo: crate::ui::branding::Logo::default(),
@@ -582,7 +580,13 @@ impl eframe::App for AnkhimateApp {
             if space {
                 crate::ui::timeline::toggle_play(&mut self.state);
             }
-            if left {
+            // Arrows nudge the selection when there is one, and step the timeline
+            // when there is not. The same key doing two things is a real cost;
+            // the alternative was a chord on the commoner action, and a selected
+            // bone is a clear enough signal of which you meant.
+            if !self.state.session.selected_bones.is_empty() && self.nudge_selection(ctx) {
+                // Handled as a transform; the timeline keeps its playhead.
+            } else if left {
                 if ctrl {
                     self.state.jump_key(false);
                 } else {
@@ -1313,6 +1317,13 @@ impl eframe::App for AnkhimateApp {
                     self.state
                         .dispatch(Box::new(EditGroup::new(id, GroupEdit::Ungroup)));
                 }
+                GroupRequest::SelectForTransform(id) => {
+                    let targets = self.state.doc.skeleton.group_transform_targets(id);
+                    if let Some(&last) = targets.last() {
+                        self.state.session.selection = Some(crate::session::Selection::Bone(last));
+                    }
+                    self.state.session.selected_bones = targets;
+                }
                 GroupRequest::AddSelected(id) => {
                     let members: Vec<_> = self
                         .state
@@ -1389,53 +1400,6 @@ impl eframe::App for AnkhimateApp {
             }
             if close || response.closed {
                 self.naming_group = None;
-            }
-        }
-
-        // ── Name a selection set (T-904) ─────────────────────────────────
-        if std::mem::take(&mut self.state.session.request_save_selection_set) {
-            self.naming_set = Some(String::new());
-        }
-        if let Some(name) = &mut self.naming_set {
-            let mut close = false;
-            let mut save: Option<String> = None;
-            let response = crate::ui::dialog::Dialog::new("name_selection_set", "Save selection")
-                .icon(crate::ui::icons::BONE)
-                .width(320.0)
-                .show(ctx, &self.theme, |ui| {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} bone(s) selected",
-                            self.state.session.selected_bones.len()
-                        ))
-                        .color(ui.visuals().weak_text_color()),
-                    );
-                    ui.add_space(6.0);
-                    let field = ui.add(
-                        egui::TextEdit::singleline(name)
-                            .desired_width(280.0)
-                            .hint_text("left arm"),
-                    );
-                    field.request_focus();
-                    ui.add_space(8.0);
-                    let named = !name.trim().is_empty();
-                    let entered =
-                        field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if (ui.add_enabled(named, egui::Button::new("Save")).clicked() || entered)
-                        && named
-                    {
-                        save = Some(name.trim().to_string());
-                    }
-                });
-            if let Some(name) = save {
-                let bones = self.state.session.selected_bones.clone();
-                self.state.dispatch(Box::new(
-                    crate::commands::selection_set_cmds::SaveSelectionSet::new(name, bones),
-                ));
-                close = true;
-            }
-            if close || response.closed {
-                self.naming_set = None;
             }
         }
 
@@ -1577,6 +1541,122 @@ impl AnkhimateApp {
             self.torn_off.retain(|t| !closed.contains(t));
             self.save_torn_off();
         }
+    }
+
+    /// Nudge the selected bones with the arrow keys, per the active transform
+    /// tool. Returns whether an arrow was consumed.
+    ///
+    /// Which axis each arrow drives is the tool's business, not one convention
+    /// forced onto four different operations:
+    ///
+    /// * **Translate** — arrows move on their own axes, the obvious mapping.
+    /// * **Rotate** — left/right turn, and up/down turn too, so the hand already
+    ///   on the arrows does not have to find the right pair.
+    /// * **Scale** — up/down scale both axes together; left/right scale x alone,
+    ///   which is the one people reach for when a limb is the wrong length.
+    /// * **Shear** — left/right shear x, up/down shear y, matching the gizmo's
+    ///   own two handles.
+    ///
+    /// Shift multiplies the step by ten. Small enough by default to place a bone
+    /// exactly, and a held Shift covers the distance that would otherwise be
+    /// forty presses.
+    ///
+    /// A group is nudged through `TransformGroup` when the selection *is* a
+    /// group's members, so a folder moves as one undo step rather than one per
+    /// bone.
+    fn nudge_selection(&mut self, ctx: &egui::Context) -> bool {
+        use crate::session::TransformTool;
+
+        let (left, right, up, down, shift) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::ArrowRight),
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::ArrowDown),
+                i.modifiers.shift,
+            )
+        });
+        if !(left || right || up || down) {
+            return false;
+        }
+        // Structural edits only in Setup; while animating the same nudge should
+        // be keyed, which `commit_bone_pose` already routes.
+        let x = (right as i32 - left as i32) as f32;
+        // Screen up is world down — the viewport's Y runs the other way.
+        let y = (up as i32 - down as i32) as f32;
+        let step = if shift { 10.0 } else { 1.0 };
+
+        let mut delta = crate::commands::group_cmds::GroupDelta::default();
+        match self.state.session.active_transform_tool {
+            TransformTool::Translate => delta.translate = glam::vec2(x, y) * step,
+            TransformTool::Rotate => {
+                // Both pairs turn, so either hand position works.
+                let turn = if x != 0.0 { x } else { y };
+                delta.rotate = turn * step * std::f32::consts::PI / 180.0;
+            }
+            TransformTool::Scale => {
+                let factor = 1.0 + 0.01 * step;
+                if y != 0.0 {
+                    let s = if y > 0.0 { factor } else { 1.0 / factor };
+                    delta.scale = glam::vec2(s, s);
+                } else if x != 0.0 {
+                    let s = if x > 0.0 { factor } else { 1.0 / factor };
+                    delta.scale = glam::vec2(s, 1.0);
+                }
+            }
+            TransformTool::Shear => {
+                delta.shear = glam::vec2(x, y) * step * std::f32::consts::PI / 180.0;
+            }
+        }
+
+        // A folder whose members are exactly the selection moves as a group, so
+        // the undo says "Transform Group" and one step covers the limb.
+        let selected: std::collections::HashSet<_> =
+            self.state.session.selected_bones.iter().copied().collect();
+        let group = self
+            .state
+            .doc
+            .skeleton
+            .groups
+            .iter()
+            .find(|(id, _)| {
+                let members: std::collections::HashSet<_> = self
+                    .state
+                    .doc
+                    .skeleton
+                    .group_transform_targets(*id)
+                    .into_iter()
+                    .collect();
+                !members.is_empty() && members == selected
+            })
+            .map(|(id, _)| id);
+
+        match group {
+            Some(id) => {
+                self.state
+                    .dispatch(Box::new(crate::commands::group_cmds::TransformGroup::new(
+                        id, delta,
+                    )));
+            }
+            None => {
+                let bones = self.state.session.selected_bones.clone();
+                for bone in bones {
+                    let Some(b) = self.state.doc.skeleton.bones.get(bone) else {
+                        continue;
+                    };
+                    let mut local = b.local_transform;
+                    local.position += delta.translate;
+                    local.rotation += delta.rotate;
+                    local.scale *= delta.scale;
+                    local.shear += delta.shear;
+                    // Through `commit_bone_pose`, so the nudge becomes a setup
+                    // edit or a key depending on mode, exactly as a drag does.
+                    self.state.commit_bone_pose(bone, local);
+                }
+                self.state.refresh_pose();
+            }
+        }
+        true
     }
 
     /// Persist which panes are torn off, so a second monitor stays set up.

@@ -263,3 +263,120 @@ mod tests {
         assert_eq!(doc.skeleton.group_of(GroupMember::Bone(a)), Some(first));
     }
 }
+
+/// Move, rotate, scale or shear every top-level member of a folder at once.
+///
+/// **Top-level only**, via `group_transform_targets`: a folder holding a
+/// shoulder *and* the elbow under it moves the limb once. The elbow already
+/// follows the shoulder through ordinary parenting, so writing to both would
+/// displace it twice. Attachments are untouched for the same reason — they ride
+/// their bone.
+///
+/// Each member's own local transform is what changes. The group gains no pivot
+/// and no transform of its own, so it stays organisation rather than becoming a
+/// second parenting system: rotating a group turns each limb about its own
+/// origin, which is what "apply this to everything in here" means.
+pub struct TransformGroup {
+    group: GroupId,
+    delta: GroupDelta,
+    /// Captured on the first apply so a merged drag reverts to where it began.
+    before: Option<Vec<(ankhimate_core::ids::BoneId, ankhimate_core::math::Transform)>>,
+}
+
+/// What [`TransformGroup`] adds to each member.
+#[derive(Clone, Copy, PartialEq)]
+pub struct GroupDelta {
+    pub translate: glam::Vec2,
+    /// Radians.
+    pub rotate: f32,
+    /// Multiplied into the member's scale; `1.0` leaves it alone.
+    pub scale: glam::Vec2,
+    /// Radians, added to shear.
+    pub shear: glam::Vec2,
+}
+
+impl Default for GroupDelta {
+    fn default() -> Self {
+        Self {
+            translate: glam::Vec2::ZERO,
+            rotate: 0.0,
+            scale: glam::Vec2::ONE,
+            shear: glam::Vec2::ZERO,
+        }
+    }
+}
+
+impl TransformGroup {
+    pub fn new(group: GroupId, delta: GroupDelta) -> Self {
+        Self {
+            group,
+            delta,
+            before: None,
+        }
+    }
+}
+
+impl EditCommand for TransformGroup {
+    fn apply(&mut self, doc: &mut Document) {
+        let targets = doc.skeleton.group_transform_targets(self.group);
+        if targets.is_empty() {
+            return;
+        }
+        if self.before.is_none() {
+            self.before = Some(
+                targets
+                    .iter()
+                    .filter_map(|b| doc.skeleton.bones.get(*b).map(|x| (*b, x.local_transform)))
+                    .collect(),
+            );
+        }
+        // Re-applied from the snapshot rather than compounding, so a merged drag
+        // means "this much from where it started", not "this much again".
+        let Some(before) = &self.before else { return };
+        for (bone, original) in before {
+            let Some(b) = doc.skeleton.bones.get_mut(*bone) else {
+                continue;
+            };
+            b.local_transform = *original;
+            b.local_transform.position += self.delta.translate;
+            b.local_transform.rotation += self.delta.rotate;
+            b.local_transform.scale *= self.delta.scale;
+            b.local_transform.shear += self.delta.shear;
+        }
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        let Some(before) = self.before.take() else {
+            return;
+        };
+        for (bone, transform) in before {
+            if let Some(b) = doc.skeleton.bones.get_mut(bone) {
+                b.local_transform = transform;
+            }
+        }
+    }
+
+    fn merge(&mut self, next: &dyn EditCommand) -> bool {
+        let Some(other) = next.as_any().downcast_ref::<TransformGroup>() else {
+            return false;
+        };
+        if other.group != self.group {
+            return false;
+        }
+        // A drag, or a held arrow key, is one edit.
+        self.delta = other.delta;
+        true
+    }
+
+    fn label(&self) -> &str {
+        "Transform Group"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
