@@ -183,6 +183,58 @@ mod tests {
         }
     }
 
+    /// Rotating a multi-selection swings it about the pivot, not in place.
+    ///
+    /// The distinction that makes a selection behave like the box drawn round
+    /// it: with per-bone origins every bone would spin where it stands and the
+    /// arrangement would not change at all, which looks like the rotation did
+    /// nothing.
+    #[test]
+    fn a_pivoted_rotation_moves_the_arrangement() {
+        let mut doc = Document::new();
+        let left = doc.skeleton.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(-10.0, 0.0),
+                ..Default::default()
+            },
+            ..bone("left")
+        });
+        let right = doc.skeleton.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(10.0, 0.0),
+                ..Default::default()
+            },
+            ..bone("right")
+        });
+        let mut history = History::default();
+
+        // A quarter turn about the origin, which is the midpoint of the two.
+        history.push(
+            Box::new(TransformGroup::new(
+                vec![left, right],
+                Some(glam::Vec2::ZERO),
+                GroupDelta {
+                    rotate: std::f32::consts::FRAC_PI_2,
+                    ..Default::default()
+                },
+            )),
+            &mut doc,
+        );
+
+        // They swapped from the x axis to the y axis: the pair turned, rather
+        // than each bone spinning in place.
+        let l = doc.skeleton.bones[left].local_transform.position;
+        let r = doc.skeleton.bones[right].local_transform.position;
+        assert!(
+            l.x.abs() < 1e-4 && r.x.abs() < 1e-4,
+            "left {l:?} right {r:?}"
+        );
+        assert!(l.y < -5.0 && r.y > 5.0, "and swapped ends: {l:?} {r:?}");
+
+        history.undo(&mut doc);
+        assert!((doc.skeleton.bones[left].local_transform.position.x + 10.0).abs() < 1e-4);
+    }
+
     /// Ungrouping dissolves the folder and keeps everything that was in it.
     ///
     /// The distinction the whole feature rests on: a folder is not a thing that
@@ -277,7 +329,13 @@ mod tests {
 /// second parenting system: rotating a group turns each limb about its own
 /// origin, which is what "apply this to everything in here" means.
 pub struct TransformGroup {
-    group: GroupId,
+    /// The bones to move. Given explicitly rather than looked up from a group,
+    /// so a box-selection and a folder go through the same command — they are
+    /// the same edit, and two paths would be two chances to behave differently.
+    targets: Vec<ankhimate_core::ids::BoneId>,
+    /// World-space centre for rotation and scale. `None` transforms each bone
+    /// about its own origin.
+    pivot: Option<glam::Vec2>,
     delta: GroupDelta,
     /// Captured on the first apply so a merged drag reverts to where it began.
     before: Option<Vec<(ankhimate_core::ids::BoneId, ankhimate_core::math::Transform)>>,
@@ -307,9 +365,14 @@ impl Default for GroupDelta {
 }
 
 impl TransformGroup {
-    pub fn new(group: GroupId, delta: GroupDelta) -> Self {
+    pub fn new(
+        targets: Vec<ankhimate_core::ids::BoneId>,
+        pivot: Option<glam::Vec2>,
+        delta: GroupDelta,
+    ) -> Self {
         Self {
-            group,
+            targets,
+            pivot,
             delta,
             before: None,
         }
@@ -318,7 +381,7 @@ impl TransformGroup {
 
 impl EditCommand for TransformGroup {
     fn apply(&mut self, doc: &mut Document) {
-        let targets = doc.skeleton.group_transform_targets(self.group);
+        let targets = self.targets.clone();
         if targets.is_empty() {
             return;
         }
@@ -332,13 +395,46 @@ impl EditCommand for TransformGroup {
         }
         // Re-applied from the snapshot rather than compounding, so a merged drag
         // means "this much from where it started", not "this much again".
-        let Some(before) = &self.before else { return };
-        for (bone, original) in before {
+        let Some(before) = self.before.clone() else {
+            return;
+        };
+
+        // Rotation and scale act about the selection's own centre, not each
+        // bone's origin. That is what makes a multi-selection behave like the
+        // box drawn round it: turning the box swings the limbs around the box,
+        // which is what you see and therefore what you expect. Per-bone origins
+        // would spin every bone in place and leave the arrangement unchanged.
+        //
+        // The pivot is handed in by the caller because it is a *world* position
+        // and this command only has the document — the pose that would resolve
+        // it lives in the editor.
+        let pivot = self.pivot;
+        for (bone, original) in &before {
             let Some(b) = doc.skeleton.bones.get_mut(*bone) else {
                 continue;
             };
             b.local_transform = *original;
+
+            if let Some(pivot) = pivot {
+                // Only the *parent-space* offset from the pivot is turned and
+                // scaled. Working in local space would be wrong the moment a
+                // parent is rotated; these bones are the top of their limbs, so
+                // their parents are outside the selection and are not moving.
+                let from_pivot = original.position - pivot;
+                let (sin, cos) = self.delta.rotate.sin_cos();
+                let rotated = glam::vec2(
+                    from_pivot.x * cos - from_pivot.y * sin,
+                    from_pivot.x * sin + from_pivot.y * cos,
+                );
+                let scaled = rotated * self.delta.scale;
+                b.local_transform.position = pivot + scaled;
+            } else {
+                b.local_transform.position = original.position;
+            }
+
             b.local_transform.position += self.delta.translate;
+            // Each bone still turns and scales on its own axes as well, so the
+            // limb keeps its shape while the arrangement moves around the box.
             b.local_transform.rotation += self.delta.rotate;
             b.local_transform.scale *= self.delta.scale;
             b.local_transform.shear += self.delta.shear;
@@ -360,7 +456,10 @@ impl EditCommand for TransformGroup {
         let Some(other) = next.as_any().downcast_ref::<TransformGroup>() else {
             return false;
         };
-        if other.group != self.group {
+        // Same bones and same pivot, or it is a different edit: a nudge that
+        // changed what was selected halfway through must not fold into the one
+        // before it, or undo would land somewhere nobody asked for.
+        if other.targets != self.targets || other.pivot != self.pivot {
             return false;
         }
         // A drag, or a held arrow key, is one edit.

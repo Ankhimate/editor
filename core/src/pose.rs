@@ -291,6 +291,39 @@ fn evaluate_inner(
 ///
 /// Non-blendable timelines (`SlotAttachment`, `DrawOrder`) cannot be averaged, so
 /// the highest-alpha animation that has an opinion wins.
+/// The world-space bounding box of a set of bones, as `(min, max)`.
+///
+/// What a multi-selection is *edited as*: one box with a position, a size and a
+/// centre to turn about. Editing per-bone values instead would mean a "set x to
+/// 10" that stacks eight bones on one coordinate — which destroys a pose rather
+/// than moving it, and cannot honestly display anything when the values differ.
+///
+/// Spans each bone's origin *and* its tip, so the box contains the bones as
+/// drawn rather than just their pivots — a box that clipped half of every stick
+/// would be a poor thing to scale from.
+///
+/// `None` when nothing resolves.
+pub fn selection_bounds(
+    skel: &Skeleton,
+    pose: &Pose,
+    bones: &[BoneId],
+) -> Option<(glam::Vec2, glam::Vec2)> {
+    let mut min = glam::Vec2::splat(f32::MAX);
+    let mut max = glam::Vec2::splat(f32::MIN);
+    let mut any = false;
+    for &bone in bones {
+        if !skel.bones.contains_key(bone) {
+            continue;
+        }
+        for point in [pose.world_position(bone), pose.world_tip(skel, bone)] {
+            min = min.min(point);
+            max = max.max(point);
+            any = true;
+        }
+    }
+    any.then_some((min, max))
+}
+
 fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut Pose) {
     // Winner-takes-all bookkeeping for the non-blendable timelines.
     let mut attachment_winner: SecondaryMap<SlotId, f32> = SecondaryMap::new();

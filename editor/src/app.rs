@@ -1609,52 +1609,37 @@ impl AnkhimateApp {
             }
         }
 
-        // A folder whose members are exactly the selection moves as a group, so
-        // the undo says "Transform Group" and one step covers the limb.
-        let selected: std::collections::HashSet<_> =
-            self.state.session.selected_bones.iter().copied().collect();
-        let group = self
-            .state
-            .doc
-            .skeleton
-            .groups
-            .iter()
-            .find(|(id, _)| {
-                let members: std::collections::HashSet<_> = self
-                    .state
-                    .doc
-                    .skeleton
-                    .group_transform_targets(*id)
-                    .into_iter()
-                    .collect();
-                !members.is_empty() && members == selected
-            })
-            .map(|(id, _)| id);
-
-        match group {
-            Some(id) => {
-                self.state
-                    .dispatch(Box::new(crate::commands::group_cmds::TransformGroup::new(
-                        id, delta,
-                    )));
+        let bones = self.state.session.selected_bones.clone();
+        if bones.len() > 1 {
+            // A multi-selection turns and scales about the box drawn round it,
+            // however it was selected — box-swept, ctrl-clicked, or a folder.
+            // One rule, and the pivot is the thing on screen, so there is no
+            // guessing which behaviour you got.
+            let pivot = ankhimate_core::pose::selection_bounds(
+                &self.state.doc.skeleton,
+                &self.state.pose,
+                &bones,
+            )
+            .map(|(min, max)| (min + max) * 0.5);
+            self.state
+                .dispatch(Box::new(crate::commands::group_cmds::TransformGroup::new(
+                    bones, pivot, delta,
+                )));
+        } else {
+            for bone in bones {
+                let Some(b) = self.state.doc.skeleton.bones.get(bone) else {
+                    continue;
+                };
+                let mut local = b.local_transform;
+                local.position += delta.translate;
+                local.rotation += delta.rotate;
+                local.scale *= delta.scale;
+                local.shear += delta.shear;
+                // Through `commit_bone_pose`, so a single-bone nudge becomes a
+                // setup edit or a key depending on mode, exactly as a drag does.
+                self.state.commit_bone_pose(bone, local);
             }
-            None => {
-                let bones = self.state.session.selected_bones.clone();
-                for bone in bones {
-                    let Some(b) = self.state.doc.skeleton.bones.get(bone) else {
-                        continue;
-                    };
-                    let mut local = b.local_transform;
-                    local.position += delta.translate;
-                    local.rotation += delta.rotate;
-                    local.scale *= delta.scale;
-                    local.shear += delta.shear;
-                    // Through `commit_bone_pose`, so the nudge becomes a setup
-                    // edit or a key depending on mode, exactly as a drag does.
-                    self.state.commit_bone_pose(bone, local);
-                }
-                self.state.refresh_pose();
-            }
+            self.state.refresh_pose();
         }
         true
     }

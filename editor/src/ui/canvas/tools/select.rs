@@ -275,6 +275,7 @@ impl CanvasTool for SelectTool {
             && let Some(m) = mouse_screen
         {
             ctx.state.session.bone_box_start = Some(m);
+            ctx.state.session.bone_box_base = ctx.state.session.selected_bones.clone();
         }
         if let Some(start) = ctx.state.session.bone_box_start {
             if let Some(m) = mouse_screen {
@@ -282,7 +283,7 @@ impl CanvasTool for SelectTool {
                     egui::pos2(ctx.rect.min.x + start.x, ctx.rect.min.y + start.y),
                     egui::pos2(ctx.rect.min.x + m.x, ctx.rect.min.y + m.y),
                 );
-                let visuals = ctx.ui.visuals();
+                let visuals = ctx.ui.visuals().clone();
                 let painter = ctx.ui.painter_at(ctx.rect);
                 painter.rect_filled(rect, 0.0, visuals.selection.bg_fill.gamma_multiply(0.15));
                 painter.rect_stroke(
@@ -291,47 +292,55 @@ impl CanvasTool for SelectTool {
                     egui::Stroke::new(1.0, visuals.selection.bg_fill),
                     egui::StrokeKind::Inside,
                 );
-            }
-            if ctx.ui.input(|i| i.pointer.primary_released()) {
-                if let Some(m) = mouse_screen {
-                    let lo = start.min(m);
-                    let hi = start.max(m);
-                    // A bone counts as inside when its *origin* is: testing the
-                    // whole stick would sweep in every parent whose tip happens
-                    // to cross the box, which is not what a rectangle drawn
-                    // around a hand means.
-                    let picked: Vec<ankhimate_core::ids::BoneId> = ctx
-                        .state
-                        .doc
-                        .skeleton
-                        .bones
-                        .keys()
-                        .filter(|id| {
-                            let world = ctx.state.pose.world_position(*id);
-                            let p = ctx
-                                .state
-                                .session
-                                .camera
-                                .world_to_screen(world, viewport_size);
-                            p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y
-                        })
-                        .collect();
-                    // A sweep that caught nothing clears, matching a click on
-                    // empty space; adding modifiers keeps what was there.
-                    let additive = ctx.ui.input(|i| i.modifiers.ctrl || i.modifiers.shift);
-                    if !additive {
-                        ctx.state.session.selected_bones.clear();
-                    }
-                    for bone in picked {
-                        if !ctx.state.session.selected_bones.contains(&bone) {
-                            ctx.state.session.selected_bones.push(bone);
-                        }
-                    }
-                    if let Some(&last) = ctx.state.session.selected_bones.last() {
-                        ctx.state.session.selection = Some(crate::session::Selection::Bone(last));
+
+                // Selected as the box moves, not when it is released. A sweep
+                // you cannot see the result of is a sweep you have to release
+                // and redo to correct; live, the highlight tells you what you
+                // have before you commit to it.
+                let lo = start.min(m);
+                let hi = start.max(m);
+                // A bone counts as inside when its *origin* is: testing the
+                // whole stick would sweep in every parent whose tip happens to
+                // cross the box, which is not what a rectangle drawn around a
+                // hand means.
+                let picked: Vec<ankhimate_core::ids::BoneId> = ctx
+                    .state
+                    .doc
+                    .skeleton
+                    .bones
+                    .keys()
+                    .filter(|id| {
+                        let world = ctx.state.pose.world_position(*id);
+                        let p = ctx
+                            .state
+                            .session
+                            .camera
+                            .world_to_screen(world, viewport_size);
+                        p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y
+                    })
+                    .collect();
+
+                // Rebuilt from the pre-drag selection every frame rather than
+                // added to the last one, so shrinking the box deselects again.
+                let additive = ctx.ui.input(|i| i.modifiers.ctrl || i.modifiers.shift);
+                let mut next = if additive {
+                    ctx.state.session.bone_box_base.clone()
+                } else {
+                    Vec::new()
+                };
+                for bone in picked {
+                    if !next.contains(&bone) {
+                        next.push(bone);
                     }
                 }
+                ctx.state.session.selected_bones = next;
+                if let Some(&last) = ctx.state.session.selected_bones.last() {
+                    ctx.state.session.selection = Some(crate::session::Selection::Bone(last));
+                }
+            }
+            if ctx.ui.input(|i| i.pointer.primary_released()) {
                 ctx.state.session.bone_box_start = None;
+                ctx.state.session.bone_box_base.clear();
             }
             return;
         }

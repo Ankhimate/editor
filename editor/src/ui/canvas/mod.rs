@@ -107,6 +107,7 @@ pub fn ui(
     //   Animate — accent border (red while auto-key is armed, the universal
     //             "recording" cue), clip name + frame in the corner.
     draw_mode_chrome(ui, rect, state);
+    draw_selection_chrome(ui, rect, state);
 
     // 8. Name whatever the cursor is over (T-913). Last, so the label is above
     // the artwork, the gizmos and the weight overlay — a tooltip that something
@@ -223,6 +224,101 @@ fn import_image_bytes(
     {
         state.session.select_slot(Some(slot));
     }
+}
+
+/// What a multi-selection is being edited as, along the bottom of the canvas.
+///
+/// A selection of eight bones has no single position to read off the inspector,
+/// so the thing being transformed — the box round them, and the tool that will
+/// act on it — is otherwise invisible. Bottom-centre because that is the one
+/// edge nothing else claims: the mode chip is top-left, the zoom bar is on the
+/// right, and hover labels follow the pointer.
+///
+/// Only for a *multi*-selection. One bone already has an inspector full of its
+/// own numbers, and a second readout of them would be a second place to look.
+fn draw_selection_chrome(ui: &egui::Ui, rect: egui::Rect, state: &AppState) {
+    use crate::session::TransformTool;
+
+    let bones = &state.session.selected_bones;
+    if bones.len() < 2 {
+        return;
+    }
+    let Some((min, max)) =
+        ankhimate_core::pose::selection_bounds(&state.doc.skeleton, &state.pose, bones)
+    else {
+        return;
+    };
+    let viewport = glam::Vec2::new(rect.width(), rect.height());
+    let to_screen = |world: glam::Vec2| {
+        let p = state.session.camera.world_to_screen(world, viewport);
+        egui::pos2(rect.min.x + p.x, rect.min.y + p.y)
+    };
+    let painter = ui.painter_at(rect);
+    let accent = ui.visuals().selection.bg_fill;
+
+    // The box itself, so the pivot rotation and scale act about is visible
+    // rather than inferred.
+    let corners = [
+        to_screen(min),
+        to_screen(glam::vec2(max.x, min.y)),
+        to_screen(max),
+        to_screen(glam::vec2(min.x, max.y)),
+    ];
+    for i in 0..4 {
+        painter.line_segment(
+            [corners[i], corners[(i + 1) % 4]],
+            egui::Stroke::new(1.0, accent.gamma_multiply(0.8)),
+        );
+    }
+    let centre = to_screen((min + max) * 0.5);
+    // A cross at the centre: the point everything turns about.
+    for (a, b) in [
+        (egui::vec2(-5.0, 0.0), egui::vec2(5.0, 0.0)),
+        (egui::vec2(0.0, -5.0), egui::vec2(0.0, 5.0)),
+    ] {
+        painter.line_segment([centre + a, centre + b], egui::Stroke::new(1.0, accent));
+    }
+
+    // The readout: which tool the arrows will drive, and what it does.
+    let (tool, hint) = match state.session.active_transform_tool {
+        TransformTool::Translate => ("Move", "arrows move"),
+        TransformTool::Rotate => ("Rotate", "arrows turn"),
+        TransformTool::Scale => ("Scale", "up/down both · left/right x"),
+        TransformTool::Shear => ("Shear", "left/right x · up/down y"),
+    };
+    let size = max - min;
+    let label = format!(
+        "{} bones  ·  {tool}  ·  {:.0}×{:.0}  ·  {hint}  ·  shift ×10",
+        bones.len(),
+        size.x,
+        size.y
+    );
+    let galley = painter.layout_no_wrap(
+        label,
+        egui::FontId::proportional(11.0),
+        ui.visuals().text_color(),
+    );
+    let pos = egui::pos2(
+        rect.center().x - galley.size().x * 0.5,
+        rect.bottom() - galley.size().y - 14.0,
+    );
+    let chip = egui::Rect::from_min_size(pos, galley.size() + egui::vec2(14.0, 7.0));
+    painter.rect_filled(
+        chip,
+        egui::epaint::CornerRadius::same(4),
+        ui.visuals().extreme_bg_color.gamma_multiply(0.9),
+    );
+    painter.rect_stroke(
+        chip,
+        egui::epaint::CornerRadius::same(4),
+        egui::Stroke::new(1.0, accent.gamma_multiply(0.5)),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        pos + egui::vec2(7.0, 3.5),
+        galley,
+        ui.visuals().text_color(),
+    );
 }
 
 fn draw_mode_chrome(ui: &egui::Ui, rect: egui::Rect, state: &AppState) {

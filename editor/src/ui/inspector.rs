@@ -25,6 +25,13 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         return;
     }
 
+    // A multi-selection is edited as the box round it, not as N sets of the same
+    // fields. See `selection_inspector`.
+    if state.session.selected_bones.len() > 1 {
+        selection_inspector(ui, state);
+        return;
+    }
+
     // Transform first, always. It is the control the user reaches for on every
     // second action; the slot's colour/attachment block used to sit above it and
     // pushed it off the top of the panel whenever a slot was selected.
@@ -1258,6 +1265,165 @@ fn path_constraint_inspector(
 /// twitch in one frame of an animation. So: the numbers, editable, with the
 /// stray removable.
 ///
+/// The properties of a multi-selection: the box round it, not its members.
+///
+/// # Why a box rather than unified fields
+///
+/// The alternative was one set of fields writing straight through to every
+/// selected bone — set x to 10 and all eight get x = 10. That is not an edit of
+/// a selection, it is a way to destroy a pose: eight bones stacked on one
+/// coordinate. It also cannot honestly *display* anything once the values
+/// differ, so the field would have to lie or blank.
+///
+/// A bounding box has one position, one size, one rotation, and editing it means
+/// what a user means by "move these": the arrangement moves, each bone keeps its
+/// place within it. The box is drawn on the canvas too, so the pivot everything
+/// turns about is visible rather than inferred.
+///
+/// Position and size are **read** from the box and **written** as a delta, which
+/// is why the fields reset to the new bounds after every edit rather than
+/// holding what was typed. Absolute values would have to answer "the box is at
+/// 40 — where is each bone?", and there is no one answer.
+fn selection_inspector(ui: &mut egui::Ui, state: &mut AppState) {
+    use crate::commands::group_cmds::{GroupDelta, TransformGroup};
+
+    let bones = state.session.selected_bones.clone();
+    let Some((min, max)) =
+        ankhimate_core::pose::selection_bounds(&state.doc.skeleton, &state.pose, &bones)
+    else {
+        return;
+    };
+    let centre = (min + max) * 0.5;
+    let size = max - min;
+    let setup = state.session.can_edit_structure();
+
+    section_header(
+        ui,
+        crate::ui::icons::BONE,
+        &format!("{} bones selected", bones.len()),
+    );
+    ui.add_space(2.0);
+    ui.label(
+        egui::RichText::new("Edited as the box around them — each bone keeps its place inside it.")
+            .size(10.5)
+            .color(ui.visuals().weak_text_color()),
+    );
+    ui.add_space(6.0);
+
+    let mut delta = GroupDelta::default();
+    let mut changed = false;
+
+    // Position: the box's centre. Typing a value moves the whole selection by
+    // the difference, so the arrangement is preserved.
+    let mut position = centre;
+    let mut moved = false;
+    ui.horizontal(|ui| {
+        ui.add_sized([LABEL_W, FIELD_H], egui::Label::new("Position"));
+        moved |= ui
+            .add_enabled(setup, egui::DragValue::new(&mut position.x).speed(0.5))
+            .changed();
+        moved |= ui
+            .add_enabled(setup, egui::DragValue::new(&mut position.y).speed(0.5))
+            .changed();
+    });
+    if moved {
+        delta.translate = position - centre;
+        changed = true;
+    }
+
+    // Size, as a scale factor about the centre. Shown in world units because
+    // that is what the canvas readout shows and what a rigger measures in.
+    let mut new_size = size;
+    let mut sized = false;
+    ui.horizontal(|ui| {
+        ui.add_sized([LABEL_W, FIELD_H], egui::Label::new("Size"));
+        sized |= ui
+            .add_enabled(
+                setup,
+                egui::DragValue::new(&mut new_size.x)
+                    .speed(0.5)
+                    .range(0.1..=1e6),
+            )
+            .changed();
+        sized |= ui
+            .add_enabled(
+                setup,
+                egui::DragValue::new(&mut new_size.y)
+                    .speed(0.5)
+                    .range(0.1..=1e6),
+            )
+            .changed();
+    });
+    if sized {
+        // A zero-extent axis cannot be scaled — a column of bones has no width,
+        // and dividing by it would send the rig to infinity.
+        delta.scale = glam::vec2(
+            if size.x.abs() > 1e-4 {
+                new_size.x / size.x
+            } else {
+                1.0
+            },
+            if size.y.abs() > 1e-4 {
+                new_size.y / size.y
+            } else {
+                1.0
+            },
+        );
+        changed = true;
+    }
+
+    // Rotation and shear are pure deltas: there is no "the selection's angle" to
+    // read, only how much further to turn it.
+    let mut turn = 0.0f32;
+    ui.horizontal(|ui| {
+        ui.add_sized([LABEL_W, FIELD_H], egui::Label::new("Rotate"));
+        if ui
+            .add_enabled(
+                setup,
+                egui::DragValue::new(&mut turn).speed(0.5).suffix("°"),
+            )
+            .on_hover_text("Turns the selection about the box's centre")
+            .changed()
+        {
+            delta.rotate = turn.to_radians();
+            changed = true;
+        }
+    });
+
+    let mut shear = glam::Vec2::ZERO;
+    let mut sheared = false;
+    ui.horizontal(|ui| {
+        ui.add_sized([LABEL_W, FIELD_H], egui::Label::new("Shear"));
+        sheared |= ui
+            .add_enabled(
+                setup,
+                egui::DragValue::new(&mut shear.x).speed(0.5).suffix("°"),
+            )
+            .changed();
+        sheared |= ui
+            .add_enabled(
+                setup,
+                egui::DragValue::new(&mut shear.y).speed(0.5).suffix("°"),
+            )
+            .changed();
+    });
+    if sheared {
+        delta.shear = glam::vec2(shear.x.to_radians(), shear.y.to_radians());
+        changed = true;
+    }
+
+    if changed && delta != GroupDelta::default() {
+        state.dispatch(Box::new(TransformGroup::new(bones, Some(centre), delta)));
+    }
+
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new("Arrow keys transform too — the tool decides which axis.")
+            .size(10.0)
+            .color(ui.visuals().weak_text_color()),
+    );
+}
+
 /// Type a polygon vertex's position, and align a group of them (T-902).
 ///
 /// The clipping / bounding-box counterpart to [`vertex_coordinates`], sharing

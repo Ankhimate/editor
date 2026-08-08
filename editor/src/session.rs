@@ -202,6 +202,12 @@ pub struct Session {
     /// Dragging from empty canvas sweeps a rectangle over the bones, which is
     /// how a limb gets selected without clicking eight sticks in turn.
     pub bone_box_start: Option<glam::Vec2>,
+    /// The selection as it was when a box-select began.
+    ///
+    /// The sweep updates the selection live, so it has to recompute from a
+    /// fixed starting point each frame rather than adding to what the last
+    /// frame produced — otherwise shrinking the box would never deselect.
+    pub bone_box_base: Vec<BoneId>,
     /// Where a mesh box-select began, in canvas-local screen space (T-401).
     pub vertex_box_start: Option<glam::Vec2>,
     /// Vertex being dragged, if any.
@@ -434,6 +440,7 @@ impl Session {
             dragging_vertex: None,
             hovered_vertex: None,
             bone_box_start: None,
+            bone_box_base: Vec::new(),
             vertex_box_start: None,
             edit_target: EditTarget::Bone,
             active_transform_tool: TransformTool::Translate,
