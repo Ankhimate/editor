@@ -223,18 +223,24 @@ pub fn ui(
                     .desired_width(140.0)
                     .hint_text("name"),
             );
-            // Focused on the frame the menu opens, so the name can be typed
-            // without a second click to reach the field.
-            if !field.has_focus() && field.changed() {
-                field.request_focus();
-            }
             if field.changed() {
                 ui.ctx()
                     .data_mut(|d| d.insert_temp(buffer_id, name.clone()));
             }
-            // Committed on Enter or on losing focus, not per keystroke: one
-            // rename is one undo, not one per letter.
-            if field.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            // Committed only on a deliberate Enter *in this field*, so one
+            // rename is one undo rather than one per letter.
+            //
+            // Not on `lost_focus`, which was the first attempt and closed the
+            // menu on every click inside it: reaching for the colour swatch or
+            // Delete drops focus, which dispatched a rename, which re-rendered
+            // and dismissed the popup before the click landed.
+            let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            // A button as well as Enter, because a typed name that is only
+            // applied by a key nobody mentioned is a name silently thrown away.
+            let clicked = ui
+                .add_enabled(name.trim() != current.trim(), egui::Button::new("Rename"))
+                .clicked();
+            if entered || clicked {
                 if name != *current && !name.trim().is_empty() {
                     marker_edit = Some((index, MarkerEdit::Rename(name.trim().to_string())));
                 }

@@ -160,12 +160,25 @@ pub fn ui(
         state.dispatch(Box::new(AddEvent::new(anim_id, name, time)));
     }
 
-    // Right-click a marker: rename or delete.
+    // Right-click an event: rename or delete.
+    //
+    // Which event the menu is about is captured when it opens and remembered.
+    // Reading the pointer inside the menu cannot work: the moment the cursor
+    // moves off the pennant and into the menu, the hit test finds nothing and
+    // the menu swaps to its "nothing here" branch — which is why reaching for
+    // the name field replaced it with "Double-click the lane to add an event".
+    let menu_id = ui.id().with("event_menu_target");
+    if response.secondary_clicked() {
+        let target = response.interact_pointer_pos().and_then(nearest);
+        ui.ctx().data_mut(|d| d.insert_temp(menu_id, target));
+    }
+    let menu_target = ui
+        .ctx()
+        .data(|d| d.get_temp::<Option<usize>>(menu_id))
+        .flatten();
+
     response.context_menu(|ui| {
-        let Some(pos) = ui.input(|i| i.pointer.interact_pos()) else {
-            return;
-        };
-        let Some(index) = nearest(pos) else {
+        let Some(index) = menu_target else {
             ui.label(
                 egui::RichText::new("Double-click the lane to add an event")
                     .size(10.5)
@@ -176,14 +189,41 @@ pub fn ui(
         let Some((_, _, name)) = events.iter().find(|(i, _, _)| *i == index) else {
             return;
         };
-        ui.label(egui::RichText::new(name).strong());
-        let mut renamed = name.clone();
-        if ui.text_edit_singleline(&mut renamed).changed() && !renamed.is_empty() {
+        // The buffer lives in egui's temp store: a local rebuilt from the
+        // document each frame would be overwritten by the value it had just
+        // produced, so every keystroke would vanish.
+        let buffer_id = ui.id().with(("event_name", index));
+        let mut renamed = ui
+            .ctx()
+            .data(|d| d.get_temp::<String>(buffer_id))
+            .unwrap_or_else(|| name.clone());
+
+        ui.label(egui::RichText::new("Event").strong());
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut renamed)
+                .desired_width(140.0)
+                .hint_text("name"),
+        );
+        if field.changed() {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(buffer_id, renamed.clone()));
+        }
+        // Committed only on a deliberate Enter in this field. Not on focus loss
+        // alone: clicking Delete drops focus, which would dispatch a rename and
+        // re-render the menu out from under the click.
+        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        // A button as well as Enter: a typed name applied only by an unmentioned
+        // key is a name silently thrown away.
+        let clicked = ui
+            .add_enabled(renamed.trim() != name.trim(), egui::Button::new("Rename"))
+            .clicked();
+        if (entered || clicked) && !renamed.trim().is_empty() && renamed != *name {
             state.dispatch(Box::new(EditEvent::new(
                 anim_id,
                 index,
-                EventEdit::Rename(renamed),
+                EventEdit::Rename(renamed.trim().to_string()),
             )));
+            ui.ctx().data_mut(|d| d.remove_temp::<String>(buffer_id));
         }
         if ui.button("Delete").clicked() {
             state.dispatch(Box::new(EditEvent::new(anim_id, index, EventEdit::Remove)));
