@@ -185,100 +185,127 @@ pub fn ui(
     }
 
     // ── Rename / delete ──────────────────────────────────────────────────
-    // Which marker the menu is *about* is decided when the menu opens and then
-    // remembered. Reading it from the pointer each frame was the first attempt
-    // and cannot work: the moment the cursor moves off the flag and into the
-    // menu, the hit test finds nothing and the menu swaps to its "empty ruler"
-    // branch — so the name field vanished the instant you reached for it.
-    let menu_id = ui.id().with("marker_menu_target");
+    // A window we open and close ourselves, **not** `Response::context_menu`.
+    //
+    // egui's context menu closes itself whenever its host response reports a
+    // plain click (`Popup::context_menu`, popup.rs:252 — "Explicitly close the
+    // menu if the widget was clicked"). That is right for a menu hung off a
+    // button, and wrong here: the host is the whole ruler strip, the popup is
+    // drawn on top of it, so clicking the name field *is* a click on the host
+    // and the menu dismissed itself the instant anyone tried to type.
+    //
+    // Owning the open state is the only way out of that, and it costs nothing:
+    // the editor already knows which marker was right-clicked and where.
+    let popup_id = ui.id().with("marker_popup");
     let clicked_time = pointer
         .map(|p| layout.snap_time(layout.x_to_time(p.x)).max(0.0))
         .unwrap_or(0.0);
     if marker_response.secondary_clicked() {
+        let anchor = pointer.unwrap_or_else(|| rect.left_bottom());
         ui.ctx()
-            .data_mut(|d| d.insert_temp(menu_id, (grabbed, clicked_time)));
+            .data_mut(|d| d.insert_temp(popup_id, (grabbed, clicked_time, anchor)));
     }
-    let (menu_target, menu_time) = ui
+    let open = ui
         .ctx()
-        .data(|d| d.get_temp::<(Option<usize>, f32)>(menu_id))
-        .unwrap_or((None, 0.0));
+        .data(|d| d.get_temp::<(Option<usize>, f32, egui::Pos2)>(popup_id));
 
-    marker_response.context_menu(|ui| {
-        if let Some(index) = menu_target {
-            let Some((_, _, current, color)) = markers.get(index) else {
-                return;
-            };
-            // The buffer lives in egui's temp store, keyed by marker: a local
-            // `String` would be rebuilt from the document every frame, so each
-            // keystroke would be overwritten by the value it just produced.
-            let buffer_id = ui.id().with(("marker_name", index));
-            let mut name = ui
-                .ctx()
-                .data(|d| d.get_temp::<String>(buffer_id))
-                .unwrap_or_else(|| current.clone());
+    if let Some((menu_target, menu_time, anchor)) = open {
+        let mut close = false;
+        egui::Window::new("marker_popup")
+            .title_bar(false)
+            .resizable(false)
+            .fixed_pos(anchor)
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                if let Some(index) = menu_target {
+                    let Some((_, _, current, color)) = markers.get(index) else {
+                        close = true;
+                        return;
+                    };
+                    // The buffer lives in egui's temp store, keyed by marker: a
+                    // local `String` would be rebuilt from the document every
+                    // frame, so each keystroke would be overwritten by the value
+                    // it had just produced.
+                    let buffer_id = ui.id().with(("marker_name", index));
+                    let mut name = ui
+                        .ctx()
+                        .data(|d| d.get_temp::<String>(buffer_id))
+                        .unwrap_or_else(|| current.clone());
 
-            ui.label(egui::RichText::new("Marker").strong());
-            let field = ui.add(
-                egui::TextEdit::singleline(&mut name)
-                    .desired_width(140.0)
-                    .hint_text("name"),
-            );
-            if field.changed() {
-                ui.ctx()
-                    .data_mut(|d| d.insert_temp(buffer_id, name.clone()));
-            }
-            // Committed only on a deliberate Enter *in this field*, so one
-            // rename is one undo rather than one per letter.
-            //
-            // Not on `lost_focus`, which was the first attempt and closed the
-            // menu on every click inside it: reaching for the colour swatch or
-            // Delete drops focus, which dispatched a rename, which re-rendered
-            // and dismissed the popup before the click landed.
-            let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            // A button as well as Enter, because a typed name that is only
-            // applied by a key nobody mentioned is a name silently thrown away.
-            let clicked = ui
-                .add_enabled(name.trim() != current.trim(), egui::Button::new("Rename"))
-                .clicked();
-            if entered || clicked {
-                if name != *current && !name.trim().is_empty() {
-                    marker_edit = Some((index, MarkerEdit::Rename(name.trim().to_string())));
-                }
-                ui.ctx().data_mut(|d| d.remove_temp::<String>(buffer_id));
-            }
+                    ui.label(egui::RichText::new("Marker").strong());
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut name)
+                            .desired_width(150.0)
+                            .hint_text("name"),
+                    );
+                    if field.changed() {
+                        ui.ctx()
+                            .data_mut(|d| d.insert_temp(buffer_id, name.clone()));
+                    }
+                    let entered =
+                        field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let renamable = !name.trim().is_empty() && name.trim() != current.trim();
+                    let clicked = ui
+                        .add_enabled(renamable, egui::Button::new("Rename"))
+                        .clicked();
+                    if (entered || clicked) && renamable {
+                        marker_edit = Some((index, MarkerEdit::Rename(name.trim().to_string())));
+                        ui.ctx().data_mut(|d| d.remove_temp::<String>(buffer_id));
+                        close = true;
+                    }
 
-            let mut rgba = egui::Color32::from_rgb(
-                (color[0] * 255.0) as u8,
-                (color[1] * 255.0) as u8,
-                (color[2] * 255.0) as u8,
-            );
-            ui.horizontal(|ui| {
-                ui.label("Colour");
-                if ui.color_edit_button_srgba(&mut rgba).changed() {
-                    marker_edit = Some((
-                        index,
-                        MarkerEdit::SetColor([
-                            rgba.r() as f32 / 255.0,
-                            rgba.g() as f32 / 255.0,
-                            rgba.b() as f32 / 255.0,
-                            1.0,
-                        ]),
-                    ));
+                    let mut rgba = egui::Color32::from_rgb(
+                        (color[0] * 255.0) as u8,
+                        (color[1] * 255.0) as u8,
+                        (color[2] * 255.0) as u8,
+                    );
+                    ui.horizontal(|ui| {
+                        ui.label("Colour");
+                        if ui.color_edit_button_srgba(&mut rgba).changed() {
+                            marker_edit = Some((
+                                index,
+                                MarkerEdit::SetColor([
+                                    rgba.r() as f32 / 255.0,
+                                    rgba.g() as f32 / 255.0,
+                                    rgba.b() as f32 / 255.0,
+                                    1.0,
+                                ]),
+                            ));
+                        }
+                    });
+
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("Delete").clicked() {
+                            marker_edit = Some((index, MarkerEdit::Remove));
+                            close = true;
+                        }
+                        if ui.button("Close").clicked() {
+                            close = true;
+                        }
+                    });
+                } else {
+                    if ui.button("Add marker here").clicked() {
+                        if let Some(anim) = state.session.active_animation {
+                            state.dispatch(Box::new(AddMarker::new(anim, "marker", menu_time)));
+                        }
+                        close = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
                 }
             });
-
-            ui.separator();
-            if ui.button("Delete").clicked() {
-                marker_edit = Some((index, MarkerEdit::Remove));
-                ui.close();
-            }
-        } else if ui.button("Add marker here").clicked() {
-            if let Some(anim) = state.session.active_animation {
-                state.dispatch(Box::new(AddMarker::new(anim, "marker", menu_time)));
-            }
-            ui.close();
+        // Escape, or a click anywhere outside the popup, dismisses it — the two
+        // gestures a user will try after opening one by accident.
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            close = true;
         }
-    });
+        if close {
+            ui.ctx()
+                .data_mut(|d| d.remove_temp::<(Option<usize>, f32, egui::Pos2)>(popup_id));
+        }
+    }
 
     if let Some((index, edit)) = marker_edit
         && let Some(anim) = state.session.active_animation

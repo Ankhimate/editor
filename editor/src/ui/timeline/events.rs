@@ -162,72 +162,104 @@ pub fn ui(
 
     // Right-click an event: rename or delete.
     //
-    // Which event the menu is about is captured when it opens and remembered.
-    // Reading the pointer inside the menu cannot work: the moment the cursor
-    // moves off the pennant and into the menu, the hit test finds nothing and
-    // the menu swaps to its "nothing here" branch — which is why reaching for
-    // the name field replaced it with "Double-click the lane to add an event".
-    let menu_id = ui.id().with("event_menu_target");
+    // Two things had to change for this to work at all. Which event the popup is
+    // about is captured when it opens rather than hit-tested each frame — moving
+    // the cursor off the pennant used to make the test fail, and the menu swapped
+    // to its "nothing here" branch, which is why reaching for the field replaced
+    // it with "Double-click the lane to add an event".
+    //
+    // And it is a window we open and close ourselves, **not**
+    // `Response::context_menu`.
+    // egui's context menu closes on any plain click of its host response
+    // (`Popup::context_menu`), and the host here is the whole lane with the
+    // popup drawn over it — so clicking the name field counted as clicking the
+    // lane and dismissed the menu before a character could be typed.
+    let popup_id = ui.id().with("event_popup");
     if response.secondary_clicked() {
         let target = response.interact_pointer_pos().and_then(nearest);
-        ui.ctx().data_mut(|d| d.insert_temp(menu_id, target));
+        let anchor = response
+            .interact_pointer_pos()
+            .unwrap_or_else(|| rect.left_bottom());
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(popup_id, (target, anchor)));
     }
-    let menu_target = ui
+
+    if let Some((menu_target, anchor)) = ui
         .ctx()
-        .data(|d| d.get_temp::<Option<usize>>(menu_id))
-        .flatten();
+        .data(|d| d.get_temp::<(Option<usize>, egui::Pos2)>(popup_id))
+    {
+        let mut close = false;
+        egui::Window::new("event_popup")
+            .title_bar(false)
+            .resizable(false)
+            .fixed_pos(anchor)
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                let Some(index) = menu_target else {
+                    ui.label(
+                        egui::RichText::new("Double-click the lane to add an event")
+                            .size(10.5)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                    return;
+                };
+                let Some((_, _, name)) = events.iter().find(|(i, _, _)| *i == index) else {
+                    close = true;
+                    return;
+                };
+                // The buffer lives in egui's temp store: a local rebuilt from
+                // the document each frame would be overwritten by the value it
+                // had just produced, so every keystroke would vanish.
+                let buffer_id = ui.id().with(("event_name", index));
+                let mut renamed = ui
+                    .ctx()
+                    .data(|d| d.get_temp::<String>(buffer_id))
+                    .unwrap_or_else(|| name.clone());
 
-    response.context_menu(|ui| {
-        let Some(index) = menu_target else {
-            ui.label(
-                egui::RichText::new("Double-click the lane to add an event")
-                    .size(10.5)
-                    .color(ui.visuals().weak_text_color()),
-            );
-            return;
-        };
-        let Some((_, _, name)) = events.iter().find(|(i, _, _)| *i == index) else {
-            return;
-        };
-        // The buffer lives in egui's temp store: a local rebuilt from the
-        // document each frame would be overwritten by the value it had just
-        // produced, so every keystroke would vanish.
-        let buffer_id = ui.id().with(("event_name", index));
-        let mut renamed = ui
-            .ctx()
-            .data(|d| d.get_temp::<String>(buffer_id))
-            .unwrap_or_else(|| name.clone());
-
-        ui.label(egui::RichText::new("Event").strong());
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut renamed)
-                .desired_width(140.0)
-                .hint_text("name"),
-        );
-        if field.changed() {
+                ui.label(egui::RichText::new("Event").strong());
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut renamed)
+                        .desired_width(150.0)
+                        .hint_text("name"),
+                );
+                if field.changed() {
+                    ui.ctx()
+                        .data_mut(|d| d.insert_temp(buffer_id, renamed.clone()));
+                }
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let renamable = !renamed.trim().is_empty() && renamed.trim() != name.trim();
+                let clicked = ui
+                    .add_enabled(renamable, egui::Button::new("Rename"))
+                    .clicked();
+                if (entered || clicked) && renamable {
+                    state.dispatch(Box::new(EditEvent::new(
+                        anim_id,
+                        index,
+                        EventEdit::Rename(renamed.trim().to_string()),
+                    )));
+                    ui.ctx().data_mut(|d| d.remove_temp::<String>(buffer_id));
+                    close = true;
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Delete").clicked() {
+                        state.dispatch(Box::new(EditEvent::new(anim_id, index, EventEdit::Remove)));
+                        close = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            close = true;
+        }
+        if close {
             ui.ctx()
-                .data_mut(|d| d.insert_temp(buffer_id, renamed.clone()));
+                .data_mut(|d| d.remove_temp::<(Option<usize>, egui::Pos2)>(popup_id));
         }
-        // Committed only on a deliberate Enter in this field. Not on focus loss
-        // alone: clicking Delete drops focus, which would dispatch a rename and
-        // re-render the menu out from under the click.
-        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        // A button as well as Enter: a typed name applied only by an unmentioned
-        // key is a name silently thrown away.
-        let clicked = ui
-            .add_enabled(renamed.trim() != name.trim(), egui::Button::new("Rename"))
-            .clicked();
-        if (entered || clicked) && !renamed.trim().is_empty() && renamed != *name {
-            state.dispatch(Box::new(EditEvent::new(
-                anim_id,
-                index,
-                EventEdit::Rename(renamed.trim().to_string()),
-            )));
-            ui.ctx().data_mut(|d| d.remove_temp::<String>(buffer_id));
-        }
-        if ui.button("Delete").clicked() {
-            state.dispatch(Box::new(EditEvent::new(anim_id, index, EventEdit::Remove)));
-            ui.close();
-        }
-    });
+    }
 }
