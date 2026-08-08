@@ -309,6 +309,14 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
         let mut hint = 0usize;
 
         for timeline in &anim.timelines {
+            // Per-bone sampling offset (T-905): the timeline is read at a
+            // shifted time, and nothing about the keys themselves moves. This is
+            // the *only* place the shift is applied, so a track with no offset
+            // costs one lookup against a list that is usually empty.
+            let time = match timeline.bone() {
+                Some(bone) => time - anim.bone_offset(bone),
+                None => time,
+            };
             match timeline {
                 Timeline::BoneTranslate { bone, keys } => {
                     if let Some(offset) = animation::sample(keys, time, &mut hint)
@@ -2100,6 +2108,7 @@ mod tests {
             looping: false,
             events: Vec::new(),
             markers: Vec::new(),
+            bone_offsets: Vec::new(),
             timelines: vec![Timeline::TransformConstraintMix {
                 constraint: cid,
                 keys: vec![
@@ -2484,6 +2493,7 @@ mod tests {
             looping: false,
             events: Vec::new(),
             markers: Vec::new(),
+            bone_offsets: Vec::new(),
             timelines: vec![Timeline::IkBendDirection {
                 constraint: cid,
                 keys: vec![
@@ -2558,6 +2568,7 @@ mod tests {
             looping: false,
             events: Vec::new(),
             markers: Vec::new(),
+            bone_offsets: Vec::new(),
             timelines: vec![Timeline::SlotVisible {
                 slot,
                 keys: vec![
@@ -2603,6 +2614,7 @@ mod tests {
             looping: false,
             events: Vec::new(),
             markers: Vec::new(),
+            bone_offsets: Vec::new(),
             timelines: vec![Timeline::SlotVisible {
                 slot,
                 keys: vec![Key::stepped(0.0, true)],

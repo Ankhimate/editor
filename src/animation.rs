@@ -264,6 +264,21 @@ pub enum Timeline {
 }
 
 impl Timeline {
+    /// The bone this timeline drives, if it drives one.
+    ///
+    /// `None` for slot, draw-order and constraint timelines — they are keyed on
+    /// something other than a bone, and a caller that wants "which bone" has to
+    /// handle their absence rather than be handed a wrong answer.
+    pub fn bone(&self) -> Option<BoneId> {
+        match self {
+            Timeline::BoneTranslate { bone, .. }
+            | Timeline::BoneRotate { bone, .. }
+            | Timeline::BoneScale { bone, .. }
+            | Timeline::BoneShear { bone, .. } => Some(*bone),
+            _ => None,
+        }
+    }
+
     /// Time of the last key, or `0.0` for an empty timeline.
     pub fn last_key_time(&self) -> f32 {
         macro_rules! last {
@@ -359,6 +374,29 @@ pub struct Animation {
     /// exactly as it did before they existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<Marker>,
+    /// Seconds to shift a bone's timelines by when sampling, without moving a
+    /// single key (T-905).
+    ///
+    /// The use this exists for is secondary motion: ten strands of hair, a tail,
+    /// a scarf — every one wanting the same curve a few frames apart. Authoring
+    /// that today means copying the keys ten times and dragging nine copies,
+    /// after which changing the motion means redoing all of it.
+    ///
+    /// An offset is **not keyable**, deliberately. An animatable offset on top
+    /// of animated tracks is a second time dimension: the value at a frame would
+    /// depend on a time that itself depends on time, and a rig that misbehaves
+    /// becomes impossible to reason about. It is authored once and shown on the
+    /// track header.
+    ///
+    /// Negative offsets work, which is the underlying ask — a strand that leads
+    /// rather than trails. Evaluation tolerates negative sample times by holding
+    /// the first key, exactly as it holds the last past the end.
+    ///
+    /// Bones only. Slot, draw-order and constraint timelines have no offset
+    /// because the motion this is for is bone motion, and a hidden time shift on
+    /// an attachment swap would be a debugging nightmare for no gain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bone_offsets: Vec<(BoneId, f32)>,
     /// Whether this clip is meant to loop — authoring intent, carried to the
     /// runtime (T-604) rather than enforced here. `evaluate` samples whatever
     /// time it is handed; wrapping is the player's job.
@@ -378,6 +416,7 @@ impl Animation {
             timelines: Vec::new(),
             events: Vec::new(),
             markers: Vec::new(),
+            bone_offsets: Vec::new(),
             looping: true,
         }
     }
@@ -389,6 +428,31 @@ impl Animation {
             .iter()
             .map(|t| t.last_key_time())
             .fold(0.0, f32::max)
+    }
+
+    /// How far this bone's timelines are shifted when sampling (T-905).
+    ///
+    /// A `Vec` of pairs rather than a map because slotmap keys are not JSON
+    /// object keys; the list is one entry per *offset* bone, which is a handful
+    /// even on a rig with sixty, so the linear scan is cheaper than the map.
+    pub fn bone_offset(&self, bone: BoneId) -> f32 {
+        self.bone_offsets
+            .iter()
+            .find(|(id, _)| *id == bone)
+            .map(|(_, offset)| *offset)
+            .unwrap_or(0.0)
+    }
+
+    /// Set a bone's sampling offset, or clear it when zero.
+    ///
+    /// Zero is stored as absence rather than as an entry: "no offset" and "an
+    /// offset of nothing" are the same state, and keeping both would let a file
+    /// carry rows that do nothing.
+    pub fn set_bone_offset(&mut self, bone: BoneId, offset: f32) {
+        self.bone_offsets.retain(|(id, _)| *id != bone);
+        if offset != 0.0 {
+            self.bone_offsets.push((bone, offset));
+        }
     }
 
     /// Add a marker, keeping the list ordered by time (T-906).
@@ -665,6 +729,72 @@ mod tests {
 
     fn keys_f32(pairs: &[(f32, f32)]) -> Vec<Key<f32>> {
         pairs.iter().map(|&(t, v)| Key::linear(t, v)).collect()
+    }
+
+    /// An offset shifts *when* a bone's curve is read, and moves no keys
+    /// (T-905).
+    ///
+    /// The property that makes it worth having: the authored data is
+    /// byte-identical before and after, so ten strands of hair can share one
+    /// curve and nine offsets rather than ten copies of the keys.
+    #[test]
+    fn a_bone_offset_shifts_sampling_without_touching_the_keys() {
+        use crate::skeleton::{Bone, Skeleton};
+
+        let mut skel = Skeleton::new();
+        let bone = skel.add_bone(Bone {
+            name: "strand".into(),
+            parent: None,
+            length: 10.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+
+        let mut anim = Animation::new("sway", 1.0);
+        anim.timelines.push(Timeline::BoneRotate {
+            bone,
+            keys: keys_f32(&[(0.0, 0.0), (0.5, 90.0), (1.0, 0.0)]),
+        });
+        let keys_before = anim.timelines.clone();
+
+        let sample_at = |anim: &Animation, time: f32| {
+            let mut pose = crate::pose::Pose::new();
+            crate::pose::evaluate(&skel, &[(anim, time, 1.0)], &mut pose);
+            pose.locals[bone].rotation.to_degrees()
+        };
+
+        // Unshifted, the peak is at 0.5.
+        assert!((sample_at(&anim, 0.5) - 90.0).abs() < EPS);
+
+        // Trailing by a quarter second moves the peak to 0.75 — the curve is
+        // read a quarter second earlier than the playhead says.
+        anim.set_bone_offset(bone, 0.25);
+        assert!((sample_at(&anim, 0.75) - 90.0).abs() < EPS);
+        assert!(sample_at(&anim, 0.5) < 90.0, "the peak left 0.5");
+
+        // Leading: the curve is read a quarter second *later*, so the peak
+        // arrives early, at 0.25.
+        anim.set_bone_offset(bone, -0.25);
+        assert!((sample_at(&anim, 0.25) - 90.0).abs() < EPS);
+
+        // A trailing strand asked for before its curve begins samples at a
+        // negative time. That must hold the first key rather than extrapolate
+        // or panic — it is the state every trailing strand is in for its first
+        // few frames.
+        anim.set_bone_offset(bone, 0.25);
+        assert!(
+            (sample_at(&anim, 0.0) - 0.0).abs() < EPS,
+            "a negative sample time holds the first key"
+        );
+
+        // And through all of it the keys never moved.
+        assert_eq!(anim.timelines, keys_before, "no key was touched");
+
+        // Zero is stored as absence, so a cleared offset leaves no row behind.
+        anim.set_bone_offset(bone, 0.0);
+        assert!(anim.bone_offsets.is_empty());
+        assert!((sample_at(&anim, 0.5) - 90.0).abs() < EPS);
     }
 
     /// Markers stay ordered however they are added (T-906).
@@ -1001,6 +1131,7 @@ mod tests {
                 })
                 .collect(),
             markers: Vec::new(),
+            bone_offsets: Vec::new(),
         }
     }
 
