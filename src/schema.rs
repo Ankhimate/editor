@@ -49,9 +49,24 @@ pub struct Project {
     pub constraint_order: Vec<String>,
     #[serde(default)]
     pub animations: Vec<Animation>,
+    /// Named bone groups a rigger saved (T-904).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selection_sets: Vec<SelectionSet>,
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,
+}
+
+/// A named group of bones, by name (T-904).
+///
+/// Bone *names* rather than indices, like every other cross-reference in this
+/// schema: an index would break the moment a bone is inserted or reordered, and
+/// a hand-edited file could not be written at all.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelectionSet {
+    pub name: String,
+    #[serde(default)]
+    pub bones: Vec<String>,
 }
 
 /// One entry in the image library. `Region.texture` / `Mesh.texture` reference
