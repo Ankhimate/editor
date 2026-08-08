@@ -1010,6 +1010,31 @@ fn physics_inspector(
                 .on_hover_text("Let it slide as well — for a bone with no length to swing on");
         });
 
+        // Live readout (T-911). Tuning damping is guesswork without it: the
+        // offsets alone cannot distinguish a bone at rest from one passing
+        // through rest at speed, and "settled" is the exact question a rigger is
+        // asking while they drag the slider.
+        let (spin, drift) = state.physics.velocity(*id, bone_id);
+        let settled = state.physics.is_settled(*id, bone_id);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(if settled { "settled" } else { "moving" })
+                    .size(10.0)
+                    .color(if settled {
+                        ui.visuals().weak_text_color()
+                    } else {
+                        egui::Color32::from_rgb(120, 190, 255)
+                    }),
+            );
+            if !settled {
+                ui.label(
+                    egui::RichText::new(format!("{:.2}°/s  {:.2}u/s", spin, drift.length()))
+                        .size(10.0)
+                        .color(ui.visuals().weak_text_color()),
+                );
+            }
+        });
+
         if next != *props {
             edit = Some((*id, next));
         }

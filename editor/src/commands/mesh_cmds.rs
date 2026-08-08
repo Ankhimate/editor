@@ -436,6 +436,51 @@ mod tests {
         }
     }
 
+    /// An active physics constraint does not block editing an unrelated mesh
+    /// (T-911).
+    ///
+    /// The bug this pins is filed against the reference tool as issue #995:
+    /// with any physics constraint simulating at a non-zero mix, mesh
+    /// deformation became impossible — on *every* mesh, including ones the
+    /// constraint has nothing to do with. The only workaround was switching
+    /// simulation off.
+    ///
+    /// Nothing here couples the two today. This asserts that rather than
+    /// trusting it, because the coupling is the kind a later change introduces
+    /// by accident and nobody notices until a rigger cannot move a vertex.
+    #[test]
+    fn an_active_physics_constraint_does_not_block_mesh_editing() {
+        use ankhimate_core::constraints::{Constraint, PhysicsConstraint};
+
+        let (mut doc, skin, slot) = doc_with_mesh();
+        let bone = doc.skeleton.bones.keys().next().unwrap();
+        doc.skeleton
+            .add_constraint(Constraint::Physics(PhysicsConstraint::sway("wobble", bone)));
+
+        let before = mesh_of(&doc, skin, slot);
+        let target = glam::vec2(42.0, -17.0);
+        let mut history = History::default();
+        history.push(
+            Box::new(EditMesh::new(
+                skin,
+                slot,
+                "art".to_string(),
+                MeshEdit::MoveVertices(vec![(0, target)]),
+            )),
+            &mut doc,
+        );
+
+        let after = mesh_of(&doc, skin, slot);
+        assert!(
+            (after.setup_vertices[0] - target).length() < 1e-5,
+            "the vertex moved despite an active physics constraint"
+        );
+        assert_ne!(
+            after.setup_vertices[0], before.setup_vertices[0],
+            "the edit did something"
+        );
+    }
+
     /// Typed coordinates align a group of vertices on one axis (T-902).
     ///
     /// The gesture the inspector's position fields perform with several vertices

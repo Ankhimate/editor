@@ -37,6 +37,13 @@ const MAX_STEPS: usize = 8;
 /// disturbance in two seconds.
 const DAMPING_RATE: f32 = 12.0;
 
+/// Below this speed a bone counts as settled (T-911).
+///
+/// Shared by [`PhysicsState::is_settled`] and the settling test, so the overlay
+/// and the guarantee mean the same thing by "at rest". Small enough that motion
+/// under it is invisible at any zoom a rig is worked at.
+pub const SETTLED_SPEED: f32 = 0.01;
+
 /// One simulated bone.
 #[derive(Debug, Clone, Copy, Default)]
 struct BoneSim {
@@ -90,6 +97,31 @@ impl PhysicsState {
             .get(&(constraint, bone))
             .map(|s| (s.rotation, s.position))
             .unwrap_or((0.0, Vec2::ZERO))
+    }
+
+    /// How fast one constrained bone is still moving (T-911).
+    ///
+    /// For the editor's physics overlay, and for answering the question a
+    /// rigger tuning damping actually has: *is this settling, or is it going to
+    /// keep going?* The offsets alone cannot say — a bone at rest and a bone
+    /// passing through rest at speed look identical in position.
+    ///
+    /// Read-only on purpose. Nothing outside the integrator may set a velocity,
+    /// or determinism (PLAN §2.6) stops being a property of this module.
+    pub fn velocity(&self, constraint: ConstraintId, bone: BoneId) -> (f32, Vec2) {
+        self.bones
+            .get(&(constraint, bone))
+            .map(|s| (s.rotation_velocity, s.position_velocity))
+            .unwrap_or((0.0, Vec2::ZERO))
+    }
+
+    /// Is this bone still moving enough to be worth waiting for?
+    ///
+    /// The threshold is the one the settling test uses, so "settled" means the
+    /// same thing to the overlay and to the test that guarantees it happens.
+    pub fn is_settled(&self, constraint: ConstraintId, bone: BoneId) -> bool {
+        let (rotation, position) = self.velocity(constraint, bone);
+        rotation.abs() < SETTLED_SPEED && position.length() < SETTLED_SPEED
     }
 
     /// Advance one constrained bone by `dt`, given the acceleration acting on it.
@@ -210,6 +242,118 @@ mod tests {
             run(),
             "physics is deterministic given the same input"
         );
+    }
+
+    /// A long run stays finite and bounded (T-911).
+    ///
+    /// The reference implementation drew a cluster of independent reports of
+    /// physics going unstable, and instability of this kind does not show up in
+    /// a sixty-frame test: it accumulates. Ten thousand frames of continuous
+    /// disturbance is about three minutes of playback, which is longer than
+    /// anyone watches a loop before deciding the rig is broken.
+    ///
+    /// Asserts the two things that can go wrong. A NaN poisons every child of
+    /// the bone and never recovers; unbounded growth is the explicit-Euler
+    /// failure the semi-implicit integrator exists to avoid, and it looks like
+    /// the rig exploding.
+    #[test]
+    fn ten_thousand_frames_of_disturbance_stay_finite_and_bounded() {
+        let (c, b) = ids();
+        let mut state = PhysicsState::new();
+        let mut worst = 0.0f32;
+
+        for i in 0..10_000 {
+            // Never allowed to settle: a shove every frame, alternating
+            // direction, which is the input most likely to pump energy in.
+            let shove = if i % 2 == 0 { 6.0 } else { -6.0 };
+            let (rotation, position) = state.advance(
+                c,
+                b,
+                1.0 / 60.0,
+                Vec2::new(shove, shove * 0.5),
+                Vec2::new(0.0, -9.8),
+                0.8,
+                40.0,
+                0.3,
+                1.0,
+            );
+            assert!(
+                rotation.is_finite() && position.is_finite(),
+                "frame {i} went non-finite: rot {rotation}, pos {position:?}"
+            );
+            worst = worst.max(position.length()).max(rotation.abs());
+        }
+
+        // A generous ceiling: the point is that the number does not run away,
+        // not that it lands anywhere in particular. An explicit integrator would
+        // be past this inside a hundred frames.
+        assert!(
+            worst < 1_000.0,
+            "the simulation grew without bound (worst {worst})"
+        );
+    }
+
+    /// The same second of animation looks the same at 30, 60 and 144 fps
+    /// (T-911).
+    ///
+    /// The specific complaint filed against the reference tool is jitter *at
+    /// higher framerates*, which is what a simulation stepped by the frame — not
+    /// by a fixed accumulator — does: a 144fps caller integrates its spring four
+    /// times as often and settles somewhere else.
+    ///
+    /// `the_trajectory_does_not_depend_on_frame_size` already checks two rates
+    /// over a short run. This is the acceptance case from the task: three rates,
+    /// a full second, compared where they are all defined.
+    ///
+    /// # What "the same input" means here
+    ///
+    /// `rest_delta` is how far the parent moved *this frame*, so a parent moving
+    /// at a constant speed hands a 30fps caller twice the delta it hands a 60fps
+    /// one. Feeding all three rates the same number would be feeding them
+    /// different motion, and the test would be measuring its own mistake — which
+    /// is exactly what the first version of it did. The displacement is
+    /// therefore expressed as a *speed* and multiplied by `dt`.
+    #[test]
+    fn thirty_sixty_and_one_forty_four_fps_agree_after_a_second() {
+        let (c, b) = ids();
+        /// World units per second the parent is dragged at for the first fifth
+        /// of a second.
+        const DRAG_SPEED: f32 = 25.0;
+
+        let run = |fps: u32| {
+            let mut state = PhysicsState::new();
+            let dt = 1.0 / fps as f32;
+            for i in 0..fps {
+                let t = i as f32 * dt;
+                let displacement = if t < 0.2 {
+                    Vec2::new(DRAG_SPEED * dt, 0.0)
+                } else {
+                    Vec2::ZERO
+                };
+                state.advance(c, b, dt, displacement, Vec2::ZERO, 0.5, 40.0, 0.5, 1.0);
+            }
+            state.offsets(c, b)
+        };
+
+        let (rot30, pos30) = run(30);
+        let (rot60, pos60) = run(60);
+        let (rot144, pos144) = run(144);
+
+        // Not bit-identical: each rate carries a different remainder into the
+        // accumulator, so they land within a step of each other rather than on
+        // the same value. What matters is that the difference is a rounding
+        // artefact and not a different trajectory.
+        let close = |a: f32, b: f32, what: &str| {
+            assert!(
+                (a - b).abs() < 0.05,
+                "{what} diverged between frame rates: {a} vs {b}"
+            );
+        };
+        close(rot30, rot60, "rotation 30/60");
+        close(rot60, rot144, "rotation 60/144");
+        close(pos30.x, pos60.x, "position.x 30/60");
+        close(pos60.x, pos144.x, "position.x 60/144");
+        close(pos60.y, pos144.y, "position.y 60/144");
     }
 
     /// The acceptance case: a disturbed bone settles back to rest, and quickly
