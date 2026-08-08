@@ -33,11 +33,57 @@ pub struct ClipSlot {
     pub entries: Vec<(String, String, Attachment)>,
 }
 
+/// A constraint that acted on a copied subtree (T-909).
+///
+/// Held by **index into the clip**, so a paste rebuilds it against the bones it
+/// just created rather than against ids from the document it came from — which
+/// may be a different document entirely.
+#[derive(Debug, Clone)]
+pub struct ClipConstraint {
+    /// Name to give the rebuilt constraint. Uniquified on paste.
+    pub name: String,
+    /// The constraint with its bone ids left as they were; every one of them is
+    /// re-pointed on paste using the index maps below.
+    pub constraint: ankhimate_core::constraints::Constraint,
+    /// Positions in [`BoneClip::bones`] for each id the constraint holds, in the
+    /// order [`Constraint::affected_bones`] reports them.
+    pub bones: Vec<usize>,
+    /// Position of the target bone, when the constraint has one *and* it was
+    /// inside the copied subtree.
+    pub target: Option<usize>,
+}
+
+/// One animation's keys for a copied subtree (T-909).
+#[derive(Debug, Clone)]
+pub struct ClipAnimation {
+    /// Matched by name on paste: pasting into a rig that already has a `walk`
+    /// adds to that clip rather than making a second one.
+    pub name: String,
+    pub duration: f32,
+    /// `(bone index in the clip, the timeline with its ids left as-is)`.
+    pub timelines: Vec<(usize, ankhimate_core::animation::Timeline)>,
+}
+
 /// A copied bone subtree: the bones, plus everything hanging off them.
 #[derive(Debug, Clone, Default)]
 pub struct BoneClip {
     pub bones: Vec<ClipBone>,
     pub slots: Vec<ClipSlot>,
+    /// Constraints wholly inside the subtree (T-909).
+    ///
+    /// Wholly, deliberately: one that reaches a bone outside the copy cannot be
+    /// rebuilt without inventing that bone, so it is reported and dropped rather
+    /// than pasted half-wired. Which ones were dropped is in
+    /// [`BoneClip::dropped_constraints`].
+    pub constraints: Vec<ClipConstraint>,
+    /// Names of constraints left behind because they reached outside the copy.
+    pub dropped_constraints: Vec<String>,
+    /// Animation keys for the copied bones (T-909).
+    ///
+    /// The half of a rig transfer the reference tool loses: without these,
+    /// moving a rigged and animated limb to another skeleton means re-animating
+    /// it by hand.
+    pub animations: Vec<ClipAnimation>,
 }
 
 /// A copied pose: bone **names** to local transforms.

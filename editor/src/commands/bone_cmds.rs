@@ -332,11 +332,53 @@ impl EditCommand for SetBoneParent {
 /// Names are uniquified by `Skeleton::add_bone`, so pasting next to the original
 /// gives `arm_2` rather than two bones answering to `arm` — which the
 /// name-keyed save format could not represent (ADR 0004).
+/// Point a constraint at a new set of bones (T-909).
+///
+/// Written as a match rather than through `affected_bones` because that returns
+/// a shared slice; the bones have to be *written*, and each variant stores them
+/// differently — physics holds one bone as a single-element array.
+fn retarget(
+    constraint: &mut ankhimate_core::constraints::Constraint,
+    bones: &[BoneId],
+    target: Option<BoneId>,
+) {
+    use ankhimate_core::constraints::Constraint;
+    match constraint {
+        Constraint::Ik(ik) => {
+            ik.bones = bones.to_vec();
+            if let Some(t) = target {
+                ik.target = t;
+            }
+        }
+        Constraint::Transform(tc) => {
+            tc.bones = bones.to_vec();
+            if let Some(t) = target {
+                tc.target = t;
+            }
+        }
+        Constraint::Physics(p) => {
+            if let Some(&first) = bones.first() {
+                p.bone = first;
+            }
+        }
+        Constraint::Path(p) => p.bones = bones.to_vec(),
+    }
+}
+
 pub struct PasteBones {
     clip: crate::clipboard::BoneClip,
     parent: Option<BoneId>,
     created_bones: Vec<BoneId>,
     created_slots: Vec<ankhimate_core::ids::SlotId>,
+    /// Constraints rebuilt by this paste (T-909).
+    created_constraints: Vec<ankhimate_core::ids::ConstraintId>,
+    /// Clips this paste had to create because the target document had no clip
+    /// of that name — removed again on undo, unlike ones it merely added to.
+    created_animations: Vec<ankhimate_core::ids::AnimationId>,
+    /// `(clip, bone)` for every timeline added to a clip that already existed.
+    /// Undo removes exactly these rather than the whole clip, which may be full
+    /// of animation the paste had nothing to do with.
+    added_timelines: Vec<(ankhimate_core::ids::AnimationId, BoneId)>,
 }
 
 impl PasteBones {
@@ -346,6 +388,9 @@ impl PasteBones {
             parent,
             created_bones: Vec::new(),
             created_slots: Vec::new(),
+            created_constraints: Vec::new(),
+            created_animations: Vec::new(),
+            added_timelines: Vec::new(),
         }
     }
 
@@ -359,6 +404,9 @@ impl EditCommand for PasteBones {
     fn apply(&mut self, doc: &mut Document) {
         self.created_bones.clear();
         self.created_slots.clear();
+        self.created_constraints.clear();
+        self.created_animations.clear();
+        self.added_timelines.clear();
 
         // Bones first, in clip order: a child's parent index always refers to an
         // earlier entry (the copy walked the tree top-down), so the mapping is
@@ -397,10 +445,89 @@ impl EditCommand for PasteBones {
             }
         }
 
+        // ── Constraints (T-909) ──────────────────────────────────────────
+        // Re-pointed at the bones this paste just made. Only constraints wholly
+        // inside the copy reached the clipboard, so every index here resolves.
+        for clip in &self.clip.constraints {
+            let mut constraint = clip.constraint.clone();
+            let bones: Option<Vec<BoneId>> = clip
+                .bones
+                .iter()
+                .map(|i| self.created_bones.get(*i).copied())
+                .collect();
+            let Some(bones) = bones else { continue };
+            let target = match clip.target {
+                Some(i) => match self.created_bones.get(i).copied() {
+                    Some(id) => Some(id),
+                    None => continue,
+                },
+                None => None,
+            };
+            retarget(&mut constraint, &bones, target);
+            let id = doc.skeleton.add_constraint(constraint);
+            self.created_constraints.push(id);
+        }
+
+        // ── Animation keys (T-909) ───────────────────────────────────────
+        // Matched to a clip of the same name, or a new one when the target
+        // document has none: pasting an animated arm into a rig that already has
+        // a `walk` should extend that walk, not leave a second one nobody asked
+        // for.
+        for clip in &self.clip.animations {
+            let existing = doc
+                .animations
+                .iter()
+                .find(|(_, a)| a.name == clip.name)
+                .map(|(id, _)| id);
+            let anim_id = match existing {
+                Some(id) => id,
+                None => {
+                    let id = doc
+                        .animations
+                        .insert(ankhimate_core::animation::Animation::new(
+                            clip.name.clone(),
+                            clip.duration,
+                        ));
+                    self.created_animations.push(id);
+                    id
+                }
+            };
+            let Some(animation) = doc.animations.get_mut(anim_id) else {
+                continue;
+            };
+            // The clip may be longer than the one it lands in; a paste that
+            // silently truncated its own keys would be the same data loss this
+            // task exists to fix.
+            animation.duration = animation.duration.max(clip.duration);
+            for (bone_index, timeline) in &clip.timelines {
+                let Some(&bone) = self.created_bones.get(*bone_index) else {
+                    continue;
+                };
+                let mut timeline = timeline.clone();
+                timeline.set_bone(bone);
+                animation.timelines.push(timeline);
+                self.added_timelines.push((anim_id, bone));
+            }
+        }
+
         doc.skeleton.rebuild_update_order();
     }
 
     fn revert(&mut self, doc: &mut Document) {
+        // Timelines added to clips that already existed: only the ones this
+        // paste put there. The clip may be full of animation it never touched.
+        for (anim, bone) in self.added_timelines.drain(..) {
+            if let Some(animation) = doc.animations.get_mut(anim) {
+                animation.timelines.retain(|t| t.bone() != Some(bone));
+            }
+        }
+        // Clips this paste created outright go entirely.
+        for anim in self.created_animations.drain(..) {
+            doc.animations.remove(anim);
+        }
+        for constraint in self.created_constraints.drain(..) {
+            doc.skeleton.remove_constraint(constraint);
+        }
         for slot in self.created_slots.drain(..) {
             doc.skeleton.slots.remove(slot);
             doc.skeleton.draw_order.retain(|&s| s != slot);
@@ -946,6 +1073,123 @@ mod tests {
         let mid = doc.skeleton.add_bone(bone("b_mid", Some(root)));
         let leaf = doc.skeleton.add_bone(bone("c_leaf", Some(mid)));
         (root, mid, leaf)
+    }
+
+    /// A rigged, animated, constrained limb transfers whole (T-909).
+    ///
+    /// The filed complaint against the reference tool is that transferring
+    /// rigging loses animation keys and forces manual recreation. This asserts
+    /// the three parts arrive together: bones, the constraint driving them, and
+    /// the keys animating them.
+    #[test]
+    fn pasting_a_subtree_brings_its_constraints_and_keys() {
+        use ankhimate_core::animation::{Animation, Key, Timeline};
+        use ankhimate_core::constraints::{Constraint, IkConstraint};
+
+        let mut doc = Document::new();
+        let shoulder = doc.skeleton.add_bone(bone("shoulder", None));
+        let elbow = doc.skeleton.add_bone(bone("elbow", Some(shoulder)));
+        let target = doc.skeleton.add_bone(bone("hand_target", Some(shoulder)));
+        doc.skeleton
+            .add_constraint(Constraint::Ik(IkConstraint::chain(
+                "arm_ik",
+                target,
+                vec![shoulder, elbow],
+            )));
+        let mut walk = Animation::new("walk", 1.0);
+        walk.timelines.push(Timeline::BoneRotate {
+            bone: elbow,
+            keys: vec![Key::linear(0.0, 0.0), Key::linear(0.5, 45.0)],
+        });
+        doc.animations.insert(walk);
+
+        let mut state = crate::app_state::AppState::default();
+        state.doc = doc;
+        state.session.selected_bones = vec![shoulder];
+        state.copy_selection();
+
+        let crate::clipboard::Clipboard::Bones(clip) = state.session.clipboard.clone() else {
+            panic!("expected a bone clip");
+        };
+        assert_eq!(clip.bones.len(), 3, "the whole subtree");
+        assert_eq!(clip.constraints.len(), 1, "the IK came along");
+        assert_eq!(clip.animations.len(), 1, "so did the keys");
+
+        // Paste it as a second, unparented limb.
+        let mut history = History::default();
+        let before_bones = state.doc.skeleton.bones.len();
+        history.push(Box::new(PasteBones::new(clip, None)), &mut state.doc);
+
+        assert_eq!(state.doc.skeleton.bones.len(), before_bones + 3);
+        assert_eq!(
+            state.doc.skeleton.constraints.len(),
+            2,
+            "the pasted limb has its own IK"
+        );
+        // The pasted constraint points at the *pasted* bones, not the originals.
+        let pasted_ik = state
+            .doc
+            .skeleton
+            .constraints
+            .iter()
+            .filter_map(|(_, c)| match c {
+                Constraint::Ik(ik) => Some(ik),
+                _ => None,
+            })
+            .find(|ik| !ik.bones.contains(&shoulder))
+            .expect("a second IK over new bones");
+        assert!(
+            !pasted_ik.bones.contains(&elbow) && pasted_ik.target != target,
+            "the copy must not reach back into the original limb"
+        );
+
+        // The keys landed in the existing `walk` rather than a second clip.
+        assert_eq!(state.doc.animations.len(), 1, "no duplicate walk");
+        let (_, walk) = state.doc.animations.iter().next().unwrap();
+        assert_eq!(walk.timelines.len(), 2, "the original plus the pasted one");
+
+        history.undo(&mut state.doc);
+        assert_eq!(state.doc.skeleton.bones.len(), before_bones);
+        assert_eq!(state.doc.skeleton.constraints.len(), 1);
+        let (_, walk) = state.doc.animations.iter().next().unwrap();
+        assert_eq!(
+            walk.timelines.len(),
+            1,
+            "undo removed only the timelines the paste added"
+        );
+    }
+
+    /// A constraint reaching outside the copy is reported, not pasted
+    /// half-wired (T-909).
+    #[test]
+    fn a_constraint_reaching_outside_the_selection_is_left_behind() {
+        use ankhimate_core::constraints::{Constraint, IkConstraint};
+
+        let mut doc = Document::new();
+        let arm = doc.skeleton.add_bone(bone("arm", None));
+        let elsewhere = doc.skeleton.add_bone(bone("elsewhere", None));
+        // The target lives outside the subtree being copied.
+        doc.skeleton
+            .add_constraint(Constraint::Ik(IkConstraint::chain(
+                "reaching",
+                elsewhere,
+                vec![arm],
+            )));
+
+        let mut state = crate::app_state::AppState::default();
+        state.doc = doc;
+        state.session.selected_bones = vec![arm];
+        state.copy_selection();
+
+        let crate::clipboard::Clipboard::Bones(clip) = state.session.clipboard.clone() else {
+            panic!("expected a bone clip");
+        };
+        assert!(clip.constraints.is_empty(), "not rebuilt from nothing");
+        assert_eq!(
+            clip.dropped_constraints,
+            vec!["reaching".to_string()],
+            "and the user is told which one"
+        );
     }
 
     /// The case a loop of single renames gets wrong (T-901).

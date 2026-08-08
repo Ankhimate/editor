@@ -363,7 +363,64 @@ impl AppState {
             });
         }
 
-        let summary = format!("Copied {} bone(s)", clip.bones.len());
+        // ── Constraints (T-909) ──────────────────────────────────────────
+        // Only those wholly inside the copy. One reaching a bone outside it
+        // cannot be rebuilt without inventing that bone, and a half-wired
+        // constraint that silently does nothing is worse than an honest report
+        // that it was left behind.
+        for (_, constraint) in self.doc.skeleton.constraints.iter() {
+            let affected = constraint.affected_bones();
+            if affected.is_empty() || !affected.iter().any(|b| index_of.contains_key(b)) {
+                continue;
+            }
+            let target = constraint.target();
+            let all_inside = affected.iter().all(|b| index_of.contains_key(b))
+                && target.is_none_or(|t| index_of.contains_key(&t));
+            if !all_inside {
+                clip.dropped_constraints.push(constraint.name().to_string());
+                continue;
+            }
+            clip.constraints.push(crate::clipboard::ClipConstraint {
+                name: constraint.name().to_string(),
+                constraint: constraint.clone(),
+                bones: affected.iter().map(|b| index_of[b]).collect(),
+                target: target.map(|t| index_of[&t]),
+            });
+        }
+
+        // ── Animation keys (T-909) ───────────────────────────────────────
+        // The half of a rig transfer the reference tool loses. Without these,
+        // moving a rigged and animated limb means re-animating it by hand.
+        for (_, animation) in self.doc.animations.iter() {
+            let timelines: Vec<(usize, ankhimate_core::animation::Timeline)> = animation
+                .timelines
+                .iter()
+                .filter_map(|t| {
+                    let bone = t.bone()?;
+                    let index = index_of.get(&bone)?;
+                    Some((*index, t.clone()))
+                })
+                .collect();
+            if timelines.is_empty() {
+                continue;
+            }
+            clip.animations.push(crate::clipboard::ClipAnimation {
+                name: animation.name.clone(),
+                duration: animation.duration,
+                timelines,
+            });
+        }
+
+        let mut summary = format!("Copied {} bone(s)", clip.bones.len());
+        if !clip.animations.is_empty() {
+            summary.push_str(&format!(", {} clip(s) of keys", clip.animations.len()));
+        }
+        if !clip.dropped_constraints.is_empty() {
+            summary.push_str(&format!(
+                " — left {} constraint(s) reaching outside the selection",
+                clip.dropped_constraints.len()
+            ));
+        }
         self.session.clipboard = Clipboard::Bones(clip);
         self.session.set_status(summary);
     }
