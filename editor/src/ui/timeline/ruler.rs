@@ -170,29 +170,91 @@ pub fn ui(
         }
     }
 
-    // Right-click a marker to rename or delete it; right-click empty ruler to
-    // add one where you clicked.
+    // ── Rename / delete ──────────────────────────────────────────────────
+    // Which marker the menu is *about* is decided when the menu opens and then
+    // remembered. Reading it from the pointer each frame was the first attempt
+    // and cannot work: the moment the cursor moves off the flag and into the
+    // menu, the hit test finds nothing and the menu swaps to its "empty ruler"
+    // branch — so the name field vanished the instant you reached for it.
+    let menu_id = ui.id().with("marker_menu_target");
     let clicked_time = pointer
         .map(|p| layout.snap_time(layout.x_to_time(p.x)).max(0.0))
         .unwrap_or(0.0);
-    let hovered_marker = grabbed;
+    if marker_response.secondary_clicked() {
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(menu_id, (grabbed, clicked_time)));
+    }
+    let (menu_target, menu_time) = ui
+        .ctx()
+        .data(|d| d.get_temp::<(Option<usize>, f32)>(menu_id))
+        .unwrap_or((None, 0.0));
+
     marker_response.context_menu(|ui| {
-        if let Some(index) = hovered_marker {
-            let mut name = markers
-                .get(index)
-                .map(|(_, _, n, _)| n.clone())
-                .unwrap_or_default();
-            ui.label("Marker");
-            if ui.text_edit_singleline(&mut name).changed() {
-                marker_edit = Some((index, MarkerEdit::Rename(name)));
+        if let Some(index) = menu_target {
+            let Some((_, _, current, color)) = markers.get(index) else {
+                return;
+            };
+            // The buffer lives in egui's temp store, keyed by marker: a local
+            // `String` would be rebuilt from the document every frame, so each
+            // keystroke would be overwritten by the value it just produced.
+            let buffer_id = ui.id().with(("marker_name", index));
+            let mut name = ui
+                .ctx()
+                .data(|d| d.get_temp::<String>(buffer_id))
+                .unwrap_or_else(|| current.clone());
+
+            ui.label(egui::RichText::new("Marker").strong());
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut name)
+                    .desired_width(140.0)
+                    .hint_text("name"),
+            );
+            // Focused on the frame the menu opens, so the name can be typed
+            // without a second click to reach the field.
+            if !field.has_focus() && field.changed() {
+                field.request_focus();
             }
+            if field.changed() {
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(buffer_id, name.clone()));
+            }
+            // Committed on Enter or on losing focus, not per keystroke: one
+            // rename is one undo, not one per letter.
+            if field.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if name != *current && !name.trim().is_empty() {
+                    marker_edit = Some((index, MarkerEdit::Rename(name.trim().to_string())));
+                }
+                ui.ctx().data_mut(|d| d.remove_temp::<String>(buffer_id));
+            }
+
+            let mut rgba = egui::Color32::from_rgb(
+                (color[0] * 255.0) as u8,
+                (color[1] * 255.0) as u8,
+                (color[2] * 255.0) as u8,
+            );
+            ui.horizontal(|ui| {
+                ui.label("Colour");
+                if ui.color_edit_button_srgba(&mut rgba).changed() {
+                    marker_edit = Some((
+                        index,
+                        MarkerEdit::SetColor([
+                            rgba.r() as f32 / 255.0,
+                            rgba.g() as f32 / 255.0,
+                            rgba.b() as f32 / 255.0,
+                            1.0,
+                        ]),
+                    ));
+                }
+            });
+
+            ui.separator();
             if ui.button("Delete").clicked() {
                 marker_edit = Some((index, MarkerEdit::Remove));
                 ui.close();
             }
         } else if ui.button("Add marker here").clicked() {
             if let Some(anim) = state.session.active_animation {
-                state.dispatch(Box::new(AddMarker::new(anim, "marker", clicked_time)));
+                state.dispatch(Box::new(AddMarker::new(anim, "marker", menu_time)));
             }
             ui.close();
         }

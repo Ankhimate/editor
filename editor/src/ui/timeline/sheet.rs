@@ -106,6 +106,13 @@ pub fn ui(
 
     let folded = |id: u64| is_folded(ui, id);
     let rows = model.visible_rows(&folded);
+    // Where the clip ends, for the row fills below.
+    let duration = state
+        .doc
+        .animations
+        .get(anim)
+        .map(|a| a.duration)
+        .unwrap_or(0.0);
 
     let mut y = rect.top() - view.scroll_y;
     let mut hit_any_key = false;
@@ -119,11 +126,31 @@ pub fn ui(
             y += ROW_H;
             continue;
         }
+        // Two fills per row, not one. The sheet used to paint the tree's own
+        // band colour edge to edge, which made a twelve-bone rig a wall of
+        // alternating grey with no shape to it — and painted rows out to the
+        // right margin forever, so most of what you were reading was empty
+        // track that could never hold a key.
+        //
+        // Inside the clip the band is the tree's, damped: the tree column is
+        // where names are read and deserves the contrast, while the sheet is a
+        // backdrop for diamonds. Past the clip's end it drops to a flat dark
+        // fill, so "where this animation stops" is visible without counting
+        // frames on the ruler.
+        let band = band_color(&visuals, matches!(row, VisibleRow::Group { .. }));
+        let end_x = layout.time_to_x(duration).clamp(rect.left(), rect.right());
         painter.rect_filled(
-            row_rect,
+            egui::Rect::from_min_max(row_rect.min, egui::pos2(end_x, row_rect.bottom())),
             0.0,
-            band_color(&visuals, matches!(row, VisibleRow::Group { .. })),
+            band.gamma_multiply(0.72),
         );
+        if end_x < rect.right() {
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(end_x, row_rect.top()), row_rect.max),
+                0.0,
+                visuals.extreme_bg_color.gamma_multiply(0.55),
+            );
+        }
         // A row filtered out by soloing keeps its keys on screen but greyed:
         // hiding them outright would make the dopesheet lie about what the clip
         // contains, which is the one thing it is for.
