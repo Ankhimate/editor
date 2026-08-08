@@ -1,6 +1,6 @@
 use crate::attachment::Attachment;
 use crate::constraints::Constraint;
-use crate::ids::{BoneId, ConstraintId, SkinId, SlotId};
+use crate::ids::{BoneId, ConstraintId, GroupId, SkinId, SlotId};
 use crate::math::Transform;
 use crate::skin::Skin;
 use crate::slot::Slot;
@@ -165,6 +165,12 @@ pub struct Skeleton {
     /// serialises unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selection_sets: Vec<SelectionSet>,
+    /// Folders the hierarchy is filed into. Organisation only — see [`Group`].
+    #[serde(default)]
+    pub groups: SlotMap<GroupId, Group>,
+    /// The order groups are drawn in, so a rigger can arrange them.
+    #[serde(default)]
+    pub group_order: Vec<GroupId>,
 }
 
 /// A named group of bones (T-904).
@@ -173,10 +179,74 @@ pub struct Skeleton {
 /// would need every consumer to ask "which kind is this" before it could do
 /// anything, and the thing people ask for — "select the left arm" — is a bone
 /// selection. Slots follow their bones anyway.
+///
+/// Distinct from [`Group`], which is a *folder*: a set is a selection you can
+/// recall, a group is where a thing lives in the tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelectionSet {
     pub name: String,
     pub bones: Vec<BoneId>,
+}
+
+/// One thing a [`Group`] can hold.
+///
+/// Attachments are addressed by `(slot, name)` rather than by an id because
+/// they have none — an attachment is a named entry inside a skin, and the same
+/// name in two skins is the same attachment wearing two costumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GroupMember {
+    Bone(BoneId),
+    Slot(SlotId),
+}
+
+/// A folder in the hierarchy — organisation, not rig structure.
+///
+/// A group is **not an entity**. It has no transform, nothing inherits from it,
+/// and removing one leaves every bone and slot exactly where it was. It exists
+/// so a sixty-bone rig can be filed into "front leg", "face", "props" and
+/// browsed at that level, which is a different problem from parenting and should
+/// not be solved by inventing bones nobody animates.
+///
+/// # Why membership is exclusive
+///
+/// One group per item, like folders rather than tags. A tree can draw an item
+/// once; showing the same bone under two groups means either drawing it twice —
+/// and then a click selects an ambiguous row — or the tree quietly not being a
+/// tree. Tags are a real alternative but they are a different feature, and
+/// [`SelectionSet`] already covers "these things belong together" without
+/// claiming to be where they live.
+///
+/// # What it does not touch
+///
+/// Bone parenting. A group changes only where a row is *drawn*; the skeleton's
+/// hierarchy, world transforms and evaluation order are untouched. Grouping a
+/// shin under "front leg" does not reparent it, and deleting the group does not
+/// orphan it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Group {
+    pub name: String,
+    /// RGBA, tinting the members' rows so a group reads at a glance.
+    #[serde(default = "default_group_color")]
+    pub color: [f32; 4],
+    pub members: Vec<GroupMember>,
+    /// Groups can nest, so "front leg" can sit inside "lower body".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<GroupId>,
+}
+
+fn default_group_color() -> [f32; 4] {
+    [0.55, 0.58, 0.65, 1.0]
+}
+
+impl Group {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            color: default_group_color(),
+            members: Vec::new(),
+            parent: None,
+        }
+    }
 }
 
 impl Skeleton {
@@ -189,6 +259,57 @@ impl Skeleton {
         let mut skel = Self::default();
         skel.default_skin = skel.skins.insert(Skin::new("default"));
         skel
+    }
+
+    /// Add a folder, returning its id.
+    pub fn add_group(&mut self, group: Group) -> GroupId {
+        let taken: Vec<String> = self.groups.values().map(|g| g.name.clone()).collect();
+        let mut group = group;
+        group.name = unique_name(&group.name, taken.iter().map(|s| s.as_str()));
+        let id = self.groups.insert(group);
+        self.group_order.push(id);
+        id
+    }
+
+    /// File `member` under `group`, taking it out of whatever held it before.
+    ///
+    /// Membership is exclusive, and enforced here rather than trusted: a caller
+    /// that forgot to remove the old entry would leave an item drawn in two
+    /// folders, and the tree would stop being a tree.
+    pub fn assign_to_group(&mut self, member: GroupMember, group: Option<GroupId>) {
+        for (_, existing) in self.groups.iter_mut() {
+            existing.members.retain(|m| *m != member);
+        }
+        if let Some(id) = group
+            && let Some(target) = self.groups.get_mut(id)
+        {
+            target.members.push(member);
+        }
+    }
+
+    /// Which folder holds this item, if any.
+    pub fn group_of(&self, member: GroupMember) -> Option<GroupId> {
+        self.groups
+            .iter()
+            .find(|(_, g)| g.members.contains(&member))
+            .map(|(id, _)| id)
+    }
+
+    /// Delete a folder, leaving everything it held exactly where it was.
+    ///
+    /// A group is organisation, so removing one must not remove a bone — the
+    /// members simply return to the top level. Child groups are promoted to the
+    /// deleted group's parent rather than deleted with it, for the same reason:
+    /// nothing a user filed away should disappear because a folder above it did.
+    pub fn remove_group(&mut self, id: GroupId) -> Option<Group> {
+        let parent = self.groups.get(id)?.parent;
+        for (_, group) in self.groups.iter_mut() {
+            if group.parent == Some(id) {
+                group.parent = parent;
+            }
+        }
+        self.group_order.retain(|g| *g != id);
+        self.groups.remove(id)
     }
 
     /// Resolve the attachment a slot should show, honoring the active skin with a
@@ -509,6 +630,16 @@ impl Skeleton {
         }
         self.selection_sets.retain(|s| !s.bones.is_empty());
 
+        // Folders lose the bone and the slots that went with it, but the folder
+        // itself stays: an empty group is a place the user made and may be about
+        // to refill, unlike a selection set, which is only its contents.
+        for (_, group) in self.groups.iter_mut() {
+            group.members.retain(|m| match m {
+                GroupMember::Bone(b) => *b != id,
+                GroupMember::Slot(s) => !report.removed_slots.contains(s),
+            });
+        }
+
         self.bones.remove(id);
         self.rebuild_update_order();
         Some(report)
@@ -560,6 +691,72 @@ mod tests {
             inherit: Inherit::default(),
             color: Bone::default_color(),
         }
+    }
+
+    /// Filing an item into a folder takes it out of the one that held it.
+    ///
+    /// The invariant the whole feature rests on: a tree can draw an item once,
+    /// and an item in two folders is either drawn twice — so a click selects an
+    /// ambiguous row — or quietly not in a tree at all.
+    #[test]
+    fn group_membership_is_exclusive() {
+        let mut skel = Skeleton::new();
+        let arm = skel.add_bone(bone("arm", None));
+        let leg = skel.add_group(Group::new("leg"));
+        let torso = skel.add_group(Group::new("torso"));
+
+        skel.assign_to_group(GroupMember::Bone(arm), Some(leg));
+        assert_eq!(skel.group_of(GroupMember::Bone(arm)), Some(leg));
+
+        skel.assign_to_group(GroupMember::Bone(arm), Some(torso));
+        assert_eq!(skel.group_of(GroupMember::Bone(arm)), Some(torso));
+        assert!(
+            skel.groups[leg].members.is_empty(),
+            "the old folder let go of it"
+        );
+
+        // `None` files it back at the top level.
+        skel.assign_to_group(GroupMember::Bone(arm), None);
+        assert_eq!(skel.group_of(GroupMember::Bone(arm)), None);
+        assert!(skel.groups[torso].members.is_empty());
+    }
+
+    /// Deleting a folder is organisation, not demolition: everything it held
+    /// stays, and nested folders are promoted rather than deleted.
+    #[test]
+    fn removing_a_group_keeps_its_contents() {
+        let mut skel = Skeleton::new();
+        let arm = skel.add_bone(bone("arm", None));
+        let outer = skel.add_group(Group::new("upper body"));
+        let inner = skel.add_group(Group::new("left arm"));
+        skel.groups[inner].parent = Some(outer);
+        skel.assign_to_group(GroupMember::Bone(arm), Some(inner));
+
+        skel.remove_group(outer);
+
+        assert!(skel.bones.contains_key(arm), "the bone is untouched");
+        assert!(skel.groups.contains_key(inner), "the child folder survived");
+        assert_eq!(
+            skel.groups[inner].parent, None,
+            "and was promoted to where its parent was"
+        );
+        assert_eq!(skel.group_of(GroupMember::Bone(arm)), Some(inner));
+    }
+
+    /// Deleting a bone empties it out of its folder without taking the folder
+    /// with it — an empty group is a place the user made, unlike a selection set
+    /// which is only its contents.
+    #[test]
+    fn deleting_a_bone_leaves_its_folder_standing() {
+        let mut skel = Skeleton::new();
+        let arm = skel.add_bone(bone("arm", None));
+        let group = skel.add_group(Group::new("left arm"));
+        skel.assign_to_group(GroupMember::Bone(arm), Some(group));
+
+        skel.remove_bone(arm);
+
+        assert!(skel.groups.contains_key(group), "the folder stays");
+        assert!(skel.groups[group].members.is_empty(), "but loses the bone");
     }
 
     #[test]

@@ -25,6 +25,8 @@ pub struct AnkhimateApp {
     rename: crate::ui::rename::RenameState,
     /// In-progress name for a new selection set (T-904).
     naming_set: Option<String>,
+    /// In-progress name for a folder: `(existing group, name)`.
+    naming_group: Option<(Option<ankhimate_core::ids::GroupId>, String)>,
     /// The program mark. Re-rasterises itself from vector art when the size it
     /// is drawn at changes, so a UI-scale change stays sharp.
     logo: crate::ui::branding::Logo,
@@ -322,6 +324,7 @@ impl Default for AnkhimateApp {
             show_rename: false,
             rename: Default::default(),
             naming_set: None,
+            naming_group: None,
             logo: crate::ui::branding::Logo::default(),
         }
     }
@@ -1228,6 +1231,99 @@ impl eframe::App for AnkhimateApp {
             && crate::ui::rename::ui(ctx, &mut self.state, &mut self.rename, &self.theme)
         {
             self.show_rename = false;
+        }
+
+        // ── Folder edits from the hierarchy ──────────────────────────────
+        // Row-level actions arrive as requests because the tree cannot reach the
+        // dialogs, which live here.
+        if let Some(request) = self.state.session.group_request.take() {
+            use crate::commands::group_cmds::{EditGroup, GroupEdit};
+            use crate::ui::tree::GroupRequest;
+            match request {
+                GroupRequest::Rename(id, current) => {
+                    self.naming_group = Some((Some(id), current));
+                }
+                GroupRequest::Remove(id) => {
+                    self.state
+                        .dispatch(Box::new(EditGroup::new(id, GroupEdit::Ungroup)));
+                }
+                GroupRequest::AddSelected(id) => {
+                    let members: Vec<_> = self
+                        .state
+                        .session
+                        .selected_bones
+                        .iter()
+                        .map(|b| ankhimate_core::skeleton::GroupMember::Bone(*b))
+                        .collect();
+                    self.state
+                        .dispatch(Box::new(EditGroup::new(id, GroupEdit::Add(members))));
+                }
+            }
+        }
+        if std::mem::take(&mut self.state.session.request_new_group) {
+            self.naming_group = Some((None, String::new()));
+        }
+        if let Some((target, name)) = &mut self.naming_group {
+            let target = *target;
+            let mut close = false;
+            let mut commit: Option<String> = None;
+            let response = crate::ui::dialog::Dialog::new(
+                "name_group",
+                if target.is_some() {
+                    "Rename group"
+                } else {
+                    "New group"
+                },
+            )
+            .icon(crate::ui::icons::FOLDER)
+            .width(320.0)
+            .show(ctx, &self.theme, |ui| {
+                if target.is_none() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} bone(s) selected",
+                            self.state.session.selected_bones.len()
+                        ))
+                        .color(ui.visuals().weak_text_color()),
+                    );
+                    ui.add_space(6.0);
+                }
+                let field = ui.add(
+                    egui::TextEdit::singleline(name)
+                        .desired_width(280.0)
+                        .hint_text("front leg"),
+                );
+                field.request_focus();
+                ui.add_space(8.0);
+                let named = !name.trim().is_empty();
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (ui.add_enabled(named, egui::Button::new("OK")).clicked() || entered) && named {
+                    commit = Some(name.trim().to_string());
+                }
+            });
+            if let Some(name) = commit {
+                use crate::commands::group_cmds::{CreateGroup, EditGroup, GroupEdit};
+                match target {
+                    Some(id) => self
+                        .state
+                        .dispatch(Box::new(EditGroup::new(id, GroupEdit::Rename(name)))),
+                    None => {
+                        let members: Vec<_> = self
+                            .state
+                            .session
+                            .selected_bones
+                            .iter()
+                            .map(|b| ankhimate_core::skeleton::GroupMember::Bone(*b))
+                            .collect();
+                        self.state
+                            .dispatch(Box::new(CreateGroup::new(name, members)))
+                    }
+                };
+                close = true;
+            }
+            if close || response.closed {
+                self.naming_group = None;
+            }
         }
 
         // ── Name a selection set (T-904) ─────────────────────────────────

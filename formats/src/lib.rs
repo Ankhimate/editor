@@ -963,6 +963,87 @@ mod tests {
         assert!(names.contains(&"arm"));
     }
 
+    /// Folders survive a round trip, nesting and mixed membership included.
+    #[test]
+    fn groups_survive_a_round_trip() {
+        use ankhimate_core::skeleton::{Group, GroupMember};
+        use ankhimate_core::slot::Slot;
+
+        let mut skel = sample_skeleton();
+        let arm = skel.bones.iter().find(|(_, b)| b.name == "arm").unwrap().0;
+        let slot = skel.add_slot(Slot::new("boot".to_string(), arm));
+
+        let outer = skel.add_group(Group::new("upper body"));
+        let inner = skel.add_group(Group::new("left arm"));
+        skel.groups[inner].parent = Some(outer);
+        // A bone and a slot in one folder: the mixed case, which is the reason
+        // members are one flat `kind:name` list rather than a list per kind.
+        skel.assign_to_group(GroupMember::Bone(arm), Some(inner));
+        skel.assign_to_group(GroupMember::Slot(slot), Some(inner));
+
+        let anims = SlotMap::with_key();
+        let assets = AssetDb::new();
+        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
+        let loaded = from_json(&json).unwrap();
+        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
+
+        assert_eq!(loaded.skeleton.groups.len(), 2);
+        let (inner_id, inner_group) = loaded
+            .skeleton
+            .groups
+            .iter()
+            .find(|(_, g)| g.name == "left arm")
+            .expect("the nested folder");
+        assert_eq!(inner_group.members.len(), 2, "the bone and the slot");
+        let parent = inner_group.parent.expect("nesting survived");
+        assert_eq!(loaded.skeleton.groups[parent].name, "upper body");
+
+        // And membership still resolves to real entities.
+        let bone = loaded
+            .skeleton
+            .bones
+            .iter()
+            .find(|(_, b)| b.name == "arm")
+            .unwrap()
+            .0;
+        assert_eq!(
+            loaded.skeleton.group_of(GroupMember::Bone(bone)),
+            Some(inner_id)
+        );
+    }
+
+    /// A folder naming itself as its own parent is refused rather than hung on.
+    ///
+    /// A hand-edited file can express a cycle, and the tree walk would follow it
+    /// forever.
+    #[test]
+    fn a_cyclic_group_parent_is_refused() {
+        let skel = sample_skeleton();
+        let anims = SlotMap::with_key();
+        let assets = AssetDb::new();
+        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
+
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value["groups"] = serde_json::json!([
+            { "name": "a", "members": [], "parent": "b" },
+            { "name": "b", "members": [], "parent": "a" },
+        ]);
+        let json = serde_json::to_string(&value).unwrap();
+
+        let loaded = from_json(&json).unwrap();
+        assert!(!loaded.report.is_clean(), "the cycle is reported");
+        // Both folders still load; only the link that would close the loop is
+        // dropped, so nothing the user made disappears.
+        assert_eq!(loaded.skeleton.groups.len(), 2);
+        let rooted = loaded
+            .skeleton
+            .groups
+            .iter()
+            .filter(|(_, g)| g.parent.is_none())
+            .count();
+        assert!(rooted >= 1, "at least one folder is reachable from the top");
+    }
+
     /// A set naming a bone the rig no longer has is reported, not silently
     /// shrunk — a set that selects three of the eight bones it names is worse
     /// than one that says it lost five.

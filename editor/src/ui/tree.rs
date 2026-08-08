@@ -5,6 +5,260 @@ use ankhimate_core::constraints::Constraint;
 use ankhimate_core::ids::{BoneId, ConstraintId, SlotId};
 use eframe::egui;
 
+/// Is any ancestor of this bone filed into a folder?
+///
+/// A grouped bone brings its subtree with it, so a descendant is already drawn
+/// inside that folder and must not also appear at the top level.
+fn ancestor_is_grouped(skeleton: &ankhimate_core::skeleton::Skeleton, bone: BoneId) -> bool {
+    use ankhimate_core::skeleton::GroupMember;
+    let mut current = skeleton.bones.get(bone).and_then(|b| b.parent);
+    // Bounded like every other walk of this hierarchy.
+    for _ in 0..64 {
+        let Some(id) = current else { return false };
+        if skeleton.group_of(GroupMember::Bone(id)).is_some() {
+            return true;
+        }
+        current = skeleton.bones.get(id).and_then(|b| b.parent);
+    }
+    false
+}
+
+/// The folder rows, each with its members nested underneath.
+///
+/// Folders are organisation, not rig structure (see `core`'s `Group`): nothing
+/// here changes a parent, a transform, or what evaluates. It changes only where
+/// a row is drawn.
+fn groups_section(ui: &mut egui::Ui, state: &mut AppState) {
+    let roots: Vec<ankhimate_core::ids::GroupId> = state
+        .doc
+        .skeleton
+        .group_order
+        .iter()
+        .copied()
+        .filter(|id| {
+            state
+                .doc
+                .skeleton
+                .groups
+                .get(*id)
+                .is_some_and(|g| g.parent.is_none())
+        })
+        .collect();
+
+    let selected = state.session.selected_bones.len();
+    if roots.is_empty() && selected == 0 {
+        return;
+    }
+
+    section_header_counted(
+        ui,
+        crate::ui::icons::FOLDER,
+        "Groups",
+        Some(state.doc.skeleton.groups.len()),
+    );
+
+    for id in roots {
+        render_group_node(ui, state, id, 0);
+    }
+
+    // Making one is offered where they are listed, and only with something to
+    // put in it — an empty folder created by a stray click is litter.
+    if selected > 0 {
+        ui.add_space(2.0);
+        if ui
+            .add_enabled(
+                state.session.can_edit_structure(),
+                egui::Button::new(format!(
+                    "{}  Group {selected} selected…",
+                    crate::ui::icons::FOLDER
+                ))
+                .small(),
+            )
+            .on_hover_text("File the selected bones into a named folder")
+            .clicked()
+        {
+            state.session.request_new_group = true;
+        }
+    }
+    ui.add_space(6.0);
+}
+
+/// One folder row, and everything filed into it.
+fn render_group_node(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    group_id: ankhimate_core::ids::GroupId,
+    depth: usize,
+) {
+    use ankhimate_core::skeleton::GroupMember;
+
+    let Some(group) = state.doc.skeleton.groups.get(group_id) else {
+        return;
+    };
+    let name = group.name.clone();
+    let color = group.color;
+    let members = group.members.clone();
+    let children: Vec<ankhimate_core::ids::GroupId> = state
+        .doc
+        .skeleton
+        .group_order
+        .iter()
+        .copied()
+        .filter(|id| {
+            state
+                .doc
+                .skeleton
+                .groups
+                .get(*id)
+                .is_some_and(|g| g.parent == Some(group_id))
+        })
+        .collect();
+
+    let row_h = ui.spacing().interact_size.y.max(18.0);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), row_h),
+        egui::Sense::click(),
+    );
+    let id = ui.make_persistent_id(("group_row", group_id));
+    let open = ui.data(|d| d.get_temp::<bool>(id).unwrap_or(true));
+
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+    }
+    let tint = egui::Color32::from_rgb(
+        (color[0] * 255.0) as u8,
+        (color[1] * 255.0) as u8,
+        (color[2] * 255.0) as u8,
+    );
+    // The same left-edge stripe a bone row has, so a folder and its contents
+    // read as one column of colour rather than two conventions.
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.top() + 1.0),
+            egui::vec2(3.0, rect.height() - 2.0),
+        ),
+        1.0,
+        tint,
+    );
+
+    let mut cx = rect.left() + 6.0 + depth as f32 * INDENT;
+    let caret_rect =
+        egui::Rect::from_min_size(egui::pos2(cx, rect.top()), egui::vec2(INDENT, row_h));
+    let caret = ui.interact(caret_rect, id.with("caret"), egui::Sense::click());
+    if caret.clicked() {
+        ui.data_mut(|d| d.insert_temp(id, !open));
+    }
+    ui.painter().text(
+        caret_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        if open {
+            crate::ui::icons::CARET_DOWN
+        } else {
+            crate::ui::icons::CARET_RIGHT
+        },
+        egui::FontId::proportional(11.0),
+        ui.visuals().weak_text_color(),
+    );
+    cx += INDENT;
+
+    ui.painter().text(
+        egui::pos2(cx + 8.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        crate::ui::icons::FOLDER,
+        egui::FontId::proportional(12.0),
+        tint,
+    );
+    cx += 18.0;
+
+    let text_size = ui
+        .data(|d| d.get_temp::<f32>(egui::Id::new("tree_text_size")))
+        .unwrap_or(12.0);
+    ui.painter().text(
+        egui::pos2(cx, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &name,
+        egui::FontId::proportional(text_size),
+        ui.visuals().text_color(),
+    );
+    ui.painter().text(
+        egui::pos2(rect.right() - 6.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        format!("{}", members.len()),
+        egui::FontId::proportional(text_size - 2.0),
+        ui.visuals().weak_text_color(),
+    );
+
+    // Clicking a folder selects everything in it — the thing a folder is for.
+    if response.clicked() {
+        let bones: Vec<BoneId> = members
+            .iter()
+            .filter_map(|m| match m {
+                GroupMember::Bone(b) => Some(*b),
+                GroupMember::Slot(_) => None,
+            })
+            .collect();
+        if !bones.is_empty() {
+            state.session.selected_bones = bones;
+            if let Some(&last) = state.session.selected_bones.last() {
+                state.session.selection = Some(Selection::Bone(last));
+            }
+        }
+    }
+
+    let mut request: Option<GroupRequest> = None;
+    response.context_menu(|ui| {
+        if ui.button("Rename…").clicked() {
+            request = Some(GroupRequest::Rename(group_id, name.clone()));
+            ui.close();
+        }
+        if ui.button("Ungroup").clicked() {
+            // "Ungroup", not "Delete": the folder goes, its contents do not.
+            request = Some(GroupRequest::Remove(group_id));
+            ui.close();
+        }
+        if !state.session.selected_bones.is_empty() && ui.button("Add selected bones").clicked() {
+            request = Some(GroupRequest::AddSelected(group_id));
+            ui.close();
+        }
+    });
+    if let Some(r) = request {
+        state.session.group_request = Some(r);
+    }
+
+    if !open {
+        return;
+    }
+    for child in children {
+        render_group_node(ui, state, child, depth + 1);
+    }
+    for member in members {
+        match member {
+            GroupMember::Bone(bone) => render_bone_node(ui, state, bone, depth + 1),
+            GroupMember::Slot(slot) => {
+                if let Some(s) = state.doc.skeleton.slots.get(slot) {
+                    let label = s.name.clone();
+                    ui.horizontal(|ui| {
+                        ui.add_space(6.0 + (depth as f32 + 1.0) * INDENT + INDENT);
+                        ui.label(
+                            egui::RichText::new(format!("{}  {label}", crate::ui::icons::SLOT))
+                                .size(text_size),
+                        );
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// A folder edit a row asked for, resolved by the panel that owns the dialogs.
+#[derive(Clone)]
+pub enum GroupRequest {
+    Rename(ankhimate_core::ids::GroupId, String),
+    Remove(ankhimate_core::ids::GroupId),
+    AddSelected(ankhimate_core::ids::GroupId),
+}
+
 /// Select every bone between the active one and `to`, in tree order.
 ///
 /// Tree order, not `update_order`: shift-click means "everything between these
@@ -235,12 +489,29 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, fonts: &crate::config::FontSe
         Some(state.doc.skeleton.bones.len()),
     );
 
+    // Folders first, then whatever is not filed into one.
+    //
+    // A grouped bone is drawn under its folder and *only* there — showing it in
+    // both places would make a click ambiguous and stop the panel being a tree.
+    // Its own children come with it, so a limb stays a limb inside the folder.
+    groups_section(ui, state);
+
     let root_bones: Vec<BoneId> = state
         .doc
         .skeleton
         .bones
         .iter()
-        .filter_map(|(id, b)| if b.parent.is_none() { Some(id) } else { None })
+        .filter_map(|(id, b)| {
+            let grouped = state
+                .doc
+                .skeleton
+                .group_of(ankhimate_core::skeleton::GroupMember::Bone(id))
+                .is_some();
+            // A bone whose *ancestor* is grouped is already drawn inside that
+            // folder, so it must not appear at the top level either.
+            let ancestor_grouped = ancestor_is_grouped(&state.doc.skeleton, id);
+            (b.parent.is_none() && !grouped && !ancestor_grouped).then_some(id)
+        })
         .collect();
 
     if root_bones.is_empty() {

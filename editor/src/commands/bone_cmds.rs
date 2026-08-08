@@ -1103,8 +1103,10 @@ mod tests {
         });
         doc.animations.insert(walk);
 
-        let mut state = crate::app_state::AppState::default();
-        state.doc = doc;
+        let mut state = crate::app_state::AppState {
+            doc,
+            ..Default::default()
+        };
         state.session.selected_bones = vec![shoulder];
         state.copy_selection();
 
@@ -1176,8 +1178,10 @@ mod tests {
                 vec![arm],
             )));
 
-        let mut state = crate::app_state::AppState::default();
-        state.doc = doc;
+        let mut state = crate::app_state::AppState {
+            doc,
+            ..Default::default()
+        };
         state.session.selected_bones = vec![arm];
         state.copy_selection();
 

@@ -300,6 +300,10 @@ pub struct Session {
     pub request_bulk_rename: bool,
     /// A panel asked to name and save the current selection (T-904).
     pub request_save_selection_set: bool,
+    /// A panel asked to create a folder from the selection.
+    pub request_new_group: bool,
+    /// A folder edit a tree row asked for, resolved by the app.
+    pub group_request: Option<crate::ui::tree::GroupRequest>,
     /// The attachment open in the slot-space editor, if any.
     pub slot_edit: Option<crate::ui::slot_editor::SlotEdit>,
     /// Which handle that pane is dragging, as a small code.
@@ -458,6 +462,8 @@ impl Session {
             focus_tab: None,
             request_bulk_rename: false,
             request_save_selection_set: false,
+            request_new_group: false,
+            group_request: None,
             slot_edit: None,
             slot_edit_grab_kind: None,
             selected_event: None,
