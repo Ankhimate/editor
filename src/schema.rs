@@ -404,9 +404,24 @@ pub struct Animation {
     /// runtime — see [`Marker`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<Marker>,
+    /// Per-bone sampling offsets in seconds (T-905), by bone name.
+    ///
+    /// Runtime data, unlike markers: a clip whose scarf trails four frames
+    /// behind has to trail in the game too, or the export does not match what
+    /// was authored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bone_offsets: Vec<BoneOffset>,
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,
+}
+
+/// One bone's sampling offset within a clip (T-905).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoneOffset {
+    pub bone: String,
+    /// Seconds. Positive trails, negative leads.
+    pub offset: f32,
 }
 
 /// A label on the timeline ruler (T-906).
