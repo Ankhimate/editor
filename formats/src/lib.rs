@@ -724,6 +724,7 @@ mod tests {
             looping: false,
             events: Vec::new(),
             markers: Vec::new(),
+            bone_offsets: Vec::new(),
             timelines: vec![Timeline::TransformConstraintMix {
                 constraint: cid,
                 keys: vec![Key {
@@ -797,6 +798,7 @@ mod tests {
             looping: false,
             events: Vec::new(),
             markers: Vec::new(),
+            bone_offsets: Vec::new(),
             timelines: vec![
                 Timeline::IkBendDirection {
                     constraint: cid,
@@ -852,6 +854,8 @@ mod tests {
         use ankhimate_core::animation::EventKey;
 
         let skel = sample_skeleton();
+        let arm_bone = skel.bones.iter().find(|(_, b)| b.name == "arm").unwrap().0;
+        let root_bone = skel.bones.iter().find(|(_, b)| b.name == "root").unwrap().0;
         let mut anims = SlotMap::with_key();
         anims.insert(Animation {
             name: "walk".into(),
@@ -888,6 +892,10 @@ mod tests {
                 ankhimate_core::animation::Marker::new(0.75, "up"),
                 ankhimate_core::animation::Marker::new(0.0, "contact"),
             ],
+            // A negative offset as well as a positive one: leading is the half
+            // of T-905 that needs evaluation to tolerate negative sample times,
+            // so a round trip that only carried trailing would miss it.
+            bone_offsets: vec![(arm_bone, 0.125), (root_bone, -0.05)],
         });
 
         let assets = AssetDb::new();
@@ -896,6 +904,16 @@ mod tests {
         assert!(loaded.report.is_clean(), "{:?}", loaded.report);
 
         let clip = loaded.animations.values().next().expect("the clip");
+        // Offsets come back keyed to the same bones, by name.
+        assert_eq!(clip.bone_offsets.len(), 2);
+        for (bone, offset) in &clip.bone_offsets {
+            let name = loaded.skeleton.bones[*bone].name.as_str();
+            let expected = if name == "arm" { 0.125 } else { -0.05 };
+            assert!(
+                (*offset - expected).abs() < 1e-6,
+                "{name} offset {offset} != {expected}"
+            );
+        }
         let events = &clip.events;
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].name, "footstep");
@@ -996,6 +1014,7 @@ mod tests {
             looping: false,
             events: Vec::new(),
             markers: Vec::new(),
+            bone_offsets: Vec::new(),
             timelines: vec![Timeline::SlotVisible {
                 slot,
                 keys: vec![Key::stepped(0.3, false), Key::stepped(0.6, true)],

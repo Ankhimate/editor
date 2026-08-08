@@ -276,3 +276,68 @@ mod tests {
         assert_eq!(doc.animations[anim].markers[0].name, "contact");
     }
 }
+
+/// Set a bone's sampling offset within a clip (T-905).
+///
+/// Lives beside the marker commands because both are clip-level furniture that
+/// moves *time* rather than values — and neither touches a key.
+pub struct SetBoneOffset {
+    anim: AnimationId,
+    bone: ankhimate_core::ids::BoneId,
+    after: f32,
+    before: Option<f32>,
+}
+
+impl SetBoneOffset {
+    pub fn new(anim: AnimationId, bone: ankhimate_core::ids::BoneId, after: f32) -> Self {
+        Self {
+            anim,
+            bone,
+            after,
+            before: None,
+        }
+    }
+}
+
+impl EditCommand for SetBoneOffset {
+    fn apply(&mut self, doc: &mut Document) {
+        let Some(clip) = doc.animations.get_mut(self.anim) else {
+            return;
+        };
+        if self.before.is_none() {
+            self.before = Some(clip.bone_offset(self.bone));
+        }
+        clip.set_bone_offset(self.bone, self.after);
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let (Some(before), Some(clip)) = (self.before.take(), doc.animations.get_mut(self.anim))
+        {
+            clip.set_bone_offset(self.bone, before);
+        }
+    }
+
+    fn merge(&mut self, next: &dyn EditCommand) -> bool {
+        let Some(other) = next.as_any().downcast_ref::<SetBoneOffset>() else {
+            return false;
+        };
+        if other.anim != self.anim || other.bone != self.bone {
+            return false;
+        }
+        // Dragging the field is one edit.
+        self.after = other.after;
+        true
+    }
+
+    fn label(&self) -> &str {
+        "Set Track Offset"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Animate)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}

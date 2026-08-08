@@ -388,6 +388,14 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                     color: m.color,
                 })
                 .collect(),
+            bone_offsets: a
+                .bone_offsets
+                .iter()
+                .map(|(bone, offset)| schema::BoneOffset {
+                    bone: bone_name(*bone),
+                    offset: *offset,
+                })
+                .collect(),
             extra: Default::default(),
         })
         .collect();
@@ -1060,6 +1068,17 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
                 markers.sort_by(|x, y| x.time.total_cmp(&y.time));
                 markers
             },
+            bone_offsets: a
+                .bone_offsets
+                .iter()
+                .filter_map(|o| match bone_ids.get(&o.bone) {
+                    Some(&id) => Some((id, o.offset)),
+                    None => {
+                        report.dangling("bone offset", &o.bone);
+                        None
+                    }
+                })
+                .collect(),
             looping: a.looping,
         });
     }

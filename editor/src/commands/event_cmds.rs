@@ -267,6 +267,7 @@ mod tests {
             timelines: Vec::new(),
             events: Vec::new(),
             markers: Vec::new(),
+            bone_offsets: Vec::new(),
         });
         (doc, anim)
     }

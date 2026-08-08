@@ -374,6 +374,7 @@ fn main() {
             Marker::new(0.5, "passing"),
             Marker::new(0.75, "up"),
         ],
+        bone_offsets: Vec::new(),
         events: vec![
             EventKey {
                 time: 0.0,
@@ -456,6 +457,7 @@ fn main() {
         looping: true,
         events: Vec::new(),
         markers: Vec::new(),
+        bone_offsets: Vec::new(),
         timelines: vec![Timeline::BoneTranslate {
             bone: foot_target,
             keys: [

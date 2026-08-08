@@ -39,9 +39,16 @@ pub fn ui(
 ) {
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals().clone();
+    // Offsets are authored in seconds but read in frames — an animator says
+    // "four frames behind", never "0.133 seconds behind".
+    let fps = state.doc.meta.fps.max(1) as f32;
 
     // Panel background.
     painter.rect_filled(rect, 0.0, visuals.panel_fill);
+
+    // A right-clicked bone group asks for the offset editor (T-905). Collected
+    // rather than opened in place, because the row loop borrows the model.
+    let mut offset_popup: Option<(ankhimate_core::ids::BoneId, f32, egui::Pos2)> = None;
 
     let folded = |id: u64| is_folded(ui, id);
     let rows = model.visible_rows(&folded);
@@ -118,6 +125,35 @@ pub fn ui(
                     egui::FontId::proportional(style.text + 0.5),
                     visuals.strong_text_color(),
                 );
+                // A shifted track says so on its header (T-905). An offset is
+                // invisible in the keys — they do not move — so without this a
+                // track that plays late looks like a track someone keyed wrong,
+                // and the reason is in a panel you would have no cause to open.
+                if data.offset != 0.0 {
+                    let frames = data.offset * fps;
+                    painter.text(
+                        egui::pos2(rect.right() - 6.0, y + ROW_H / 2.0),
+                        egui::Align2::RIGHT_CENTER,
+                        format!("{frames:+.0}f"),
+                        egui::FontId::proportional(style.text - 1.0),
+                        egui::Color32::from_rgb(120, 190, 255),
+                    );
+                }
+                // Right-click a bone group to offset it.
+                if let Some(bone) = data.bone {
+                    let row_rect = egui::Rect::from_min_size(
+                        egui::pos2(rect.left(), y),
+                        egui::vec2(rect.width(), ROW_H),
+                    );
+                    let row_resp = ui.interact(
+                        row_rect,
+                        ui.id().with(("tl_group_row", data.fold_id)),
+                        egui::Sense::click(),
+                    );
+                    if row_resp.secondary_clicked() {
+                        offset_popup = Some((bone, data.offset, row_resp.rect.left_bottom()));
+                    }
+                }
             }
             VisibleRow::Property { data, .. } => {
                 let color = if !row.is_soloed(&view.soloed) {
@@ -201,8 +237,69 @@ pub fn ui(
     let max_scroll = (content_h - rect.height()).max(0.0);
     view.scroll_y = view.scroll_y.clamp(0.0, max_scroll);
 
-    // Suppress unused warning in builds where state is not read yet.
-    let _ = state;
+    // ── Track offset editor (T-905) ──────────────────────────────────────
+    // A window we own, for the reason given in `timeline::ruler`: egui's context
+    // menu closes on any plain click of its host, and the host here is a row the
+    // popup is drawn over.
+    let popup_id = ui.id().with("track_offset_popup");
+    if let Some((bone, offset, anchor)) = offset_popup {
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(popup_id, (bone, offset, anchor)));
+    }
+    if let Some((bone, current, anchor)) = ui
+        .ctx()
+        .data(|d| d.get_temp::<(ankhimate_core::ids::BoneId, f32, egui::Pos2)>(popup_id))
+    {
+        let mut close = false;
+        let mut set: Option<f32> = None;
+        egui::Window::new("track_offset_popup")
+            .title_bar(false)
+            .resizable(false)
+            .fixed_pos(anchor)
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                ui.label(egui::RichText::new("Track offset").strong());
+                // Authored in frames, stored in seconds: an animator says "four
+                // frames behind", never "0.133 seconds behind".
+                let mut frames = current * fps;
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut frames)
+                            .speed(0.25)
+                            .suffix(" frames"),
+                    )
+                    .on_hover_text(
+                        "Read this bone's curve early or late without moving a \
+                         key.\nPositive trails, negative leads.\nWhat a scarf, a \
+                         tail or ten strands of hair want.",
+                    )
+                    .changed()
+                {
+                    set = Some(frames / fps);
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Clear").clicked() {
+                        set = Some(0.0);
+                        close = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if let Some(seconds) = set
+            && let Some(anim) = state.session.active_animation
+        {
+            state.dispatch(Box::new(crate::commands::marker_cmds::SetBoneOffset::new(
+                anim, bone, seconds,
+            )));
+        }
+        if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ui.ctx().data_mut(|d| {
+                d.remove_temp::<(ankhimate_core::ids::BoneId, f32, egui::Pos2)>(popup_id)
+            });
+        }
+    }
 }
 
 /// Row background, by what the row *is* rather than by whether it is odd.

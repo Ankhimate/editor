@@ -62,6 +62,14 @@ pub struct Group {
     pub fold_id: u64,
     /// Union of every child key time, for the group's summary dots.
     pub summary_times: Vec<f32>,
+    /// The bone this group is for, when it is a bone group (T-905).
+    ///
+    /// Carried so the header can show and edit the group's sampling offset —
+    /// an offset is invisible in the keys, so a track that is shifted has to say
+    /// so where the track is, not only in a panel somewhere else.
+    pub bone: Option<ankhimate_core::ids::BoneId>,
+    /// Seconds this bone's timelines are shifted by. `0.0` when unshifted.
+    pub offset: f32,
 }
 
 /// The whole visible tree for the active animation.
@@ -135,6 +143,10 @@ impl TimelineModel {
             for (index, row) in rows.iter_mut().enumerate() {
                 row.row_id = key.fold_id().rotate_left(17).wrapping_add(index as u64 + 1);
             }
+            let bone = match key {
+                GroupKey::Bone(b) => Some(b),
+                _ => None,
+            };
             groups.push(Group {
                 label: key.label(&bone_name, &slot_name),
                 icon,
@@ -142,6 +154,8 @@ impl TimelineModel {
                 rows,
                 fold_id: key.fold_id(),
                 summary_times: summary,
+                bone,
+                offset: bone.map(|b| animation.bone_offset(b)).unwrap_or(0.0),
             });
         }
 
@@ -540,6 +554,8 @@ mod solo_tests {
             rows: Vec::new(),
             fold_id: 7,
             summary_times: Vec::new(),
+            bone: None,
+            offset: 0.0,
         };
         let header = VisibleRow::Group {
             data: &group,
@@ -587,6 +603,8 @@ mod solo_tests {
             rows: Vec::new(),
             fold_id: 7,
             summary_times: Vec::new(),
+            bone: None,
+            offset: 0.0,
         };
         let header = VisibleRow::Group {
             data: &group,

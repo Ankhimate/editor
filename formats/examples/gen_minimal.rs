@@ -108,6 +108,7 @@ fn build() -> (
         }],
         events: Vec::new(),
         markers: Vec::new(),
+        bone_offsets: Vec::new(),
         looping: true,
     });
 
