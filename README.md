@@ -114,4 +114,5 @@ runtime does not use.
 - [`docs/TASKS.md`](docs/TASKS.md) — task breakdown and current status
 - [`docs/rigging-walkthrough.md`](docs/rigging-walkthrough.md) — how a rig is put together
 - [`docs/what-others-cannot.md`](docs/what-others-cannot.md) — where this goes past the established editors, and where it does not
+- [`docs/graph-editor.md`](docs/graph-editor.md) — the curve editor's interaction rules, and why each one is what it is
 - [`docs/adr/`](docs/adr/) — architecture decision records

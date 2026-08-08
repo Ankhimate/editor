@@ -1090,6 +1090,12 @@ and an explicit request for a different interaction model altogether
 **Accept:** a selected curve is never invisible; snapping state is readable at a glance; an
 overshooting tangent is visually distinct from a well-behaved one.
 
+> **Landed, less one part.** Three of the four rules are in, with the rationale in
+> `docs/graph-editor.md`. Numeric tangent entry is **not** done: it needs the graph's key selection
+> — today local to the dopesheet's egui memory — plumbed somewhere the inspector can read, so the
+> numbers sit beside the other numeric fields rather than in a popup of their own. Worth doing with
+> the rest of the inspector's key editing rather than bolted onto the graph.
+
 ### T-913 ∥ ★ Name the thing under the cursor
 **Deps:** T-206, T-301 · **Refs:** PLAN §2 · **Evidence:** the naming-and-selection cluster
 (spine-editor#330, #409, #604) — each of those is a symptom of the same root problem, that a dense

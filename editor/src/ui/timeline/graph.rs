@@ -104,6 +104,57 @@ pub fn ui(
         placeholder(&painter, rect, &visuals);
         return;
     }
+
+    // Fit to the *curve*, not only to the keys (T-912).
+    //
+    // A bezier whose handles are steep enough overshoots the values it
+    // interpolates between, and framing on key values alone drew that overshoot
+    // outside the panel — the curve simply left the top of the view with nothing
+    // to say it had. "A selected curve is never invisible" is the acceptance bar
+    // for this task, and it cannot be met by looking at keys.
+    //
+    // Sampled at the same 2px step the curves are drawn at, so what is measured
+    // is exactly what is about to be stroked.
+    let key_lo = lo;
+    let key_hi = hi;
+    if let Some(animation) = state.doc.animations.get(anim) {
+        for row in &rows {
+            if !row.is_soloed(&view.soloed) {
+                continue;
+            }
+            let VisibleRow::Property { data, .. } = row else {
+                continue;
+            };
+            if data.read_only {
+                continue;
+            }
+            let Some(timeline) = animation
+                .timelines
+                .iter()
+                .find(|t| data.addr.matches_timeline(t))
+            else {
+                continue;
+            };
+            for ch in &data.channels {
+                let mut x = rect.left();
+                while x <= rect.right() {
+                    if let Some(v) = sample_channel(timeline, ch.axis, layout.x_to_time(x).max(0.0))
+                    {
+                        lo = lo.min(v);
+                        hi = hi.max(v);
+                    }
+                    x += 2.0;
+                }
+            }
+        }
+    }
+    // How far past its keys the curve travels, as a fraction of the keyed range.
+    // Reported below rather than clamped: an overshoot is a legitimate thing to
+    // author — it is how a bounce is made — and silently flattening one would be
+    // worse than the invisibility this replaces.
+    let keyed_span = (key_hi - key_lo).abs().max(1e-6);
+    let overshoot = ((key_lo - lo).max(0.0) + (hi - key_hi).max(0.0)) / keyed_span;
+
     // Pad the range so curves are not glued to the edges.
     if (hi - lo).abs() < 1e-3 {
         lo -= 1.0;
@@ -120,6 +171,40 @@ pub fn ui(
 
     draw_frame_grid(&painter, layout, rect, &visuals);
     draw_value_axis(&painter, rect, lo, hi, &visuals);
+
+    // Say when a curve travels well past the values it interpolates (T-912).
+    //
+    // An overshooting tangent has to be visually distinct from a well-behaved
+    // one: it is the difference between a bounce someone authored and a handle
+    // dragged too far by accident, and the curve alone does not distinguish
+    // them once the view has been re-framed to contain it. A tenth of the keyed
+    // range is the threshold — below that, an ease that peeks past its key is
+    // ordinary and saying so would be noise.
+    if overshoot > 0.1 {
+        painter.text(
+            egui::pos2(rect.right() - 6.0, rect.top() + 4.0),
+            egui::Align2::RIGHT_TOP,
+            format!("overshoot {:.0}%", overshoot * 100.0),
+            egui::FontId::proportional(10.0),
+            visuals.warn_fg_color,
+        );
+    }
+
+    // Snapping state, always on screen (T-912). Silent snapping is the specific
+    // complaint; a mode the user cannot see is a mode they cannot reason about
+    // when a key refuses to sit where they put it.
+    let free = ui.input(|i| i.modifiers.alt);
+    painter.text(
+        egui::pos2(rect.left() + 6.0, rect.top() + 4.0),
+        egui::Align2::LEFT_TOP,
+        if free { "free" } else { "snap: frames" },
+        egui::FontId::proportional(10.0),
+        if free {
+            egui::Color32::from_rgb(120, 190, 255)
+        } else {
+            visuals.weak_text_color()
+        },
+    );
 
     let animation = state.doc.animations.get(anim).cloned();
     let Some(animation) = animation else { return };
@@ -189,7 +274,18 @@ pub fn ui(
                 {
                     // New value from the vertical position; new time from x.
                     let new_val = lo + (rect.bottom() - p.y) / rect.height() * (hi - lo);
-                    let new_time = layout.snap_time(layout.x_to_time(p.x)).max(0.0);
+                    // Frame snapping, escapable with Alt (T-912). It used to be
+                    // unconditional and unannounced, which is the "unexpected
+                    // snapping" the reference tool's graph editor is repeatedly
+                    // reported for: a key nudged a third of a frame springs back
+                    // and the editor never says why. The badge below states the
+                    // mode; Alt is the way out of it.
+                    let raw = layout.x_to_time(p.x);
+                    let new_time = if ui.input(|i| i.modifiers.alt) {
+                        raw.max(0.0)
+                    } else {
+                        layout.snap_time(raw).max(0.0)
+                    };
                     pending = Some(Edit {
                         addr: data.addr.clone(),
                         index: k.index,
