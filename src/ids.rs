@@ -20,6 +20,9 @@ new_key_type! {
     pub struct ConstraintId;
     /// An image asset in a document's [`crate::assets::AssetDb`] (T-301).
     pub struct AssetId;
+    /// A folder in the hierarchy — organisation, never rig structure.
+    /// See [`crate::skeleton::Group`].
+    pub struct GroupId;
 }
 
 // `slotmap` keys serialize as integers by default; we never persist them (names
