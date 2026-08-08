@@ -229,26 +229,35 @@ fn render_group_node(
     if !open {
         return;
     }
-    for child in children {
-        render_group_node(ui, state, child, depth + 1);
-    }
-    for member in members {
-        match member {
-            GroupMember::Bone(bone) => render_bone_node(ui, state, bone, depth + 1),
-            GroupMember::Slot(slot) => {
-                if let Some(s) = state.doc.skeleton.slots.get(slot) {
-                    let label = s.name.clone();
-                    ui.horizontal(|ui| {
-                        ui.add_space(6.0 + (depth as f32 + 1.0) * INDENT + INDENT);
-                        ui.label(
-                            egui::RichText::new(format!("{}  {label}", crate::ui::icons::SLOT))
-                                .size(text_size),
-                        );
-                    });
+    // Everything inside a folder is drawn under an id scoped to that folder.
+    //
+    // Without this, a bone drawn inside a group and the same bone's row
+    // elsewhere hash to the same `make_persistent_id`, and egui reports "First
+    // use of widget ID …" across the whole panel — which is what it did, in red,
+    // over every row. Two rows for one bone need two ids; the folder is what
+    // makes them different.
+    ui.push_id(("group_contents", group_id), |ui| {
+        for child in children {
+            render_group_node(ui, state, child, depth + 1);
+        }
+        for member in members {
+            match member {
+                GroupMember::Bone(bone) => render_bone_node(ui, state, bone, depth + 1),
+                GroupMember::Slot(slot) => {
+                    if let Some(s) = state.doc.skeleton.slots.get(slot) {
+                        let label = s.name.clone();
+                        ui.horizontal(|ui| {
+                            ui.add_space(6.0 + (depth as f32 + 1.0) * INDENT + INDENT);
+                            ui.label(
+                                egui::RichText::new(format!("{}  {label}", crate::ui::icons::SLOT))
+                                    .size(text_size),
+                            );
+                        });
+                    }
                 }
             }
         }
-    }
+    });
 }
 
 /// A folder edit a row asked for, resolved by the panel that owns the dialogs.
