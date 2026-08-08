@@ -5,6 +5,116 @@ use ankhimate_core::constraints::Constraint;
 use ankhimate_core::ids::{BoneId, ConstraintId, SlotId};
 use eframe::egui;
 
+/// Named bone groups (T-904).
+///
+/// In the hierarchy rather than a panel of its own: a set *is* a selection, and
+/// selections are made here. A separate panel would mean docking a card to use a
+/// feature whose whole value is being one click away.
+///
+/// Hidden entirely when there are none and nothing is selected — an empty
+/// section with a disabled button is a permanent reminder of a feature you are
+/// not using.
+fn selection_sets(ui: &mut egui::Ui, state: &mut AppState) {
+    let sets: Vec<(String, Vec<BoneId>)> = state
+        .doc
+        .skeleton
+        .selection_sets
+        .iter()
+        .map(|s| (s.name.clone(), s.bones.clone()))
+        .collect();
+    let selected = state.session.selected_bones.clone();
+    if sets.is_empty() && selected.len() < 2 {
+        return;
+    }
+
+    let mut apply: Option<Vec<BoneId>> = None;
+    let mut edit: Option<(usize, crate::commands::selection_set_cmds::SetEdit)> = None;
+    let mut save = false;
+
+    egui::CollapsingHeader::new(format!("Selection sets ({})", sets.len()))
+        .default_open(!sets.is_empty())
+        .show(ui, |ui| {
+            for (index, (name, bones)) in sets.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(name)
+                        .on_hover_text(format!(
+                            "Select these {} bone(s)\nShift-click to add to the selection",
+                            bones.len()
+                        ))
+                        .clicked()
+                    {
+                        // Shift adds rather than replaces, matching what
+                        // shift-click does on a row: a rigger assembling "both
+                        // arms" from two saved sets should not have to rebuild
+                        // it by hand.
+                        let additive = ui.input(|i| i.modifiers.shift);
+                        let mut next = if additive {
+                            state.session.selected_bones.clone()
+                        } else {
+                            Vec::new()
+                        };
+                        for &bone in bones {
+                            if !next.contains(&bone) {
+                                next.push(bone);
+                            }
+                        }
+                        apply = Some(next);
+                    }
+                    ui.label(
+                        egui::RichText::new(format!("{}", bones.len()))
+                            .size(10.0)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(
+                                state.session.can_edit_structure(),
+                                egui::Button::new(crate::ui::icons::CLEAR).small(),
+                            )
+                            .on_hover_text("Delete this set")
+                            .clicked()
+                        {
+                            edit =
+                                Some((index, crate::commands::selection_set_cmds::SetEdit::Remove));
+                        }
+                    });
+                });
+            }
+
+            if selected.len() >= 2 {
+                ui.add_space(4.0);
+                if ui
+                    .add_enabled(
+                        state.session.can_edit_structure(),
+                        egui::Button::new(format!("Save {} selected…", selected.len())),
+                    )
+                    .on_hover_text("Name this selection so it is one click away later")
+                    .clicked()
+                {
+                    save = true;
+                }
+            }
+        });
+
+    if let Some(bones) = apply {
+        state.session.selected_bones = bones;
+        // The inspector follows the last of them, as it does for a click.
+        if let Some(&last) = state.session.selected_bones.last() {
+            state.session.selection = Some(crate::session::Selection::Bone(last));
+        }
+    }
+    if let Some((index, what)) = edit {
+        state.dispatch(Box::new(
+            crate::commands::selection_set_cmds::EditSelectionSet::new(index, what),
+        ));
+    }
+    if save {
+        state.session.request_save_selection_set = true;
+    }
+    ui.add_space(4.0);
+}
+
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState, fonts: &crate::config::FontSettings) {
     let text_size = fonts.for_area(crate::config::Area::Tree);
     ui.ctx().memory_mut(|m| {
@@ -48,6 +158,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, fonts: &crate::config::FontSe
         }
     });
     ui.add_space(2.0);
+    selection_sets(ui, state);
 
     // ── Bones ──────────────────────────────────────────────────────────
     section_header_counted(

@@ -430,6 +430,14 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
             .map(constraint_name)
             .collect(),
         animations,
+        selection_sets: skeleton
+            .selection_sets
+            .iter()
+            .map(|set| schema::SelectionSet {
+                name: set.name.clone(),
+                bones: set.bones.iter().copied().map(bone_name).collect(),
+            })
+            .collect(),
         extra: Default::default(),
     }
 }
@@ -968,6 +976,29 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
     for (id, _) in skeleton.constraints.iter() {
         if !skeleton.constraint_order.contains(&id) {
             skeleton.constraint_order.push(id);
+        }
+    }
+
+    // Selection sets (T-904). A name the rig no longer has is reported rather
+    // than dropped in silence: a set that quietly selects three bones instead of
+    // the eight it names is worse than one that says it lost five.
+    for set in &project.selection_sets {
+        let mut bones = Vec::new();
+        for name in &set.bones {
+            match bone_ids.get(name) {
+                Some(&id) => bones.push(id),
+                None => report.dangling("selection set bone", name),
+            }
+        }
+        // An empty set is a row that does nothing; if every bone in it is gone,
+        // the set is gone with them.
+        if !bones.is_empty() {
+            skeleton
+                .selection_sets
+                .push(ankhimate_core::skeleton::SelectionSet {
+                    name: set.name.clone(),
+                    bones,
+                });
         }
     }
 

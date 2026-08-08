@@ -23,6 +23,8 @@ pub struct AnkhimateApp {
     show_rename: bool,
     /// Its settings, kept while it is open.
     rename: crate::ui::rename::RenameState,
+    /// In-progress name for a new selection set (T-904).
+    naming_set: Option<String>,
     /// The program mark. Re-rasterises itself from vector art when the size it
     /// is drawn at changes, so a UI-scale change stays sharp.
     logo: crate::ui::branding::Logo,
@@ -319,6 +321,7 @@ impl Default for AnkhimateApp {
             show_settings: false,
             show_rename: false,
             rename: Default::default(),
+            naming_set: None,
             logo: crate::ui::branding::Logo::default(),
         }
     }
@@ -1225,6 +1228,53 @@ impl eframe::App for AnkhimateApp {
             && crate::ui::rename::ui(ctx, &mut self.state, &mut self.rename, &self.theme)
         {
             self.show_rename = false;
+        }
+
+        // ── Name a selection set (T-904) ─────────────────────────────────
+        if std::mem::take(&mut self.state.session.request_save_selection_set) {
+            self.naming_set = Some(String::new());
+        }
+        if let Some(name) = &mut self.naming_set {
+            let mut close = false;
+            let mut save: Option<String> = None;
+            let response = crate::ui::dialog::Dialog::new("name_selection_set", "Save selection")
+                .icon(crate::ui::icons::BONE)
+                .width(320.0)
+                .show(ctx, &self.theme, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} bone(s) selected",
+                            self.state.session.selected_bones.len()
+                        ))
+                        .color(ui.visuals().weak_text_color()),
+                    );
+                    ui.add_space(6.0);
+                    let field = ui.add(
+                        egui::TextEdit::singleline(name)
+                            .desired_width(280.0)
+                            .hint_text("left arm"),
+                    );
+                    field.request_focus();
+                    ui.add_space(8.0);
+                    let named = !name.trim().is_empty();
+                    let entered =
+                        field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if (ui.add_enabled(named, egui::Button::new("Save")).clicked() || entered)
+                        && named
+                    {
+                        save = Some(name.trim().to_string());
+                    }
+                });
+            if let Some(name) = save {
+                let bones = self.state.session.selected_bones.clone();
+                self.state.dispatch(Box::new(
+                    crate::commands::selection_set_cmds::SaveSelectionSet::new(name, bones),
+                ));
+                close = true;
+            }
+            if close || response.closed {
+                self.naming_set = None;
+            }
         }
 
         self.resolve_frame(file_action, trigger_undo, trigger_redo);

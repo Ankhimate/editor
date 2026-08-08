@@ -298,6 +298,8 @@ pub struct Session {
     /// A panel asked for the bulk-rename dialog (T-901). Consumed by the app,
     /// which owns the dialog — the tree cannot reach it directly.
     pub request_bulk_rename: bool,
+    /// A panel asked to name and save the current selection (T-904).
+    pub request_save_selection_set: bool,
     /// The attachment open in the slot-space editor, if any.
     pub slot_edit: Option<crate::ui::slot_editor::SlotEdit>,
     /// Which handle that pane is dragging, as a small code.
@@ -455,6 +457,7 @@ impl Session {
             pending_atlas: None,
             focus_tab: None,
             request_bulk_rename: false,
+            request_save_selection_set: false,
             slot_edit: None,
             slot_edit_grab_kind: None,
             selected_event: None,

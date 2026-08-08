@@ -24,6 +24,7 @@ pub mod key_cmds;
 pub mod marker_cmds;
 pub mod mesh_cmds;
 pub mod psd_cmds;
+pub mod selection_set_cmds;
 pub mod skin_cmds;
 pub mod slot_cmds;
 pub mod weight_cmds;

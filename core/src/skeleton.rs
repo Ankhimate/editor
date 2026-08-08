@@ -154,6 +154,29 @@ pub struct Skeleton {
     /// The skin every lookup falls back to. Created by [`Skeleton::new`].
     #[serde(default)]
     pub default_skin: SkinId,
+    /// Named groups of bones a rigger saved for later (T-901/T-904).
+    ///
+    /// Document state, not session state, and that is the whole point: a rigger
+    /// builds "left arm" once and an animator opens the file and has it. A set
+    /// that lived in the session would have to be rebuilt by whoever opened the
+    /// rig next, which is the work it exists to remove.
+    ///
+    /// Defaulted and skipped when empty, so a rig written before these existed
+    /// serialises unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selection_sets: Vec<SelectionSet>,
+}
+
+/// A named group of bones (T-904).
+///
+/// Bones only, deliberately. A mixed set of bones and slots and attachments
+/// would need every consumer to ask "which kind is this" before it could do
+/// anything, and the thing people ask for — "select the left arm" — is a bone
+/// selection. Slots follow their bones anyway.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelectionSet {
+    pub name: String,
+    pub bones: Vec<BoneId>,
 }
 
 impl Skeleton {
@@ -476,6 +499,15 @@ impl Skeleton {
             self.remove_constraint(cid);
             report.removed_constraints.push(name);
         }
+
+        // Selection sets lose the bone too, and any set left empty goes with it
+        // (T-904). A set holding a dangling id would silently select fewer bones
+        // than it names, and an empty one is a row that does nothing — both are
+        // worse than the set being gone.
+        for set in &mut self.selection_sets {
+            set.bones.retain(|&b| b != id);
+        }
+        self.selection_sets.retain(|s| !s.bones.is_empty());
 
         self.bones.remove(id);
         self.rebuild_update_order();
