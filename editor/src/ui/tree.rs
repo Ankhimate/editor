@@ -336,6 +336,13 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
             ui.data_mut(|d| d.insert_temp(id.with("renaming"), true));
             ui.close();
         }
+        // Bulk rename is offered only with a real selection behind it, so the
+        // menu never opens a dialog that can do nothing (T-901).
+        let selected = state.session.selected_bones.len();
+        if selected > 1 && ui.button(format!("Rename {selected} selected…")).clicked() {
+            state.session.request_bulk_rename = true;
+            ui.close();
+        }
         if ui.button("Delete").clicked() {
             state.dispatch(Box::new(crate::commands::bone_cmds::DeleteBone::new(
                 bone_id,

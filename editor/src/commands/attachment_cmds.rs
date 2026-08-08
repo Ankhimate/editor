@@ -545,6 +545,35 @@ mod tests {
         );
     }
 
+    /// Renaming an attachment must not touch the image it points at (T-901).
+    ///
+    /// The reference tool has three separate bugs filed here — a find-and-replace
+    /// rename that rewrote an attachment's *path* as well as its name, leaving
+    /// the art missing. Our model keeps the two in different fields, so this
+    /// pins that they stay independent rather than trusting that they do.
+    #[test]
+    fn renaming_an_attachment_leaves_its_texture_alone() {
+        let (mut doc, skin, slot) = doc_with_attachment();
+        let texture_before = match doc.skeleton.skins[skin].get(slot, "arm") {
+            Some(Attachment::Region(r)) => r.texture.clone(),
+            other => panic!("expected a region, got {other:?}"),
+        };
+
+        let mut history = History::default();
+        history.push(
+            Box::new(RenameAttachment::new(skin, slot, "arm", "forearm")),
+            &mut doc,
+        );
+
+        match doc.skeleton.skins[skin].get(slot, "forearm") {
+            Some(Attachment::Region(r)) => assert_eq!(
+                r.texture, texture_before,
+                "the name moved, the image reference must not"
+            ),
+            other => panic!("expected the renamed region, got {other:?}"),
+        }
+    }
+
     /// Renaming rewrites the slot's setup name and every attachment key that
     /// referenced it — otherwise the slot blanks and swap animations break.
     #[test]

@@ -693,6 +693,104 @@ impl EditCommand for SetBoneColor {
     }
 }
 
+/// Rename many bones at once, as a single undo step (T-901).
+///
+/// # Why this is not a loop over [`RenameBone`]
+///
+/// Names are uniquified against the rest of the rig, so renaming one at a time
+/// collides with the very bones still waiting their turn. Renaming `a→b` while
+/// the old `b` is still called `b` yields `b_2`, and by the end of a shifted
+/// batch — `tail1→tail2`, `tail2→tail3` — every name has picked up a suffix it
+/// was never meant to have.
+///
+/// So the whole set is applied together: each bone is first moved to a name
+/// nothing can collide with, then to its final one. The intermediate pass is the
+/// price of not caring what order the batch arrives in.
+///
+/// A rename that would land two bones on the same name is *still* resolved by
+/// core's uniquifier — that is a genuine conflict the user asked for, not an
+/// artefact of the batching.
+pub struct RenameBones {
+    /// `(bone, desired name)`.
+    renames: Vec<(BoneId, String)>,
+    before: Option<Vec<(BoneId, String)>>,
+}
+
+impl RenameBones {
+    pub fn new(renames: Vec<(BoneId, String)>) -> Self {
+        Self {
+            renames,
+            before: None,
+        }
+    }
+}
+
+impl EditCommand for RenameBones {
+    fn apply(&mut self, doc: &mut Document) {
+        if self.before.is_none() {
+            self.before = Some(
+                self.renames
+                    .iter()
+                    .filter_map(|(id, _)| {
+                        doc.skeleton.bones.get(*id).map(|b| (*id, b.name.clone()))
+                    })
+                    .collect(),
+            );
+        }
+        // Park every bone on a name nothing else can hold, so the second pass
+        // never sees a name still occupied by a bone that is about to move off
+        // it. The prefix is deliberately unusable as a real name.
+        for (index, (id, _)) in self.renames.iter().enumerate() {
+            if doc.skeleton.bones.contains_key(*id) {
+                doc.skeleton
+                    .rename_bone(*id, &format!("\u{0}pending{index}"));
+            }
+        }
+        for (id, name) in &self.renames {
+            if doc.skeleton.bones.contains_key(*id) {
+                doc.skeleton.rename_bone(*id, name);
+            }
+        }
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        let Some(before) = self.before.take() else {
+            return;
+        };
+        // Two passes again, for the same reason: restoring `a`'s old name while
+        // another bone still holds it would suffix it.
+        for (index, (id, _)) in before.iter().enumerate() {
+            if doc.skeleton.bones.contains_key(*id) {
+                doc.skeleton
+                    .rename_bone(*id, &format!("\u{0}restoring{index}"));
+            }
+        }
+        for (id, name) in &before {
+            if doc.skeleton.bones.contains_key(*id) {
+                doc.skeleton.rename_bone(*id, name);
+            }
+        }
+    }
+
+    fn label(&self) -> &str {
+        "Rename Bones"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn apply_remap(&mut self, remap: &IdRemap) {
+        for (id, _) in &mut self.renames {
+            *id = remap.bone(*id);
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Set a bone's display length, optionally bringing its children with it
 /// (T-907).
 ///
@@ -848,6 +946,63 @@ mod tests {
         let mid = doc.skeleton.add_bone(bone("b_mid", Some(root)));
         let leaf = doc.skeleton.add_bone(bone("c_leaf", Some(mid)));
         (root, mid, leaf)
+    }
+
+    /// The case a loop of single renames gets wrong (T-901).
+    ///
+    /// Shifting a run of names down by one means every target is a name still
+    /// held by the next bone in the batch. Renamed one at a time, each collides
+    /// with the bone waiting its turn and picks up a `_2` suffix.
+    #[test]
+    fn a_shifted_batch_rename_does_not_collide_with_itself() {
+        let mut doc = Document::new();
+        let a = doc.skeleton.add_bone(bone("tail1", None));
+        let b = doc.skeleton.add_bone(bone("tail2", Some(a)));
+        let c = doc.skeleton.add_bone(bone("tail3", Some(b)));
+        let mut history = History::default();
+
+        history.push(
+            Box::new(RenameBones::new(vec![
+                (a, "tail2".to_string()),
+                (b, "tail3".to_string()),
+                (c, "tail4".to_string()),
+            ])),
+            &mut doc,
+        );
+
+        assert_eq!(doc.skeleton.bones[a].name, "tail2");
+        assert_eq!(doc.skeleton.bones[b].name, "tail3");
+        assert_eq!(doc.skeleton.bones[c].name, "tail4");
+
+        history.undo(&mut doc);
+        assert_eq!(doc.skeleton.bones[a].name, "tail1", "and back again");
+        assert_eq!(doc.skeleton.bones[b].name, "tail2");
+        assert_eq!(doc.skeleton.bones[c].name, "tail3");
+    }
+
+    /// Two bones asked for the same name is a real conflict, not a batching
+    /// artefact, so core's uniquifier still resolves it.
+    #[test]
+    fn a_batch_that_asks_for_one_name_twice_still_uniquifies() {
+        let mut doc = Document::new();
+        let a = doc.skeleton.add_bone(bone("a", None));
+        let b = doc.skeleton.add_bone(bone("b", None));
+        let mut history = History::default();
+
+        history.push(
+            Box::new(RenameBones::new(vec![
+                (a, "same".to_string()),
+                (b, "same".to_string()),
+            ])),
+            &mut doc,
+        );
+
+        let names = [
+            doc.skeleton.bones[a].name.clone(),
+            doc.skeleton.bones[b].name.clone(),
+        ];
+        assert!(names.contains(&"same".to_string()));
+        assert_ne!(names[0], names[1], "the rig cannot hold two of one name");
     }
 
     /// A parent, a child at its tip, and a child parked halfway down it.

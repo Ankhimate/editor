@@ -295,6 +295,9 @@ pub struct Session {
     /// The panel tree belongs to the app, not to the session, so a tool that
     /// wants a tab focused leaves a request here rather than reaching across.
     pub focus_tab: Option<crate::ui::Tab>,
+    /// A panel asked for the bulk-rename dialog (T-901). Consumed by the app,
+    /// which owns the dialog — the tree cannot reach it directly.
+    pub request_bulk_rename: bool,
     /// The attachment open in the slot-space editor, if any.
     pub slot_edit: Option<crate::ui::slot_editor::SlotEdit>,
     /// Which handle that pane is dragging, as a small code.
@@ -451,6 +454,7 @@ impl Session {
             pending_trace: None,
             pending_atlas: None,
             focus_tab: None,
+            request_bulk_rename: false,
             slot_edit: None,
             slot_edit_grab_kind: None,
             selected_event: None,

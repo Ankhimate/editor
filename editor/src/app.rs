@@ -19,6 +19,10 @@ pub struct AnkhimateApp {
     show_startup: bool,
     /// Is the settings window up? (T-701)
     show_settings: bool,
+    /// Is the bulk-rename dialog up? (T-901)
+    show_rename: bool,
+    /// Its settings, kept while it is open.
+    rename: crate::ui::rename::RenameState,
     /// The program mark. Re-rasterises itself from vector art when the size it
     /// is drawn at changes, so a UI-scale change stays sharp.
     logo: crate::ui::branding::Logo,
@@ -313,6 +317,8 @@ impl Default for AnkhimateApp {
             config: crate::config::Config::default(),
             show_startup: false,
             show_settings: false,
+            show_rename: false,
+            rename: Default::default(),
             logo: crate::ui::branding::Logo::default(),
         }
     }
@@ -432,6 +438,14 @@ impl eframe::App for AnkhimateApp {
             }
             if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Comma)) {
                 self.show_settings = !self.show_settings;
+            }
+            // F2 renames the selection — the key every file manager and 3D tool
+            // uses for it, so it needs no discovering. Only with something
+            // selected: an empty rename dialog would be a dead end.
+            if ctx.input(|i| i.key_pressed(egui::Key::F2))
+                && !self.state.session.selected_bones.is_empty()
+            {
+                self.show_rename = true;
             }
             // M drops a marker at the playhead (T-906) — the same gesture K uses
             // for a key, on the strip above it. Named after the frame it lands
@@ -1199,6 +1213,18 @@ impl eframe::App for AnkhimateApp {
             );
             self.theme.apply(ctx);
             self.show_settings = open;
+        }
+
+        // ── Bulk rename (T-901) ──────────────────────────────────────────
+        // A panel can ask for it — the hierarchy's context menu does — because
+        // the dialog is owned here and the panels cannot reach it.
+        if std::mem::take(&mut self.state.session.request_bulk_rename) {
+            self.show_rename = true;
+        }
+        if self.show_rename
+            && crate::ui::rename::ui(ctx, &mut self.state, &mut self.rename, &self.theme)
+        {
+            self.show_rename = false;
         }
 
         self.resolve_frame(file_action, trigger_undo, trigger_redo);

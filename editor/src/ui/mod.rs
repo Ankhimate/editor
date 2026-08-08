@@ -11,6 +11,7 @@ pub mod icon_font;
 pub mod icons;
 pub mod inspector;
 pub mod psd_import;
+pub mod rename;
 pub mod settings;
 pub mod skins;
 pub mod slot_editor;
