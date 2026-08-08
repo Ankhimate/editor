@@ -2099,6 +2099,7 @@ mod tests {
             duration: 1.0,
             looping: false,
             events: Vec::new(),
+            markers: Vec::new(),
             timelines: vec![Timeline::TransformConstraintMix {
                 constraint: cid,
                 keys: vec![
@@ -2482,6 +2483,7 @@ mod tests {
             duration: 1.0,
             looping: false,
             events: Vec::new(),
+            markers: Vec::new(),
             timelines: vec![Timeline::IkBendDirection {
                 constraint: cid,
                 keys: vec![
@@ -2555,6 +2557,7 @@ mod tests {
             duration: 1.0,
             looping: false,
             events: Vec::new(),
+            markers: Vec::new(),
             timelines: vec![Timeline::SlotVisible {
                 slot,
                 keys: vec![
@@ -2599,6 +2602,7 @@ mod tests {
             duration: 1.0,
             looping: false,
             events: Vec::new(),
+            markers: Vec::new(),
             timelines: vec![Timeline::SlotVisible {
                 slot,
                 keys: vec![Key::stepped(0.0, true)],
