@@ -5,6 +5,72 @@ use ankhimate_core::constraints::Constraint;
 use ankhimate_core::ids::{BoneId, ConstraintId, SlotId};
 use eframe::egui;
 
+/// Select every bone between the active one and `to`, in tree order.
+///
+/// Tree order, not `update_order`: shift-click means "everything between these
+/// two rows *as I see them*", and the topological order interleaves branches in
+/// a way that would select bones the user cannot see between the two they
+/// clicked.
+///
+/// With nothing already selected this is a plain click — there is no anchor to
+/// extend from, and guessing one (the root? the first row?) would select a span
+/// nobody asked for.
+fn extend_selection_to(state: &mut AppState, to: BoneId) {
+    let Some(anchor) = state.session.active_bone() else {
+        state.session.select_bone(Some(to));
+        return;
+    };
+    let order = visible_bone_order(&state.doc.skeleton);
+    let (Some(from_index), Some(to_index)) = (
+        order.iter().position(|b| *b == anchor),
+        order.iter().position(|b| *b == to),
+    ) else {
+        state.session.select_bone(Some(to));
+        return;
+    };
+    let (lo, hi) = if from_index <= to_index {
+        (from_index, to_index)
+    } else {
+        (to_index, from_index)
+    };
+    // Rebuilt rather than added to, so a second shift-click *moves* the far end
+    // instead of accumulating every span the user passed through.
+    state.session.selected_bones = order[lo..=hi].to_vec();
+    // The clicked row becomes active, so a third shift-click extends from where
+    // the pointer last was.
+    state.session.selected_bones.retain(|b| *b != to);
+    state.session.selected_bones.push(to);
+    state.session.selection = Some(Selection::Bone(to));
+}
+
+/// Bones in the order the tree draws them: depth-first from each root.
+///
+/// Deliberately the *same* walk `render_bone_node` does — same `bones.iter()`
+/// filter, same recursion — so the span a shift-click selects is exactly the
+/// rows between the two that were clicked. Deriving it any other way is how the
+/// two drift apart and the selection stops matching what is on screen.
+///
+/// Quadratic in bone count, and fine: it runs once per shift-click, not per
+/// frame, and a rig with enough bones for that to matter would have a tree
+/// nobody could shift-click across anyway.
+fn visible_bone_order(skeleton: &ankhimate_core::skeleton::Skeleton) -> Vec<BoneId> {
+    fn walk(
+        skeleton: &ankhimate_core::skeleton::Skeleton,
+        parent: Option<BoneId>,
+        out: &mut Vec<BoneId>,
+    ) {
+        for (id, bone) in skeleton.bones.iter() {
+            if bone.parent == parent {
+                out.push(id);
+                walk(skeleton, Some(id), out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(skeleton, None, &mut out);
+    out
+}
+
 /// Named bone groups (T-904).
 ///
 /// In the hierarchy rather than a panel of its own: a set *is* a selection, and
@@ -44,11 +110,12 @@ fn selection_sets(ui: &mut egui::Ui, state: &mut AppState) {
                         ))
                         .clicked()
                     {
-                        // Shift adds rather than replaces, matching what
-                        // shift-click does on a row: a rigger assembling "both
-                        // arms" from two saved sets should not have to rebuild
-                        // it by hand.
-                        let additive = ui.input(|i| i.modifiers.shift);
+                        // Either modifier adds rather than replaces, matching
+                        // rows and the canvas: a rigger assembling "both arms"
+                        // from two saved sets should not have to rebuild it by
+                        // hand, and should not have to remember which of the two
+                        // keys this particular button wanted.
+                        let additive = ui.input(|i| i.modifiers.shift || i.modifiers.ctrl);
                         let mut next = if additive {
                             state.session.selected_bones.clone()
                         } else {
@@ -393,8 +460,40 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
         ui.painter()
             .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
     }
+
+    // A colour bar down the row's left edge, in the bone's group colour — its
+    // own, or inherited from the nearest coloured ancestor (T-505).
+    //
+    // The glyph further along already carries this colour, but a glyph is a
+    // shape first and a colour second: at a glance a column of them reads as
+    // icons, not as groups. A bar at a fixed x is the opposite — nothing to
+    // read, and every row in a limb lines up into one continuous stripe, which
+    // is what makes the limb visible as a unit while scrolling a 67-bone rig.
+    let stripe = egui::Rect::from_min_size(
+        egui::pos2(rect.left(), rect.top() + 1.0),
+        egui::vec2(3.0, rect.height() - 2.0),
+    );
+    ui.painter().rect_filled(
+        stripe,
+        1.0,
+        bone_tint(&state.doc.skeleton, bone_id).gamma_multiply(if is_selected {
+            1.0
+        } else {
+            0.75
+        }),
+    );
     if response.clicked() {
-        state.session.select_bone(Some(bone_id));
+        // Ctrl toggles one bone, Shift extends from the active one down the
+        // visible order, a plain click replaces. Ctrl matches what the canvas
+        // has always done; the tree had *neither*, so every multi-bone feature —
+        // bulk rename, selection sets, posing a limb — could only be reached by
+        // ctrl-clicking sticks in the viewport (T-901/T-904).
+        let (ctrl, shift) = ui.input(|i| (i.modifiers.ctrl, i.modifiers.shift));
+        match (ctrl, shift) {
+            (true, _) => state.session.toggle_bone(bone_id),
+            (false, true) => extend_selection_to(state, bone_id),
+            _ => state.session.select_bone(Some(bone_id)),
+        }
     }
 
     // Right-click: reparent / rename / delete (T-206).
@@ -1075,6 +1174,65 @@ mod tests {
             }),
         );
         state
+    }
+
+    /// Shift-click selects the span between the active bone and the clicked one,
+    /// in the order the tree draws them.
+    #[test]
+    fn shift_click_selects_the_rows_between_two_bones() {
+        let mut state = AppState::default();
+        let root = state.doc.skeleton.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 10.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let mut previous = root;
+        let mut chain = vec![root];
+        for i in 0..4 {
+            let id = state.doc.skeleton.add_bone(Bone {
+                name: format!("tail{i}"),
+                parent: Some(previous),
+                length: 10.0,
+                local_transform: Default::default(),
+                inherit: Default::default(),
+                color: Bone::default_color(),
+            });
+            chain.push(id);
+            previous = id;
+        }
+
+        // Anchor on the second bone, extend to the fourth.
+        state.session.select_bone(Some(chain[1]));
+        extend_selection_to(&mut state, chain[3]);
+        assert_eq!(state.session.selected_bones.len(), 3);
+        for id in &chain[1..=3] {
+            assert!(state.session.selected_bones.contains(id));
+        }
+        assert_eq!(
+            state.session.active_bone(),
+            Some(chain[3]),
+            "the clicked row becomes the anchor for the next extend"
+        );
+
+        // Extending the other way replaces the span rather than accumulating —
+        // a second shift-click moves the far end, it does not union.
+        extend_selection_to(&mut state, chain[0]);
+        assert_eq!(state.session.selected_bones.len(), 4);
+        assert!(!state.session.selected_bones.contains(&chain[4]));
+    }
+
+    /// With nothing selected there is no anchor, so shift behaves as a plain
+    /// click rather than guessing a span.
+    #[test]
+    fn shift_click_with_no_anchor_selects_one_bone() {
+        let state = &mut rig();
+        let arm = bone_by_name(state, "front-upper-arm");
+        state.session.select_bone(None);
+        extend_selection_to(state, arm);
+        assert_eq!(state.session.selected_bones, vec![arm]);
     }
 
     fn bone_by_name(state: &AppState, name: &str) -> BoneId {

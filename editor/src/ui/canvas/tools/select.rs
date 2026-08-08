@@ -499,7 +499,12 @@ impl CanvasTool for SelectTool {
                     );
                 }
             } else {
-                let ctrl = ctx.ui.input(|i| i.modifiers.ctrl);
+                // Shift as well as Ctrl. Ctrl is what this always accepted, and
+                // Shift is what people reach for — it is the additive modifier
+                // in the tree and in most tools — so refusing it just meant
+                // clicks that silently replaced the selection instead of adding
+                // to it.
+                let ctrl = ctx.ui.input(|i| i.modifiers.ctrl || i.modifiers.shift);
                 if open_in_slot_editor(ctx, mouse_screen, viewport_size) {
                     return;
                 }
