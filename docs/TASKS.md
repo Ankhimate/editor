@@ -1055,6 +1055,17 @@ constraint is named in a summary; the operation is one undo step.
 **Accept:** the timeline can live on a second monitor across restarts; edits in either viewport
 appear in both immediately and undo once.
 
+> **Landed, less the second viewport.** Every pane *except* the canvas tears off, via
+> View › Open in a window, and the set persists across restarts. Divergence is impossible rather
+> than merely avoided: `show_viewport_immediate` takes an `FnMut`, so a torn-off window borrows the
+> same `AppState` the docked tree just drew from — one document, one undo stack, no synchronisation.
+> A torn-off pane is hidden from the dock so it cannot draw twice.
+>
+> A second **viewport** is not done. The canvas paints through a wgpu callback against render
+> resources shared with the main window, and a second render pass into another OS window is its own
+> piece of work with its own failure modes — worth doing deliberately rather than landing untested
+> behind a feature that otherwise only moves egui panels around.
+
 ### T-911 Physics stability harness
 **Deps:** T-503 · **Refs:** PLAN §2 · **Evidence:** clustered forum reports of jitter at high
 framerate, jitter under unclear conditions, and CPU cost, against the reference implementation's

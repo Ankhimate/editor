@@ -86,6 +86,26 @@ impl Tab {
         }
     }
 
+    /// The tab whose [`Tab::title`] is `title`, if any.
+    ///
+    /// For restoring torn-off windows from config (T-910), which stores names
+    /// rather than the enum so a removed variant degrades to "not torn off"
+    /// instead of failing the whole parse.
+    pub fn from_title(title: &str) -> Option<Tab> {
+        Tab::ALL.into_iter().find(|t| t.title() == title)
+    }
+
+    /// Can this pane be torn into its own OS window (T-910)?
+    ///
+    /// Everything but the viewport. The canvas paints through a wgpu callback
+    /// against render resources shared with the main window, and a second render
+    /// pass into another window is its own piece of work — one I would rather
+    /// not land untested behind a feature that otherwise only moves egui panels
+    /// around.
+    pub fn can_tear_off(self) -> bool {
+        !matches!(self, Tab::Canvas)
+    }
+
     /// Is this pane only meaningful while animating?
     ///
     /// Setup mode has no playhead and no active clip, so these show an
@@ -188,22 +208,14 @@ pub fn tab_bar_height(style: &egui::Style) -> f32 {
 /// meets the card's own rounded top and the two curves fight.
 pub const TAB_TOP_PAD: f32 = 10.0;
 
-impl<'a> Behavior<Tab> for AppBehavior<'a> {
-    fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut Tab) -> UiResponse {
-        // The card body. The window behind is the deep background, so anything
-        // not painted here reads as a gap between cards — which is exactly what
-        // the gaps are.
-        let body = ui.max_rect();
-        ui.painter().rect_filled(
-            body,
-            egui::CornerRadius {
-                nw: 0,
-                ne: 0,
-                sw: CARD_RADIUS,
-                se: CARD_RADIUS,
-            },
-            ui.visuals().panel_fill,
-        );
+impl AppBehavior<'_> {
+    /// Draw one pane's contents.
+    ///
+    /// Split out of `pane_ui` so a torn-off window (T-910) draws a panel by
+    /// calling the same code the docked tile does. Two copies of this match is
+    /// how a panel starts behaving differently depending on which window it is
+    /// in, which is the failure this whole feature has to avoid.
+    pub fn pane_contents(&mut self, ui: &mut egui::Ui, pane: Tab) {
         // Consistent inner margin for all non-canvas panels
         let margin = egui::Margin::same(8);
         match pane {
@@ -311,6 +323,26 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                 });
             }
         }
+    }
+}
+
+impl<'a> Behavior<Tab> for AppBehavior<'a> {
+    fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut Tab) -> UiResponse {
+        // The card body. The window behind is the deep background, so anything
+        // not painted here reads as a gap between cards — which is exactly what
+        // the gaps are.
+        let body = ui.max_rect();
+        ui.painter().rect_filled(
+            body,
+            egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: CARD_RADIUS,
+                se: CARD_RADIUS,
+            },
+            ui.visuals().panel_fill,
+        );
+        self.pane_contents(ui, *pane);
         // Round the card, by carving rather than by filling.
         //
         // Neither end of the card is ours to fill. egui_tiles paints the tab

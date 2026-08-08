@@ -48,6 +48,15 @@ pub struct Config {
     /// not do that — a 20pt glyph at 1× is still rasterised once per pixel.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
+    /// Panes torn off into their own OS window, by tab name (T-910).
+    ///
+    /// Persisted because the layout is the point: someone who put the dopesheet
+    /// on a second monitor did that once and expects it there tomorrow. Stored
+    /// as names rather than as the `Tab` enum so a renamed or removed variant
+    /// degrades to "that pane is not torn off" instead of failing the whole
+    /// config parse.
+    #[serde(default)]
+    pub torn_off: Vec<String>,
     /// Name the thing under the cursor in the viewport (T-913).
     ///
     /// On by default: a rig where nothing tells you what you are pointing at is
@@ -67,6 +76,7 @@ impl Default for Config {
             grid: GridSettings::default(),
             fonts: FontSettings::default(),
             ui_scale: default_ui_scale(),
+            torn_off: Vec::new(),
             hover_labels: default_hover_labels(),
         }
     }

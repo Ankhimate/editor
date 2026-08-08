@@ -27,6 +27,8 @@ pub struct AnkhimateApp {
     naming_set: Option<String>,
     /// In-progress name for a folder: `(existing group, name)`.
     naming_group: Option<(Option<ankhimate_core::ids::GroupId>, String)>,
+    /// Panes drawn in their own OS window (T-910).
+    torn_off: Vec<Tab>,
     /// The program mark. Re-rasterises itself from vector art when the size it
     /// is drawn at changes, so a UI-scale change stays sharp.
     logo: crate::ui::branding::Logo,
@@ -116,12 +118,22 @@ impl AnkhimateApp {
 
         let config = crate::config::Config::load();
         let show_startup = !config.skip_startup;
+        // Panes that were on a second monitor last session go back there
+        // (T-910). A name the build no longer has is simply not torn off, rather
+        // than a startup failure.
+        let torn_off: Vec<Tab> = config
+            .torn_off
+            .iter()
+            .filter_map(|name| Tab::from_title(name))
+            .filter(|t| t.can_tear_off())
+            .collect();
 
         let mut app = Self {
             theme: default_theme,
             available_themes,
             config,
             show_startup,
+            torn_off,
             ..Default::default()
         };
 
@@ -165,8 +177,23 @@ impl AnkhimateApp {
                 _ => None,
             })
             .collect();
-        for (id, is_animation) in &panes {
-            self.tree.set_visible(*id, animating || !is_animation);
+        // A torn-off pane is hidden in the dock (T-910), or it would draw twice —
+        // once in each window, both live, both editing the same document. Two
+        // copies of a panel fighting over one scroll position is not two views,
+        // it is a bug that looks like one.
+        let torn_off: Vec<Tab> = self.torn_off.clone();
+        // Resolved before the loop: `set_visible` takes `&mut self.tree`, so the
+        // lookup cannot still be borrowing it.
+        let out_of_dock: Vec<bool> = panes
+            .iter()
+            .map(|(id, _)| match self.tree.tiles.get(*id) {
+                Some(Tile::Pane(pane)) => torn_off.contains(pane),
+                _ => false,
+            })
+            .collect();
+        for ((id, is_animation), out) in panes.iter().zip(out_of_dock) {
+            self.tree
+                .set_visible(*id, !out && (animating || !is_animation));
         }
 
         let cards: Vec<(egui_tiles::TileId, Vec<egui_tiles::TileId>)> = self
@@ -325,6 +352,7 @@ impl Default for AnkhimateApp {
             rename: Default::default(),
             naming_set: None,
             naming_group: None,
+            torn_off: Vec::new(),
             logo: crate::ui::branding::Logo::default(),
         }
     }
@@ -883,6 +911,44 @@ impl eframe::App for AnkhimateApp {
                                     }
                                 }
                                 ui.separator();
+                                // Tear-off (T-910). A submenu rather than a flat
+                                // list: fourteen panes would bury the rest of
+                                // the View menu.
+                                ui.menu_button("Open in a window", |ui| {
+                                    for tab in Tab::ALL {
+                                        if !tab.can_tear_off() {
+                                            continue;
+                                        }
+                                        let out = self.torn_off.contains(&tab);
+                                        if ui
+                                            .selectable_label(
+                                                out,
+                                                format!("{}  {}", tab.icon(), tab.title()),
+                                            )
+                                            .clicked()
+                                        {
+                                            if out {
+                                                self.torn_off.retain(|t| *t != tab);
+                                            } else {
+                                                self.torn_off.push(tab);
+                                            }
+                                            self.save_torn_off();
+                                            ui.close();
+                                        }
+                                    }
+                                    if Tab::ALL.iter().any(|t| !t.can_tear_off()) {
+                                        ui.separator();
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "The viewport stays docked — it draws\n\
+                                                 through the shared GPU pass.",
+                                            )
+                                            .size(10.0)
+                                            .color(ui.visuals().weak_text_color()),
+                                        );
+                                    }
+                                });
+                                ui.separator();
                                 if ui
                                     .button("Reset Layout")
                                     .on_hover_text("Put every panel back where it started")
@@ -1373,6 +1439,8 @@ impl eframe::App for AnkhimateApp {
             }
         }
 
+        self.draw_torn_off_windows(ctx, &compact_tabs);
+
         self.resolve_frame(file_action, trigger_undo, trigger_redo);
     }
 
@@ -1436,6 +1504,89 @@ impl AnkhimateApp {
         if let Some(action) = file_action {
             self.run_file_action(action);
         }
+    }
+
+    /// Draw every torn-off pane in its own OS window (T-910).
+    ///
+    /// `show_viewport_immediate` rather than the deferred form, and that is the
+    /// whole design: the immediate callback is `FnMut`, so it borrows `self`
+    /// directly and draws from the *same* `AppState` the main window just drew
+    /// from. There is one document, one undo stack, and no synchronisation to
+    /// get wrong — "two windows must never diverge" is not enforced here, it is
+    /// impossible here.
+    ///
+    /// The deferred form would have needed the state behind an `Arc<Mutex<_>>`
+    /// and a frame of lag between the windows, which is exactly the divergence
+    /// this is meant to avoid.
+    fn draw_torn_off_windows(
+        &mut self,
+        ctx: &egui::Context,
+        compact_tabs: &std::collections::HashSet<egui_tiles::TileId>,
+    ) {
+        if self.torn_off.is_empty() {
+            return;
+        }
+        let mut closed: Vec<Tab> = Vec::new();
+        // Cloned so the loop does not hold a borrow of `self` while the callback
+        // below takes one.
+        for tab in self.torn_off.clone() {
+            let id = egui::ViewportId::from_hash_of(("torn_off", tab.title()));
+            ctx.show_viewport_immediate(
+                id,
+                egui::ViewportBuilder::default()
+                    .with_title(format!("Ankhimate — {}", tab.title()))
+                    .with_inner_size([520.0, 640.0]),
+                |ctx, _class| {
+                    egui::Area::new(egui::Id::new(("torn_off_area", tab.title())))
+                        .fixed_pos(egui::Pos2::ZERO)
+                        .show(ctx, |ui| {
+                            let screen = ctx.content_rect();
+                            ui.painter()
+                                .rect_filled(screen, 0.0, self.theme.window_background());
+                            ui.set_max_size(screen.size());
+                            ui.scope_builder(
+                                egui::UiBuilder::new().max_rect(screen.shrink(4.0)),
+                                |ui| {
+                                    let mut close_requests = Vec::new();
+                                    let mut behavior = AppBehavior {
+                                        state: &mut self.state,
+                                        theme: &self.theme,
+                                        grid: &self.config.grid,
+                                        fonts: &self.config.fonts,
+                                        hover_labels: self.config.hover_labels,
+                                        compact_tabs,
+                                        close_requests: &mut close_requests,
+                                    };
+                                    // The same call the docked tile makes, so a
+                                    // panel cannot behave differently for being
+                                    // in another window.
+                                    behavior.pane_contents(ui, tab);
+                                },
+                            );
+                        });
+                    // The window's own ✕ docks the pane again rather than
+                    // destroying it: a panel is not a document, and losing one
+                    // to a misclick should cost a menu item, not the layout.
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        closed.push(tab);
+                    }
+                },
+            );
+        }
+        if !closed.is_empty() {
+            self.torn_off.retain(|t| !closed.contains(t));
+            self.save_torn_off();
+        }
+    }
+
+    /// Persist which panes are torn off, so a second monitor stays set up.
+    fn save_torn_off(&mut self) {
+        self.config.torn_off = self
+            .torn_off
+            .iter()
+            .map(|t| t.title().to_string())
+            .collect();
+        self.config.save();
     }
 
     fn run_file_action(&mut self, action: FileAction) {
