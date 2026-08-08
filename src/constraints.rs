@@ -342,6 +342,20 @@ impl Constraint {
         }
     }
 
+    /// The bone this constraint reaches for, when it has one.
+    ///
+    /// `None` for physics and path constraints, which are driven by a
+    /// simulation and a path rather than by another bone. Needed wherever a
+    /// constraint's full set of bone references matters — copying a subtree
+    /// (T-909) has to know whether the target came along with it.
+    pub fn target(&self) -> Option<BoneId> {
+        match self {
+            Constraint::Ik(ik) => Some(ik.target),
+            Constraint::Transform(tc) => Some(tc.target),
+            Constraint::Physics(_) | Constraint::Path(_) => None,
+        }
+    }
+
     /// `true` when the constraint has no effect and can be skipped entirely.
     pub fn is_inert(&self) -> bool {
         match self {

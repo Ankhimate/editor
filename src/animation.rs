@@ -279,6 +279,22 @@ impl Timeline {
         }
     }
 
+    /// Re-point a bone timeline at a different bone.
+    ///
+    /// For transferring rigging between skeletons (T-909): a copied timeline
+    /// holds ids from the document it came from, and pasting has to aim it at
+    /// the bones the paste just created. A no-op on timelines that drive
+    /// something other than a bone.
+    pub fn set_bone(&mut self, to: BoneId) {
+        match self {
+            Timeline::BoneTranslate { bone, .. }
+            | Timeline::BoneRotate { bone, .. }
+            | Timeline::BoneScale { bone, .. }
+            | Timeline::BoneShear { bone, .. } => *bone = to,
+            _ => {}
+        }
+    }
+
     /// Time of the last key, or `0.0` for an empty timeline.
     pub fn last_key_time(&self) -> f32 {
         macro_rules! last {
