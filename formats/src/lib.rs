@@ -723,6 +723,7 @@ mod tests {
             duration: 1.0,
             looping: false,
             events: Vec::new(),
+            markers: Vec::new(),
             timelines: vec![Timeline::TransformConstraintMix {
                 constraint: cid,
                 keys: vec![Key {
@@ -795,6 +796,7 @@ mod tests {
             duration: 1.0,
             looping: false,
             events: Vec::new(),
+            markers: Vec::new(),
             timelines: vec![
                 Timeline::IkBendDirection {
                     constraint: cid,
@@ -878,6 +880,14 @@ mod tests {
                     balance: 0.0,
                 },
             ],
+            // Deliberately out of order, and deliberately sharing times with the
+            // events above: markers and events are separate lists that happen to
+            // sit on the same ruler, and a round trip must not merge or reorder
+            // one into the other (T-906).
+            markers: vec![
+                ankhimate_core::animation::Marker::new(0.75, "up"),
+                ankhimate_core::animation::Marker::new(0.0, "contact"),
+            ],
         });
 
         let assets = AssetDb::new();
@@ -885,12 +895,18 @@ mod tests {
         let loaded = from_json(&json).unwrap();
         assert!(loaded.report.is_clean(), "{:?}", loaded.report);
 
-        let events = &loaded.animations.values().next().expect("the clip").events;
+        let clip = loaded.animations.values().next().expect("the clip");
+        let events = &clip.events;
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].name, "footstep");
         assert_eq!(events[0].int_value, 3);
         assert!((events[0].float_value - 0.8).abs() < 1e-6);
         assert_eq!(events[1].string_value, "right");
+
+        // Markers survive, and arrive sorted however they were written.
+        let names: Vec<&str> = clip.markers.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["contact", "up"], "markers sorted on load");
+        assert_eq!(clip.events.len(), 2, "markers did not leak into events");
     }
     /// T-505: blend mode and the two-color tint are slot fields the schema
     /// already had but nothing wrote; visibility keys are new.
@@ -913,6 +929,7 @@ mod tests {
             duration: 1.0,
             looping: false,
             events: Vec::new(),
+            markers: Vec::new(),
             timelines: vec![Timeline::SlotVisible {
                 slot,
                 keys: vec![Key::stepped(0.3, false), Key::stepped(0.6, true)],

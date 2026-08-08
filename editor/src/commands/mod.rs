@@ -1,4 +1,4 @@
-﻿//! Undo/redo via the command pattern (PLAN §3.2, defect D6).
+//! Undo/redo via the command pattern (PLAN §3.2, defect D6).
 //!
 //! Every mutation of the [`Document`] goes through [`History::push`]. Commands
 //! store the *minimum* needed to reverse themselves — not a JSON snapshot of the
@@ -21,6 +21,7 @@ pub mod clip_cmds;
 pub mod constraint_cmds;
 pub mod event_cmds;
 pub mod key_cmds;
+pub mod marker_cmds;
 pub mod mesh_cmds;
 pub mod psd_cmds;
 pub mod skin_cmds;

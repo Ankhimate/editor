@@ -1,9 +1,17 @@
 //! Frame ruler + orange playhead. Click/drag anywhere on the sheet portion of
 //! the ruler scrubs `Session.playhead`, snapped to whole frames.
+//!
+//! Markers (T-906) live here rather than in a lane of their own: a marker labels
+//! a *time*, and the ruler is where times are already written. A second strip
+//! would have cost vertical space to say the same thing further from it.
 
 use super::{Layout, sheet};
 use crate::app_state::AppState;
+use crate::commands::marker_cmds::{AddMarker, EditMarker, MarkerEdit};
 use eframe::egui;
+
+/// How close to a marker's stem a click must land to grab it.
+const MARKER_HIT: f32 = 6.0;
 
 pub fn ui(
     ui: &mut egui::Ui,
@@ -68,16 +76,164 @@ pub fn ui(
         }
     }
 
-    // Scrub.
+    // ── Markers (T-906) ──────────────────────────────────────────────────
+    // Claimed before the scrub below, so grabbing a marker does not also drag
+    // the playhead out from under it.
+    let markers: Vec<(usize, f32, String, [f32; 4])> = state
+        .session
+        .active_animation
+        .and_then(|id| state.doc.animations.get(id))
+        .map(|a| {
+            a.markers
+                .iter()
+                .enumerate()
+                .map(|(i, m)| (i, m.time, m.name.clone(), m.color))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let marker_response = ui.interact(
+        sheet_rect,
+        ui.id().with("tl_markers"),
+        egui::Sense::click_and_drag(),
+    );
+    let pointer = marker_response.interact_pointer_pos();
+    let grabbed = pointer.and_then(|p| {
+        markers
+            .iter()
+            .map(|(i, time, _, _)| (*i, (layout.time_to_x(*time) - p.x).abs()))
+            .filter(|(_, distance)| *distance <= MARKER_HIT)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    });
+
+    let mut marker_edit: Option<(usize, MarkerEdit)> = None;
+    if marker_response.drag_started() {
+        state.session.dragging_marker = grabbed;
+    }
+    if let (Some(index), Some(pos)) = (state.session.dragging_marker, pointer)
+        && marker_response.dragged()
+    {
+        marker_edit = Some((
+            index,
+            MarkerEdit::SetTime(layout.snap_time(layout.x_to_time(pos.x)).max(0.0)),
+        ));
+    }
+    if marker_response.drag_stopped() {
+        state.session.dragging_marker = None;
+    }
+
+    for (index, time, name, color) in &markers {
+        let x = layout.time_to_x(*time);
+        if x < sheet_rect.left() - 30.0 || x > sheet_rect.right() + 30.0 {
+            continue;
+        }
+        let rgba = egui::Color32::from_rgb(
+            (color[0] * 255.0) as u8,
+            (color[1] * 255.0) as u8,
+            (color[2] * 255.0) as u8,
+        );
+        let dragging = state.session.dragging_marker == Some(*index);
+        let paint = if dragging { egui::Color32::WHITE } else { rgba };
+        // A flag on a stem, hanging from the ruler's underside so it cannot be
+        // confused with the playhead's triangle at the top.
+        painter.line_segment(
+            [
+                egui::pos2(x, rect.top() + 2.0),
+                egui::pos2(x, rect.bottom()),
+            ],
+            egui::Stroke::new(1.0, paint.gamma_multiply(0.8)),
+        );
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(x, rect.bottom() - 8.0),
+                egui::pos2(x + 6.0, rect.bottom() - 6.0),
+                egui::pos2(x, rect.bottom() - 4.0),
+            ],
+            paint,
+            egui::Stroke::NONE,
+        ));
+        // The name only where the next marker leaves room, so a dense clip does
+        // not become overlapping text.
+        let room = markers
+            .get(index + 1)
+            .map(|(_, next, _, _)| layout.time_to_x(*next) - x)
+            .unwrap_or(f32::MAX);
+        if room > 44.0 {
+            painter.text(
+                egui::pos2(x + 8.0, rect.bottom() - 7.0),
+                egui::Align2::LEFT_CENTER,
+                name,
+                egui::FontId::proportional(style.text - 1.5),
+                paint,
+            );
+        }
+    }
+
+    // Right-click a marker to rename or delete it; right-click empty ruler to
+    // add one where you clicked.
+    let clicked_time = pointer
+        .map(|p| layout.snap_time(layout.x_to_time(p.x)).max(0.0))
+        .unwrap_or(0.0);
+    let hovered_marker = grabbed;
+    marker_response.context_menu(|ui| {
+        if let Some(index) = hovered_marker {
+            let mut name = markers
+                .get(index)
+                .map(|(_, _, n, _)| n.clone())
+                .unwrap_or_default();
+            ui.label("Marker");
+            if ui.text_edit_singleline(&mut name).changed() {
+                marker_edit = Some((index, MarkerEdit::Rename(name)));
+            }
+            if ui.button("Delete").clicked() {
+                marker_edit = Some((index, MarkerEdit::Remove));
+                ui.close();
+            }
+        } else if ui.button("Add marker here").clicked() {
+            if let Some(anim) = state.session.active_animation {
+                state.dispatch(Box::new(AddMarker::new(anim, "marker", clicked_time)));
+            }
+            ui.close();
+        }
+    });
+
+    if let Some((index, edit)) = marker_edit
+        && let Some(anim) = state.session.active_animation
+    {
+        state.dispatch(Box::new(EditMarker::new(anim, index, edit)));
+    }
+
+    // Scrub — but not while a marker is being dragged, and not on the click that
+    // grabbed one.
     let resp = ui.interact(
         sheet_rect,
         ui.id().with("tl_scrub"),
         egui::Sense::click_and_drag(),
     );
-    if let Some(pos) = resp.interact_pointer_pos()
+    let marker_has_the_pointer = state.session.dragging_marker.is_some() || grabbed.is_some();
+    if !marker_has_the_pointer
+        && let Some(pos) = resp.interact_pointer_pos()
         && (resp.clicked() || resp.dragged())
     {
-        let t = layout.snap_time(layout.x_to_time(pos.x)).max(0.0);
+        let raw = layout.x_to_time(pos.x);
+        // Markers pull the playhead in, within a few pixels' worth of time. The
+        // point of naming a pose is being able to get back to it exactly, and
+        // frame-snapping alone does not do that on a clip whose key poses sit
+        // between frames. Held Alt scrubs freely past them.
+        let magnet = MARKER_HIT / layout.px_per_sec.max(1e-3);
+        let free = ui.input(|i| i.modifiers.alt);
+        let snapped = (!free)
+            .then(|| {
+                state
+                    .session
+                    .active_animation
+                    .and_then(|id| state.doc.animations.get(id))
+                    .and_then(|a| a.marker_near(raw, magnet))
+                    .map(|m| m.time)
+            })
+            .flatten();
+        let t = snapped.unwrap_or_else(|| layout.snap_time(raw)).max(0.0);
         let dur = state
             .session
             .active_animation

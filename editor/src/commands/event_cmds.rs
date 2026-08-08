@@ -266,6 +266,7 @@ mod tests {
             looping: true,
             timelines: Vec::new(),
             events: Vec::new(),
+            markers: Vec::new(),
         });
         (doc, anim)
     }

@@ -107,6 +107,7 @@ fn build() -> (
             ],
         }],
         events: Vec::new(),
+        markers: Vec::new(),
         looping: true,
     });
 

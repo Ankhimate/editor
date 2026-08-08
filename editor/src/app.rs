@@ -433,6 +433,24 @@ impl eframe::App for AnkhimateApp {
             if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Comma)) {
                 self.show_settings = !self.show_settings;
             }
+            // M drops a marker at the playhead (T-906) — the same gesture K uses
+            // for a key, on the strip above it. Named after the frame it lands
+            // on, because an animator marking a pose knows which pose it is and
+            // a dialog mid-scrub would break the rhythm; rename is on its
+            // right-click menu.
+            if ctx.input(|i| i.key_pressed(egui::Key::M) && !i.modifiers.any())
+                && let Some(anim) = self.state.session.active_animation
+            {
+                let fps = self.state.doc.meta.fps.max(1) as f32;
+                let frame = (self.state.session.playhead * fps).round() as i64;
+                let playhead = self.state.session.playhead;
+                self.state
+                    .dispatch(Box::new(crate::commands::marker_cmds::AddMarker::new(
+                        anim,
+                        format!("f{frame}"),
+                        playhead,
+                    )));
+            }
             if tab {
                 self.state.toggle_work_mode();
             }

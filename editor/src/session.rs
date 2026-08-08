@@ -380,6 +380,10 @@ pub struct Session {
     pub simulate_in_setup: bool,
     /// Index of the event marker being dragged in the timeline lane (T-506).
     pub dragging_event: Option<usize>,
+    /// Index of the ruler marker being dragged (T-906). Separate from
+    /// `dragging_event` because the two live on different strips and a drag on
+    /// one must not light up the other.
+    pub dragging_marker: Option<usize>,
     /// The open UV editing pane, if any (T-401).
     pub uv_pane: Option<crate::ui::uv::UvPane>,
 
@@ -463,6 +467,7 @@ impl Session {
             physics_dt: None,
             simulate_in_setup: false,
             dragging_event: None,
+            dragging_marker: None,
             uv_pane: None,
             clipboard: crate::clipboard::Clipboard::Empty,
         }

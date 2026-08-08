@@ -307,6 +307,43 @@ impl Timeline {
     }
 }
 
+/// A label on the timeline ruler (T-906).
+///
+/// A note to whoever is animating — "contact", "down", "passing", "up" on a walk
+/// cycle — so the structure of a clip is written down rather than counted out
+/// each time it is opened.
+///
+/// **Not an event.** The distinction is the whole reason this is a separate
+/// type: an [`EventKey`] fires into the running game and belongs to the runtime,
+/// while a marker never leaves the editor and is exported by nothing. Folding
+/// them together would mean either shipping the animator's notes to the game or
+/// making every note a thing gameplay might react to, and both are wrong.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Marker {
+    /// Seconds, like every other time in this module.
+    pub time: f32,
+    pub name: String,
+    /// RGBA, so a set of markers can be grouped by eye on a busy ruler.
+    #[serde(default = "default_marker_color")]
+    pub color: [f32; 4],
+}
+
+fn default_marker_color() -> [f32; 4] {
+    // A muted amber: legible on the dark ruler without competing with the
+    // playhead, which is the one thing on that strip that must stay loudest.
+    [0.95, 0.72, 0.30, 1.0]
+}
+
+impl Marker {
+    pub fn new(time: f32, name: impl Into<String>) -> Self {
+        Self {
+            time,
+            name: name.into(),
+            color: default_marker_color(),
+        }
+    }
+}
+
 /// A named animation: a duration plus the timelines that drive it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Animation {
@@ -316,6 +353,12 @@ pub struct Animation {
     pub timelines: Vec<Timeline>,
     #[serde(default)]
     pub events: Vec<EventKey>,
+    /// Editor-only labels on the ruler (T-906). Kept sorted by time.
+    ///
+    /// Defaulted and skipped when empty, so a clip without markers serialises
+    /// exactly as it did before they existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<Marker>,
     /// Whether this clip is meant to loop — authoring intent, carried to the
     /// runtime (T-604) rather than enforced here. `evaluate` samples whatever
     /// time it is handed; wrapping is the player's job.
@@ -334,6 +377,7 @@ impl Animation {
             duration,
             timelines: Vec::new(),
             events: Vec::new(),
+            markers: Vec::new(),
             looping: true,
         }
     }
@@ -345,6 +389,28 @@ impl Animation {
             .iter()
             .map(|t| t.last_key_time())
             .fold(0.0, f32::max)
+    }
+
+    /// Add a marker, keeping the list ordered by time (T-906).
+    ///
+    /// Sorted on insert rather than on read because everything that consumes
+    /// markers — drawing the ruler, snapping the playhead, stepping to the next
+    /// one — wants them in order, and sorting once beats sorting at every call.
+    pub fn add_marker(&mut self, marker: Marker) {
+        let at = self.markers.partition_point(|m| m.time <= marker.time);
+        self.markers.insert(at, marker);
+    }
+
+    /// The marker nearest `time`, within `tolerance` seconds.
+    ///
+    /// What "snap the playhead to a marker" and "which one did I just click"
+    /// both need. `None` when nothing is close enough, so a caller can fall
+    /// through to its own behaviour rather than being handed a distant marker.
+    pub fn marker_near(&self, time: f32, tolerance: f32) -> Option<&Marker> {
+        self.markers
+            .iter()
+            .filter(|m| (m.time - time).abs() <= tolerance)
+            .min_by(|a, b| (a.time - time).abs().total_cmp(&(b.time - time).abs()))
     }
 }
 
@@ -599,6 +665,52 @@ mod tests {
 
     fn keys_f32(pairs: &[(f32, f32)]) -> Vec<Key<f32>> {
         pairs.iter().map(|&(t, v)| Key::linear(t, v)).collect()
+    }
+
+    /// Markers stay ordered however they are added (T-906).
+    ///
+    /// Everything downstream — drawing the ruler, snapping, stepping to the next
+    /// one — assumes order, so it is established on insert rather than trusted.
+    #[test]
+    fn markers_stay_sorted_by_time() {
+        let mut anim = Animation::new("walk", 1.0);
+        for (time, name) in [
+            (0.5, "passing"),
+            (0.0, "contact"),
+            (0.75, "up"),
+            (0.25, "down"),
+        ] {
+            anim.add_marker(Marker::new(time, name));
+        }
+        let times: Vec<f32> = anim.markers.iter().map(|m| m.time).collect();
+        assert_eq!(times, vec![0.0, 0.25, 0.5, 0.75]);
+        let names: Vec<&str> = anim.markers.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["contact", "down", "passing", "up"]);
+    }
+
+    /// `marker_near` finds the closest inside the tolerance and nothing outside
+    /// it — a snap that reached for a distant marker would move the playhead
+    /// somewhere the user did not point.
+    #[test]
+    fn marker_near_picks_the_closest_within_tolerance() {
+        let mut anim = Animation::new("walk", 1.0);
+        anim.add_marker(Marker::new(0.20, "down"));
+        anim.add_marker(Marker::new(0.30, "passing"));
+
+        assert_eq!(
+            anim.marker_near(0.22, 0.05).map(|m| m.name.as_str()),
+            Some("down")
+        );
+        assert_eq!(
+            anim.marker_near(0.28, 0.05).map(|m| m.name.as_str()),
+            Some("passing")
+        );
+        // Equidistant is fine either way; what matters is that far is `None`.
+        assert!(anim.marker_near(0.60, 0.05).is_none(), "too far to snap");
+        assert!(
+            anim.marker_near(0.25, 0.0).is_none(),
+            "zero tolerance snaps to nothing"
+        );
     }
 
     #[test]
@@ -888,6 +1000,7 @@ mod tests {
                     balance: 0.0,
                 })
                 .collect(),
+            markers: Vec::new(),
         }
     }
 
