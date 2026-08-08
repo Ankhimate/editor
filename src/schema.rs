@@ -52,9 +52,34 @@ pub struct Project {
     /// Named bone groups a rigger saved (T-904).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selection_sets: Vec<SelectionSet>,
+    /// Folders the hierarchy is filed into. Organisation, not rig structure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Group>,
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,
+}
+
+/// A folder in the hierarchy, by name.
+///
+/// Members are written as `kind:name` — `bone:front-shin`, `slot:boot` — one
+/// flat list rather than a list per kind. A group is a folder, and a folder does
+/// not sort its contents by type; splitting them would also make "is this thing
+/// grouped" two lookups instead of one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Group {
+    pub name: String,
+    #[serde(default = "group_color_default")]
+    pub color: [f32; 4],
+    #[serde(default)]
+    pub members: Vec<String>,
+    /// Name of the enclosing folder, if any.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent: String,
+}
+
+fn group_color_default() -> [f32; 4] {
+    [0.55, 0.58, 0.65, 1.0]
 }
 
 /// A named group of bones, by name (T-904).

@@ -446,6 +446,34 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 bones: set.bones.iter().copied().map(bone_name).collect(),
             })
             .collect(),
+        groups: skeleton
+            .group_order
+            .iter()
+            .filter_map(|id| {
+                let group = skeleton.groups.get(*id)?;
+                Some(schema::Group {
+                    name: group.name.clone(),
+                    color: group.color,
+                    members: group
+                        .members
+                        .iter()
+                        .map(|m| match m {
+                            ankhimate_core::skeleton::GroupMember::Bone(b) => {
+                                format!("bone:{}", bone_name(*b))
+                            }
+                            ankhimate_core::skeleton::GroupMember::Slot(s) => {
+                                format!("slot:{}", slot_name(*s))
+                            }
+                        })
+                        .collect(),
+                    parent: group
+                        .parent
+                        .and_then(|p| skeleton.groups.get(p))
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default(),
+                })
+            })
+            .collect(),
         extra: Default::default(),
     }
 }
@@ -984,6 +1012,78 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
     for (id, _) in skeleton.constraints.iter() {
         if !skeleton.constraint_order.contains(&id) {
             skeleton.constraint_order.push(id);
+        }
+    }
+
+    // Folders. Two passes: a group's parent may be written after it, so every
+    // group has to exist before any parent link can be resolved.
+    let mut group_ids: std::collections::HashMap<String, ankhimate_core::ids::GroupId> =
+        std::collections::HashMap::new();
+    for group in &project.groups {
+        let mut members = Vec::new();
+        for entry in &group.members {
+            // `kind:name`. An entry without a kind is from a writer that does
+            // not exist yet; reporting it beats guessing which slotmap to look
+            // the bare name up in.
+            let Some((kind, name)) = entry.split_once(':') else {
+                report.dangling("group member", entry);
+                continue;
+            };
+            match kind {
+                "bone" => match bone_ids.get(name) {
+                    Some(&id) => members.push(ankhimate_core::skeleton::GroupMember::Bone(id)),
+                    None => report.dangling("group bone", name),
+                },
+                "slot" => match slot_ids.get(name) {
+                    Some(&id) => members.push(ankhimate_core::skeleton::GroupMember::Slot(id)),
+                    None => report.dangling("group slot", name),
+                },
+                _ => report.dangling("group member kind", kind),
+            }
+        }
+        // Kept even when empty: a folder is a place the user made, and one that
+        // vanished because its last bone was deleted elsewhere would be a
+        // surprise on reopening.
+        let id = skeleton.add_group(ankhimate_core::skeleton::Group {
+            name: group.name.clone(),
+            color: group.color,
+            members,
+            parent: None,
+        });
+        group_ids.insert(group.name.clone(), id);
+    }
+    for group in &project.groups {
+        if group.parent.is_empty() {
+            continue;
+        }
+        let (Some(&id), Some(&parent)) = (
+            group_ids.get(&group.name),
+            group_ids.get(group.parent.as_str()),
+        ) else {
+            report.dangling("group parent", &group.parent);
+            continue;
+        };
+        // A group that is its own ancestor would make the tree walk forever, and
+        // a hand-edited file can express one. Walk up from the proposed parent:
+        // if this group is already above it, the link would close a loop.
+        // Refusing it is the only recovery — there is no correct place to put a
+        // folder inside itself.
+        let mut ancestor = Some(parent);
+        let mut cyclic = false;
+        for _ in 0..64 {
+            let Some(current) = ancestor else { break };
+            if current == id {
+                cyclic = true;
+                break;
+            }
+            ancestor = skeleton.groups.get(current).and_then(|g| g.parent);
+        }
+        if cyclic {
+            report.dangling("group parent (cycle)", &group.parent);
+            continue;
+        }
+        if let Some(g) = skeleton.groups.get_mut(id) {
+            g.parent = Some(parent);
         }
     }
 
