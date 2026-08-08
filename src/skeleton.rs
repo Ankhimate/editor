@@ -154,38 +154,12 @@ pub struct Skeleton {
     /// The skin every lookup falls back to. Created by [`Skeleton::new`].
     #[serde(default)]
     pub default_skin: SkinId,
-    /// Named groups of bones a rigger saved for later (T-901/T-904).
-    ///
-    /// Document state, not session state, and that is the whole point: a rigger
-    /// builds "left arm" once and an animator opens the file and has it. A set
-    /// that lived in the session would have to be rebuilt by whoever opened the
-    /// rig next, which is the work it exists to remove.
-    ///
-    /// Defaulted and skipped when empty, so a rig written before these existed
-    /// serialises unchanged.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub selection_sets: Vec<SelectionSet>,
     /// Folders the hierarchy is filed into. Organisation only — see [`Group`].
     #[serde(default)]
     pub groups: SlotMap<GroupId, Group>,
     /// The order groups are drawn in, so a rigger can arrange them.
     #[serde(default)]
     pub group_order: Vec<GroupId>,
-}
-
-/// A named group of bones (T-904).
-///
-/// Bones only, deliberately. A mixed set of bones and slots and attachments
-/// would need every consumer to ask "which kind is this" before it could do
-/// anything, and the thing people ask for — "select the left arm" — is a bone
-/// selection. Slots follow their bones anyway.
-///
-/// Distinct from [`Group`], which is a *folder*: a set is a selection you can
-/// recall, a group is where a thing lives in the tree.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SelectionSet {
-    pub name: String,
-    pub bones: Vec<BoneId>,
 }
 
 /// One thing a [`Group`] can hold.
@@ -293,6 +267,49 @@ impl Skeleton {
             .iter()
             .find(|(_, g)| g.members.contains(&member))
             .map(|(id, _)| id)
+    }
+
+    /// The members of a group that should be transformed together.
+    ///
+    /// **Top-level only.** A folder holding a shoulder gets the shoulder, not
+    /// the elbow and wrist below it — those already follow through ordinary bone
+    /// parenting, and moving them again would move them twice. The same reason a
+    /// bone's attachments are left alone: they ride the bone.
+    ///
+    /// So a member is skipped when another member is its ancestor, which is what
+    /// makes "move this group" mean one displacement per limb rather than one
+    /// per bone in it.
+    pub fn group_transform_targets(&self, group: GroupId) -> Vec<BoneId> {
+        let Some(g) = self.groups.get(group) else {
+            return Vec::new();
+        };
+        let members: Vec<BoneId> = g
+            .members
+            .iter()
+            .filter_map(|m| match m {
+                GroupMember::Bone(b) => Some(*b),
+                GroupMember::Slot(_) => None,
+            })
+            .filter(|b| self.bones.contains_key(*b))
+            .collect();
+
+        members
+            .iter()
+            .copied()
+            .filter(|b| {
+                // Walk up: if any ancestor is also in the group, this bone is
+                // carried by it.
+                let mut current = self.bones.get(*b).and_then(|x| x.parent);
+                for _ in 0..64 {
+                    let Some(id) = current else { return true };
+                    if members.contains(&id) {
+                        return false;
+                    }
+                    current = self.bones.get(id).and_then(|x| x.parent);
+                }
+                true
+            })
+            .collect()
     }
 
     /// Delete a folder, leaving everything it held exactly where it was.
@@ -625,11 +642,6 @@ impl Skeleton {
         // (T-904). A set holding a dangling id would silently select fewer bones
         // than it names, and an empty one is a row that does nothing — both are
         // worse than the set being gone.
-        for set in &mut self.selection_sets {
-            set.bones.retain(|&b| b != id);
-        }
-        self.selection_sets.retain(|s| !s.bones.is_empty());
-
         // Folders lose the bone and the slots that went with it, but the folder
         // itself stays: an empty group is a place the user made and may be about
         // to refill, unlike a selection set, which is only its contents.
@@ -719,6 +731,32 @@ mod tests {
         skel.assign_to_group(GroupMember::Bone(arm), None);
         assert_eq!(skel.group_of(GroupMember::Bone(arm)), None);
         assert!(skel.groups[torso].members.is_empty());
+    }
+
+    /// A group transform drives only the topmost member of each limb.
+    ///
+    /// Moving a folder that holds a shoulder *and* the elbow under it must move
+    /// the limb once. The elbow already follows the shoulder through ordinary
+    /// parenting, so writing to both would displace it twice.
+    #[test]
+    fn a_group_transform_skips_members_carried_by_other_members() {
+        let mut skel = Skeleton::new();
+        let shoulder = skel.add_bone(bone("shoulder", None));
+        let elbow = skel.add_bone(bone("elbow", Some(shoulder)));
+        let wrist = skel.add_bone(bone("wrist", Some(elbow)));
+        let unrelated = skel.add_bone(bone("head", None));
+
+        let group = skel.add_group(Group::new("arm"));
+        for b in [shoulder, elbow, wrist, unrelated] {
+            skel.assign_to_group(GroupMember::Bone(b), Some(group));
+        }
+
+        let targets = skel.group_transform_targets(group);
+        assert_eq!(targets.len(), 2, "one per limb, not one per bone");
+        assert!(targets.contains(&shoulder));
+        assert!(targets.contains(&unrelated), "a separate root still counts");
+        assert!(!targets.contains(&elbow), "carried by the shoulder");
+        assert!(!targets.contains(&wrist));
     }
 
     /// Deleting a folder is organisation, not demolition: everything it held
