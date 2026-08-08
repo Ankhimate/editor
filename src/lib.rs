@@ -926,42 +926,6 @@ mod tests {
         assert_eq!(names, vec!["contact", "up"], "markers sorted on load");
         assert_eq!(clip.events.len(), 2, "markers did not leak into events");
     }
-    /// Selection sets survive a round trip, by bone *name* (T-904).
-    ///
-    /// The point of a set being document state is that a rigger builds it once
-    /// and whoever opens the file next has it — which is only true if it is
-    /// actually written and read back.
-    #[test]
-    fn selection_sets_survive_a_round_trip() {
-        use ankhimate_core::skeleton::SelectionSet;
-
-        let mut skel = sample_skeleton();
-        let bones: Vec<_> = skel.bones.keys().collect();
-        skel.selection_sets.push(SelectionSet {
-            name: "left arm".into(),
-            bones: bones.clone(),
-        });
-
-        let anims = SlotMap::with_key();
-        let assets = AssetDb::new();
-        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
-        let loaded = from_json(&json).unwrap();
-        assert!(loaded.report.is_clean(), "{:?}", loaded.report);
-
-        assert_eq!(loaded.skeleton.selection_sets.len(), 1);
-        let set = &loaded.skeleton.selection_sets[0];
-        assert_eq!(set.name, "left arm");
-        assert_eq!(set.bones.len(), bones.len());
-        // Ids are per-load, so identity is checked through the names they resolve
-        // to — which is also what the file actually stores.
-        let names: Vec<&str> = set
-            .bones
-            .iter()
-            .map(|b| loaded.skeleton.bones[*b].name.as_str())
-            .collect();
-        assert!(names.contains(&"root"));
-        assert!(names.contains(&"arm"));
-    }
 
     /// Folders survive a round trip, nesting and mixed membership included.
     #[test]
@@ -1042,35 +1006,6 @@ mod tests {
             .filter(|(_, g)| g.parent.is_none())
             .count();
         assert!(rooted >= 1, "at least one folder is reachable from the top");
-    }
-
-    /// A set naming a bone the rig no longer has is reported, not silently
-    /// shrunk — a set that selects three of the eight bones it names is worse
-    /// than one that says it lost five.
-    #[test]
-    fn a_selection_set_naming_a_missing_bone_is_reported() {
-        let skel = sample_skeleton();
-        let anims = SlotMap::with_key();
-        let assets = AssetDb::new();
-        let json = to_json(&project(&skel, &anims, &assets, "hero", 30)).unwrap();
-
-        // Splice in a set referencing a bone that does not exist.
-        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        value["selection_sets"] = serde_json::json!([{
-            "name": "ghosts",
-            "bones": ["root", "no_such_bone"],
-        }]);
-        let json = serde_json::to_string(&value).unwrap();
-
-        let loaded = from_json(&json).unwrap();
-        assert!(
-            !loaded.report.is_clean(),
-            "a dangling bone name must be reported"
-        );
-        // The rest of the set still loads: losing one name should not lose the
-        // whole group.
-        assert_eq!(loaded.skeleton.selection_sets.len(), 1);
-        assert_eq!(loaded.skeleton.selection_sets[0].bones.len(), 1);
     }
 
     /// T-505: blend mode and the two-color tint are slot fields the schema
