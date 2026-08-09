@@ -52,6 +52,16 @@ pub struct Project {
     /// Folders the hierarchy is filed into. Organisation, not rig structure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<Group>,
+    /// Export presets (T-603) — a rig's export settings belong to the rig.
+    ///
+    /// Held as opaque JSON rather than a typed field: the preset type lives in
+    /// `ankhimate-export`, which depends on this crate, so naming it here would
+    /// be a dependency cycle. Nothing in `formats` needs to understand a preset
+    /// to round-trip one, and leaving it unparsed means a preset written by a
+    /// newer editor survives an older one intact — the rule `Extra` exists for,
+    /// applied to a field that has earned a name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub export_presets: Vec<serde_json::Value>,
     #[serde(flatten)]
     #[serde(default)]
     pub extra: Extra,

@@ -155,6 +155,7 @@ mod tests {
             assets,
             name,
             fps,
+            export_presets: &[],
         }
     }
 
@@ -1246,6 +1247,67 @@ mod tests {
         assert!(
             (start - quarter).length() > 1.0,
             "the walk cycle moves the head: {start:?} vs {quarter:?}"
+        );
+    }
+
+    /// Export presets are a rig's own settings (T-603), so they have to come
+    /// back after a reopen — losing them means retyping a format by hand.
+    #[test]
+    fn export_presets_survive_a_round_trip() {
+        let skeleton = sample_skeleton();
+        let animations = SlotMap::with_key();
+        let assets = AssetDb::new();
+        let presets = vec![serde_json::json!({
+            "preset_version": 1,
+            "name": "Godot 4",
+            "output_dir": "export/godot",
+            "templates": [
+                {"name": "skeleton", "output_path": "rig.tres", "per": "once", "body": "{{project.name}}"}
+            ],
+        })];
+
+        let json = to_json(&ProjectRef {
+            skeleton: &skeleton,
+            animations: &animations,
+            assets: &assets,
+            name: "t",
+            fps: 30,
+            export_presets: &presets,
+        })
+        .expect("serialize");
+
+        let loaded = from_json(&json).expect("deserialize");
+        assert_eq!(loaded.export_presets, presets);
+    }
+
+    /// A preset written by a newer editor must survive an older one untouched.
+    /// That is why presets are stored as opaque JSON rather than a typed field —
+    /// a typed one would silently drop whatever it did not recognise.
+    #[test]
+    fn an_unknown_preset_field_is_not_dropped() {
+        let skeleton = sample_skeleton();
+        let animations = SlotMap::with_key();
+        let assets = AssetDb::new();
+        let presets = vec![serde_json::json!({
+            "preset_version": 99,
+            "name": "From the future",
+            "a_field_this_version_has_never_heard_of": {"nested": [1, 2, 3]},
+        })];
+
+        let json = to_json(&ProjectRef {
+            skeleton: &skeleton,
+            animations: &animations,
+            assets: &assets,
+            name: "t",
+            fps: 30,
+            export_presets: &presets,
+        })
+        .expect("serialize");
+
+        let loaded = from_json(&json).expect("deserialize");
+        assert_eq!(
+            loaded.export_presets[0]["a_field_this_version_has_never_heard_of"]["nested"],
+            serde_json::json!([1, 2, 3])
         );
     }
 }
