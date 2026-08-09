@@ -8,3 +8,12 @@ authors.workspace = true
 
 [dependencies]
 ankhimate-core = { version = "0.1.0", path = "../core" }
+ankhimate-formats = { version = "0.1.0", path = "../formats" }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+handlebars = "6.4.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+glam = "0.33.1"
+
+[dev-dependencies]
+tempfile = "3"

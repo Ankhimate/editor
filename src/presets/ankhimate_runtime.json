@@ -1,0 +1,25 @@
+{
+  "preset_version": 1,
+  "name": "Ankhimate runtime",
+  "description": "Ankhimate's own runtime format. Authored as a template rather than as Rust, so it is both the reference implementation and the worked example to clone. Emits skeleton.json plus the baked atlas.",
+  "output_dir": "export/ankhimate",
+  "atlas": {
+    "enabled": true,
+    "stem": "atlas",
+    "trim": true,
+    "padding": 2,
+    "extrude": 1,
+    "max_page": 2048,
+    "power_of_two": false,
+    "allow_rotation": false
+  },
+  "templates": [
+    {
+      "name": "skeleton",
+      "output_path": "skeleton.json",
+      "per": "once",
+      "body": "{\n  \"format\": \"ankhimate-runtime\",\n  \"context_version\": {{context_version}},\n  \"name\": \"{{project.name}}\",\n  \"fps\": {{project.fps}},\n  \"bones\": [\n{{#each skeleton.bones}}    {\"name\":\"{{name}}\",\"parent\":{{parent_index}},\"length\":{{round length 4}},\"x\":{{round x 4}},\"y\":{{round y 4}},\"rotation\":{{round rotation 4}},\"scaleX\":{{round scale_x 4}},\"scaleY\":{{round scale_y 4}},\"shearX\":{{round shear_x 4}},\"shearY\":{{round shear_y 4}},\"inheritRotation\":{{inherit_rotation}},\"inheritScale\":{{inherit_scale}},\"inheritReflect\":{{inherit_reflect}}}{{#unless @last}},{{/unless}}\n{{/each}}  ],\n  \"slots\": [\n{{#each skeleton.slots}}    {\"name\":\"{{name}}\",\"bone\":\"{{bone}}\",\"attachment\":{{#if attachment}}\"{{attachment}}\"{{else}}null{{/if}},\"color\":\"{{hex color}}\",\"blend\":\"{{blend}}\"}{{#unless @last}},{{/unless}}\n{{/each}}  ],\n  \"drawOrder\": {{json skeleton.draw_order}},\n  \"defaultSkin\": \"{{skeleton.default_skin}}\",\n  \"skins\": [\n{{#each skeleton.skins}}    {\"name\":\"{{name}}\",\"bones\":{{json bones}},\"constraints\":{{json constraints}},\"attachments\":[\n{{#each entries}}      {\"slot\":\"{{slot}}\",\"name\":\"{{name}}\",\"attachment\":{{json attachment}}}{{#unless @last}},{{/unless}}\n{{/each}}    ]}{{#unless @last}},{{/unless}}\n{{/each}}  ],\n  \"constraints\": [\n{{#each skeleton.constraints}}    {{json this}}{{#unless @last}},{{/unless}}\n{{/each}}  ],\n  \"constraintOrder\": {{json skeleton.constraint_order}},\n  \"animations\": {\n{{#each animations}}    \"{{name}}\": {\n      \"duration\": {{round duration 4}},\n      \"looping\": {{looping}},\n      \"bones\": [\n{{#each bones}}        {\"name\":\"{{name}}\"{{#if translate}},\"translate\":{{json translate}}{{/if}}{{#if rotate}},\"rotate\":{{json rotate}}{{/if}}{{#if scale}},\"scale\":{{json scale}}{{/if}}{{#if shear}},\"shear\":{{json shear}}{{/if}}}{{#unless @last}},{{/unless}}\n{{/each}}      ],\n      \"slots\": {{json slots}},\n      \"deform\": {{json deform}},\n      \"drawOrder\": {{json draw_order}},\n      \"ik\": {{json ik}},\n      \"transform\": {{json transform}},\n      \"events\": {{json events}}\n    }{{#unless @last}},{{/unless}}\n{{/each}}  },\n  \"atlas\": {{#if atlas}}{\"pages\":{{json atlas.pages}},\"regions\":{{json atlas.regions}}}{{else}}null{{/if}}\n}\n"
+    }
+  ],
+  "copy_images": false
+}

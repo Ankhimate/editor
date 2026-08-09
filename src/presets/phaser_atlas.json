@@ -1,0 +1,25 @@
+{
+  "preset_version": 1,
+  "name": "Phaser 3 atlas",
+  "description": "A Phaser 3 texture atlas in JSON Hash form, written from Phaser's published texture documentation and the field list its own loader accepts. Covers the atlas only - Phaser has no skeletal-animation format, so bones and timelines are not exported.",
+  "output_dir": "export/phaser",
+  "atlas": {
+    "enabled": true,
+    "stem": "atlas",
+    "trim": true,
+    "padding": 2,
+    "extrude": 1,
+    "max_page": 2048,
+    "power_of_two": false,
+    "allow_rotation": false
+  },
+  "templates": [
+    {
+      "name": "atlas",
+      "output_path": "atlas.json",
+      "per": "once",
+      "body": "{\n  \"frames\": {\n{{#if atlas}}{{#each atlas.regions}}    \"{{name}}\": {\n      \"frame\": { \"x\": {{x}}, \"y\": {{y}}, \"w\": {{width}}, \"h\": {{height}} },\n      \"rotated\": {{rotated}},\n      \"trimmed\": {{#if (or offset_x offset_y)}}true{{else}}false{{/if}},\n      \"spriteSourceSize\": { \"x\": {{offset_x}}, \"y\": {{offset_y}}, \"w\": {{width}}, \"h\": {{height}} },\n      \"sourceSize\": { \"w\": {{original_width}}, \"h\": {{original_height}} }\n    }{{#unless @last}},{{/unless}}\n{{/each}}{{/if}}  },\n  \"meta\": {\n    \"app\": \"Ankhimate\",\n    \"version\": \"1.0\",\n    \"image\": \"{{#if atlas}}{{#each atlas.pages}}{{#if @first}}{{file}}{{/if}}{{/each}}{{else}}atlas.png{{/if}}\",\n    \"format\": \"RGBA8888\",\n    \"size\": { {{#if atlas}}{{#each atlas.pages}}{{#if @first}}\"w\": {{width}}, \"h\": {{height}}{{/if}}{{/each}}{{else}}\"w\": 0, \"h\": 0{{/if}} },\n    \"scale\": \"1\"\n  }\n}\n"
+    }
+  ],
+  "copy_images": false
+}
