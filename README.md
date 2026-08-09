@@ -18,20 +18,34 @@ no runtime licence to buy, no copyleft to inherit.
   Animate. The editor refuses the wrong one rather than quietly corrupting a rig.
 - **Bones** — hierarchy, FK, translate/rotate/scale/shear gizmos, and IK chains
   of **any length** (FABRIK), not the two most editors cap at.
+- **Constraints** — IK, transform, path and physics, with a stability harness
+  behind the last of those (fixed-step, framerate-independent, soak-tested).
 - **Slots, attachments and skins** — art is addressed through slots, so one
-  skeleton drives many outfits.
+  skeleton drives many outfits. Clipping polygons, bounding boxes, points,
+  sequences and linked meshes are all authorable.
 - **Meshes** — convert a region to a mesh, edit vertices, trace a silhouette
   from the artwork's alpha, and paint bone weights with a real brush — radius,
-  feather, five blend modes, per-bone locking.
-- **Animation** — dopesheet, bezier interpolation, transform timelines, and
-  free-form deform (FFD) timelines.
-- **Files** — `.ankh` projects (a zip of `project.json` + images) and image import.
+  feather, five blend modes, per-bone locking. Every vertex and UV is typeable,
+  and a multi-selection aligns on an axis.
+- **Animation** — dopesheet, graph editor, bezier interpolation, transform and
+  free-form deform (FFD) timelines, events with audio, ruler markers, and
+  non-destructive per-bone track offsets for secondary motion.
+- **Working on a big rig** — folders in the hierarchy, isolation mode, bulk
+  rename with numbering, box-select, multi-selection transforms about a shared
+  pivot, hover labels naming what is under the cursor, and panels that tear off
+  into their own window.
+- **Files** — `.ankh` projects (a zip of `project.json` + images), image import,
+  PSD import, and atlas/spritesheet import.
 
 ## Not there yet
 
-Constraints beyond IK (transform, path, physics), event timelines, PSD import,
-clipping/masking authoring, and the whole export pipeline — spritesheet, video,
-and the game-side runtime crate.
+**The export pipeline**, which is the big one: image sequence, spritesheet,
+video, the runtime-format bake and the game-side `runtime` crate are all
+unwritten. Today this is an editor, not a pipeline — a rig cannot yet leave it
+for an engine.
+
+Also missing: onion skinning, autosave and crash recovery, localization, and a
+second viewport in its own window (other panels tear off; the canvas does not).
 
 ## Crates
 
