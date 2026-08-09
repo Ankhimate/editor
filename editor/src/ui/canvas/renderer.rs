@@ -211,16 +211,9 @@ fn skinned_vertex(
     local: glam::Vec2,
     state: &AppState,
 ) -> glam::Vec2 {
-    let mut total = 0.0;
-    let mut sum = glam::Vec2::ZERO;
-    for w in weights {
-        let Some(world) = state.pose.worlds.get(w.bone) else {
-            continue;
-        };
-        sum += world.transform_point(local) * w.weight;
-        total += w.weight;
-    }
-    if total > 0.0 { sum / total } else { local }
+    // The maths lives in core (`Pose::skinned_vertex`) so the viewport and the
+    // runtime cannot drift apart about where a weighted vertex belongs.
+    state.pose.skinned_vertex(weights, local)
 }
 
 fn region_corners(

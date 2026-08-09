@@ -66,6 +66,35 @@ impl Pose {
         Self::default()
     }
 
+    /// Where a weighted vertex lands, given its per-bone influences.
+    ///
+    /// Lives in core so the viewport, the exporter and the runtime all derive
+    /// the same point. A second copy of this is a second chance to disagree
+    /// about what a weight means — and the failure mode is a mesh that renders
+    /// correctly in the editor and wrongly in the game, which is the worst bug
+    /// this project can ship.
+    ///
+    /// `local` is the vertex in the influencing bones' shared setup frame, the
+    /// convention weighted mesh vertices use once bound. A vertex with no usable
+    /// influence stays where it was authored rather than collapsing to the
+    /// origin.
+    pub fn skinned_vertex(
+        &self,
+        weights: &[crate::attachment::VertexWeight],
+        local: glam::Vec2,
+    ) -> glam::Vec2 {
+        let mut total = 0.0;
+        let mut sum = glam::Vec2::ZERO;
+        for w in weights {
+            let Some(world) = self.worlds.get(w.bone) else {
+                continue;
+            };
+            sum += world.transform_point(local) * w.weight;
+            total += w.weight;
+        }
+        if total > 0.0 { sum / total } else { local }
+    }
+
     /// World affine of a bone, or identity when the bone is not in this pose.
     /// The attachment name a slot is showing, **animation included**.
     ///

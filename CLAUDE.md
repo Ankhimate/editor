@@ -13,7 +13,8 @@ it on a timeline, export a runtime format. MIT OR Apache-2.0.
 | `core` | Framework-free model + `evaluate()`. No egui, no wgpu, no I/O. `#![forbid(unsafe_code)]`, compiles for `wasm32`. |
 | `editor` | egui + wgpu desktop app. |
 | `formats` | `.ankh` read/write, PSD/atlas import, version migration. |
-| `export` | Atlas packing, image/video export, runtime bake. **Stub — 6 lines.** |
+| `export` | Atlas bake + the Handlebars template engine every export format is written in. Headless — no egui, no wgpu. |
+| `runtime` | Game-side playback: load, crossfade, events, draw batches. Deliberately thin; the maths lives in `core`. |
 
 ## Rules that are not negotiable
 
@@ -95,20 +96,49 @@ a commit.
 - `docs/what-others-cannot.md` — where this goes past the established editors,
   and where it does not.
 - `docs/graph-editor.md` — the curve editor's interaction rules and their reasons.
+- `docs/export-plan.md` — why export is a format editor, and the decisions behind it.
+- `docs/export-context.md` — the template context, field by field. A public contract.
 - `docs/adr/` — architecture decision records.
+
+## Export is user-authored, and that is load-bearing
+
+Export is a **format editor**, not a set of exporters (T-603, `docs/export-plan.md`).
+Ankhimate cannot know which engine a rig targets and the list is not closeable,
+so the deliverable is the engine for writing exporters: a Handlebars template
+over a documented context, plus a baked atlas.
+
+Three rules that are not negotiable here:
+
+- **Our own runtime format is a template**, not Rust. If it cannot be expressed,
+  the engine is too weak and we find out before users do.
+- **Strict mode always.** Default Handlebars renders a missing field as an empty
+  string — a corrupt export that looks fine. It must error with a location.
+- **Writing is the dangerous part.** Paths are confined to the output directory
+  (they render from rig data, and rigs arrive from other people); an export is
+  all-or-nothing; **nothing is ever deleted**, orphans are reported.
+
+The template context (`docs/export-context.md`) is a **public contract** — a
+rename breaks user templates silently, with no compiler on that side.
 
 ## Current state
 
-Phases 0–5 and 9 are done; the editor is usable for rigging and animating.
+Phases 0–5, 6 and 9 are done; a rig can be built, animated, and exported to an
+engine in a format the user writes.
 
-Two gaps, in order of size:
+Remaining, in order of size:
 
-- **Phase 6 — export and runtime — is unstarted.** Nothing can leave the editor
-  for a game engine. `export` is a stub and `runtime` does not exist.
 - **Phase 7 — production polish — is mostly unstarted**: settings/keymap/autosave,
   diagnostics, onion skinning, localization, a performance pass, crash recovery.
   Some of it arrived incidentally through Phase 9 (the curve editor got its
   T-912 pass), but the boxes are unticked.
+- **T-601/T-602 — rendered output**: PNG sequence, spritesheet, video. A
+  different pipeline entirely (headless wgpu render, then ffmpeg), unrelated to
+  the template path.
+- **T-604's example**: `macroquad_player` and `docs/runtime-guide.md` are
+  unwritten. `wasm32` builds clean but is not wired into CI.
+
+The export panel is **implemented and tested but has never been driven in the
+running editor** — T-603d's acceptance says so explicitly.
 
 `docs/TASKS.md` is authoritative; a ✅ on a task heading means it landed. Three
 Phase 9 tasks carry a written note about the part of them that did *not* land —

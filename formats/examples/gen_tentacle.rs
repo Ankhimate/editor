@@ -46,6 +46,7 @@ fn main() {
         assets: &assets,
         name: "tentacle",
         fps: 30,
+        export_presets: &[],
     })
     .unwrap();
 

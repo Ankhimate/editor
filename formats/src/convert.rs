@@ -37,6 +37,14 @@ pub struct ProjectRef<'a> {
     pub assets: &'a AssetDb,
     pub name: &'a str,
     pub fps: u32,
+    /// Export presets (T-603), carried as opaque JSON.
+    ///
+    /// Opaque on purpose: the preset type lives in `ankhimate-export`, which
+    /// depends on this crate, so naming it here would be a dependency cycle.
+    /// `formats` does not need to understand a preset to round-trip one, and
+    /// keeping it unparsed means a preset written by a newer editor survives an
+    /// older one — the same rule `Extra` exists for.
+    pub export_presets: &'a [serde_json::Value],
 }
 
 /// A loaded document, plus anything that could not be resolved.
@@ -48,6 +56,8 @@ pub struct Loaded {
     pub assets: AssetDb,
     pub name: String,
     pub fps: u32,
+    /// Export presets, still unparsed — see [`ProjectRef::export_presets`].
+    pub export_presets: Vec<serde_json::Value>,
     pub report: LoadReport,
 }
 
@@ -153,6 +163,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
         assets,
         name,
         fps,
+        export_presets,
     } = *project;
 
     let bone_name = |id: BoneId| {
@@ -438,6 +449,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
             .map(constraint_name)
             .collect(),
         animations,
+        export_presets: export_presets.to_vec(),
         groups: skeleton
             .group_order
             .iter()
@@ -1158,6 +1170,7 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
         assets,
         name: project.name.clone(),
         fps: project.fps,
+        export_presets: project.export_presets.clone(),
         report,
     }
 }

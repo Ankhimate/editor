@@ -7,6 +7,7 @@ pub mod constraints;
 pub mod dialog;
 pub mod draw_order;
 pub mod events;
+pub mod export;
 pub mod icon_font;
 pub mod icons;
 pub mod inspector;
@@ -42,6 +43,7 @@ pub enum Tab {
     Animations,
     Events,
     Constraints,
+    Export,
 }
 
 impl Tab {
@@ -50,7 +52,7 @@ impl Tab {
     /// One list rather than a menu that has to be edited whenever a pane is
     /// added — a View menu missing the pane you are looking for is worse than no
     /// View menu, because it reads as "that panel does not exist".
-    pub const ALL: [Tab; 14] = [
+    pub const ALL: [Tab; 15] = [
         Tab::Canvas,
         Tab::SlotEditor,
         Tab::UvEditor,
@@ -65,6 +67,7 @@ impl Tab {
         Tab::Assets,
         Tab::DrawOrder,
         Tab::Skins,
+        Tab::Export,
     ];
 
     pub fn title(self) -> &'static str {
@@ -83,6 +86,7 @@ impl Tab {
             Tab::Animations => "Animations",
             Tab::Events => "Events",
             Tab::Constraints => "Constraints",
+            Tab::Export => "Export",
         }
     }
 
@@ -128,6 +132,7 @@ impl Tab {
             Tab::DrawOrder => crate::ui::icons::DRAW_ORDER,
             Tab::Assets => crate::ui::icons::ASSETS,
             Tab::Skins => crate::ui::icons::SKIN,
+            Tab::Export => crate::ui::icons::EXPORT,
             Tab::SlotEditor => crate::ui::icons::SLOT_EDITOR,
             Tab::UvEditor => crate::ui::icons::MESH,
             Tab::Weights => crate::ui::icons::WEIGHT_PAINT,
@@ -282,6 +287,16 @@ impl AppBehavior<'_> {
                 egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
                     skins::ui(ui, self.state);
                 });
+            }
+            Tab::Export => {
+                egui::ScrollArea::vertical()
+                    .id_salt("export_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                            export::ui(ui, self.state);
+                        });
+                    });
             }
             Tab::SlotEditor => {
                 egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {

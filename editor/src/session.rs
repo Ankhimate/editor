@@ -189,6 +189,11 @@ pub struct Session {
     /// rather than comparing the field everywhere.
     pub work_mode: WorkMode,
     pub tool: Tool,
+    /// Which export preset and template the panel is showing (T-603d).
+    ///
+    /// Session state: which row is selected is not a property of the rig, and it
+    /// would be wrong to find it in a teammate's file.
+    pub export: crate::ui::export::ExportUiState,
     /// Tracing knobs, kept across traces so tuning one mesh carries to the
     /// next (T-402).
     pub trace_options: crate::meshgen::TraceOptions,
@@ -434,6 +439,7 @@ impl Session {
             hovered_bone: None,
             work_mode: WorkMode::Setup,
             tool: Tool::Select,
+            export: Default::default(),
             trace_options: crate::meshgen::TraceOptions::default(),
             mesh_edit: false,
             selected_vertices: Vec::new(),

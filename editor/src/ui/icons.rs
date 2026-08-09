@@ -53,6 +53,8 @@ pub const GRAPH: &str = f::CHART_SPLINE;
 pub const ANIMATIONS: &str = f::CLAPPERBOARD;
 pub const EVENTS: &str = f::FLAG;
 pub const ASSETS: &str = f::IMAGES;
+/// The export panel (T-603) — a rig packaged for an engine.
+pub const EXPORT: &str = f::PACKAGE;
 pub const DRAW_ORDER: &str = f::LAYERS;
 pub const SLOT_EDITOR: &str = f::CROP;
 

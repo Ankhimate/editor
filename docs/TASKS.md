@@ -742,28 +742,89 @@ tolerance); runs headless in CI; a 60-frame export of the sample completes in a 
 **Accept:** 2 s MP4 + GIF of the sample; cancel leaves no partial file; missing-ffmpeg path shows
 guidance and never panics; stderr from a failed encode is surfaced verbatim in the dialog.
 
-### T-603 Runtime export + atlas bake *(was T-503)*
-**Deps:** T-106, T-301, T-507 · **Refs:** PLAN §5 F-10, §6.2
-- `export/src/atlas.rs`: trim transparent borders, MaxRects/skyline pack (`crunch`), X/Y padding and
-  extrude options, power-of-two toggle, multi-page output → `atlas.png` (+`_2`…) and `atlas.json`
-  (regions by attachment name with trim offsets and rotation flag).
-- `skeleton.json` = runtime schema (subset of `project.json`, editor-only fields stripped).
-- Options: **bake IK** (sample constraints at export fps into bone timelines, then strip
-  constraints), exclude-IK, bake physics to keys, flatten composed skins, strip unused assets.
-**Accept:** the exported folder is self-contained; baked-IK export replays identically to
-constraint-live evaluation (pose diff at 10 sampled times, ε documented); multi-page atlas loads in
-the runtime example.
+> **T-603 was split.** The original entry assumed one hardcoded runtime exporter.
+> It became a **user-authored format engine** instead: Ankhimate cannot know
+> which engine a rig is headed for, and the list of engines is not closeable, so
+> shipping exporters is a treadmill where the format a user needs is always the
+> one missing. `docs/export-plan.md` carries the full argument.
 
-### T-604 `ankhimate-runtime` crate + reference integration *(was T-601)*
-**Deps:** T-603 · **Refs:** PLAN §3.1, §6.2
-- Crate `runtime/`: load the runtime export, `AnimationState` (play / queue / loop / crossfade via
-  `evaluate`'s alpha mixing, per-track alpha, playback speed), event dispatch (T-506), physics state
-  ownership (T-503). Output = `Vec<DrawBatch { texture_id, blend, clip, vertices, indices }>` sorted
-  by draw order. No wgpu dependency; compiles for `wasm32`.
-- `examples/macroquad_player/`: loads the sample export, crossfades walk⇄idle on keypress, prints
-  events. `docs/runtime-guide.md` walkthrough.
-**Accept:** example runs from a clean checkout; crossfade visually smooth; runtime builds for wasm32
-in CI; a headless test asserts runtime pose == editor pose for the sample at 10 times.
+### ✅ T-603a Atlas bake
+**Deps:** T-301 · **Refs:** PLAN §5 F-10
+- `export/src/atlas.rs`: trim, shelf pack, padding + extrude, power-of-two, multi-page →
+  `atlas.png` (+`_2`…) and a region table with trim offsets and original size.
+- CPU-only, no wgpu, so it runs headless in CI and in a future CLI exporter.
+- **Shelf, not MaxRects.** A few dozen lines whose output is trivially reproducible, against
+  perhaps 10% tighter packing for considerably more code to keep deterministic. Atlas density is
+  not this project's bottleneck; a packer that reorders between runs would make every export a
+  spurious diff.
+**Accept:** ✅ trim offsets reconstruct the source placement exactly; regions never overlap; every
+region lands inside its page; overflow opens a second page and loses nothing; the same assets pack
+to byte-identical pages regardless of insertion order; a fully transparent image degrades to 1×1
+rather than a zero-area rect; extrude duplicates the edge pixel outward.
+
+### ✅ T-603b Template engine + export runner
+**Deps:** T-603a · **Refs:** PLAN §2.6, §6
+- `template.rs` (Handlebars in **strict mode**, domain helpers, path confinement), `context.rs`
+  (the documented context — `docs/export-context.md`), `preset.rs`, `run.rs`.
+- **Strict mode is not a preference.** Default Handlebars renders a missing field as an empty
+  string, so a typo'd `{{nmae}}` produces a bone with no name and an export that looks fine until
+  an engine rejects it. Strict mode turns that into an error with template, line and column.
+- Presets persist in the project (`Project.export_presets`) as **opaque JSON**, so one written by a
+  newer editor round-trips through an older one intact.
+**Accept:** ✅ byte-identical across runs; a missing field errors with its location; per-animation
+templates emit exactly one file per clip; a path escaping the output directory aborts and writes
+nothing; a template failing mid-set leaves the directory untouched; two templates claiming one path
+is an error; a rig with zero animations exports.
+
+### ✅ T-603c Native runtime format, authored as a template
+**Deps:** T-603b
+- Ankhimate's own `skeleton.json` ships as a **preset**, not as Rust.
+- This was the gate, and it earned its place: writing the format as a template is what surfaced
+  that `{{#each}}` over an absent key is a strict-mode error, which is why the context now always
+  emits its collections empty rather than missing.
+**Accept:** ✅ renders valid JSON for a rig with a hierarchy, skins, an IK constraint and two clips;
+every shipped preset parses and renders; bones come out parents-first with `-1` for a root.
+
+### ✅ T-603d Export panel
+**Deps:** T-603b · **Refs:** T-207
+- Preset list, atlas options, template editor, **live preview through the real pipeline**, and a
+  context browser listing what a template can address at the cursor's scope.
+- Every edit is an `EditCommand` (`export_cmds.rs`) with `merge`, so typing a template body is one
+  undo step rather than one per keystroke.
+- The template buffer lives in `ui.data` while editing — a field rebuilt from the document each
+  frame swallows keystrokes, a trap this repo has already paid for once.
+**Accept:** ✅ compiles and is in the default layout; preview renders without writing; presets
+survive save/load. **Not verified in the running editor** — see the note below.
+
+### ✅ T-603e Preset library *(partial, deliberately)*
+**Deps:** T-603c · **Refs:** PLAN §0
+- Ships: **Ankhimate runtime**, **Generic JSON** (with a per-animation template), **Phaser 3 atlas**.
+- **No Godot preset, on purpose.** Godot's `SpriteFrames` on-disk `.tres` layout is not published:
+  the class reference documents a scripting API of methods, and the only official tutorial is
+  GUI-driven. Shipping one would mean guessing at a private serialization and calling it support —
+  and a preset that half-works is worse than none, because the user cannot tell which half. The
+  clean-room path to adding it is empirical: have Godot save a `.tres`, observe the output, write a
+  template from that.
+**Accept:** ✅ the Phaser preset's output matches the documented atlas shape (frame rect, `rotated`,
+`trimmed`, `spriteSourceSize`, `sourceSize`, `meta`).
+
+### ✅ T-604 `ankhimate-runtime` crate
+**Deps:** T-603c · **Refs:** PLAN §3.1, §6.2
+- Crate `runtime/`: `Rig` (load), `AnimationState` (play / loop / crossfade / speed, event
+  dispatch, physics ownership), `build_batches` → `Vec<DrawBatch>` in draw order. No wgpu.
+- **Deliberately thin.** Crossfade is `evaluate()`'s existing alpha mixing, event windowing is
+  core's `events_in_window`, and skinning is `Pose::skinned_vertex` — which was *moved into core*
+  as part of this task, because the editor had its own copy. Two answers to "where does this vertex
+  go" is the worst bug this project can ship: the rig looks right in the tool and wrong in the game.
+**Accept:** ✅ runtime pose == a direct `evaluate` at the same time (measured at the bone *tip*, since
+rotating a bone never moves its own origin); a crossfade lands between its two clips and drops the
+outgoing one; an event fires exactly once across a loop boundary and once per lap; the same `dt`
+sequence gives the same pose.
+- `wasm32-unknown-unknown` verified locally (`cargo check -p ankhimate-runtime --target
+  wasm32-unknown-unknown`); **not yet wired into CI**.
+- **Deferred:** the `macroquad_player` example and `docs/runtime-guide.md`. The crate is tested
+  headlessly and its API is documented in place; a worked example wants a real exported rig to load,
+  which is the natural first task of the next session rather than a stub written blind.
 
 ### T-605 Format spec finalization + migration policy
 **Deps:** T-603 · **Refs:** PLAN §6, ADR 0004

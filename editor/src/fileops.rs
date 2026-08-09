@@ -81,6 +81,7 @@ pub fn open_path(state: &mut AppState, path: &Path) -> FileOutcome {
                 // Layer provenance is per-import, not per-file: opening a
                 // project cannot know which PSD its images came from.
                 psd_layer_paths: Default::default(),
+                export_presets: loaded.export_presets,
             });
             // A dangling reference is not a failed open — the project is usable
             // minus that one thing — but the user should hear about it.

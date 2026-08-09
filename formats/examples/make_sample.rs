@@ -491,6 +491,7 @@ fn main() {
             assets: &assets,
             name: "walker",
             fps: 30,
+            export_presets: &[],
         },
         &[],
     )

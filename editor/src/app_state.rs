@@ -1229,6 +1229,7 @@ mod tests {
         let mut reopened = AppState::default();
         reopened.replace_document(Document {
             psd_layer_paths: Default::default(),
+            export_presets: loaded.export_presets.clone(),
             skeleton: loaded.skeleton,
             animations: loaded.animations,
             assets: loaded.assets,
@@ -1903,6 +1904,7 @@ mod tests {
         let mut reopened = AppState::default();
         reopened.replace_document(Document {
             psd_layer_paths: Default::default(),
+            export_presets: loaded.export_presets.clone(),
             skeleton: loaded.skeleton,
             animations: loaded.animations,
             assets: loaded.assets,

@@ -46,6 +46,18 @@ pub struct Document {
     /// is a new layer". Undoable state, because an import writes it and undo has
     /// to take it back.
     pub psd_layer_paths: std::collections::HashMap<String, String>,
+    /// Export presets (T-603), kept as JSON.
+    ///
+    /// Document state, not session state: a rig's export settings belong to the
+    /// rig and have to survive a reopen, and editing one is undoable like any
+    /// other document edit.
+    ///
+    /// Stored serialized rather than as `Preset` values because
+    /// [`Self::as_project_ref`] hands out borrows and cannot serialize on the
+    /// way past. It also means a preset written by a newer editor survives a
+    /// round trip through an older one untouched, which a typed field would
+    /// silently truncate.
+    pub export_presets: Vec<serde_json::Value>,
 }
 
 impl Document {
@@ -57,7 +69,18 @@ impl Document {
             assets: AssetDb::new(),
             meta: DocumentMeta::default(),
             psd_layer_paths: std::collections::HashMap::new(),
+            export_presets: Vec::new(),
         }
+    }
+
+    /// The presets, parsed. Anything that no longer deserializes is skipped
+    /// rather than failing the document — a preset from a newer editor is a
+    /// reason to leave it alone, not to refuse to open the rig.
+    pub fn presets(&self) -> Vec<ankhimate_export::preset::Preset> {
+        self.export_presets
+            .iter()
+            .filter_map(|v| serde_json::from_value(v.clone()).ok())
+            .collect()
     }
 
     /// Borrow the whole document for serialization.
@@ -68,6 +91,7 @@ impl Document {
             assets: &self.assets,
             name: &self.meta.name,
             fps: self.meta.fps,
+            export_presets: &self.export_presets,
         }
     }
 }

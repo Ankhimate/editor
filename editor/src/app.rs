@@ -304,6 +304,7 @@ impl AnkhimateApp {
         let animations = tiles.insert_pane(Tab::Animations);
         let events = tiles.insert_pane(Tab::Events);
         let constraints = tiles.insert_pane(Tab::Constraints);
+        let export = tiles.insert_pane(Tab::Export);
 
         // The slot editor tabs with the viewport, so opening a piece replaces the
         // rig on screen the way a smart object replaces the document. The UV
@@ -319,7 +320,11 @@ impl AnkhimateApp {
         let inspector_tab = tiles.insert_tab_tile(vec![inspector, weights]);
         // Assets and draw order are both "what is in the rig" browsers, so they
         // can share.
-        let library_tab = tiles.insert_tab_tile(vec![assets, draw_order, skins, constraints]);
+        // Export joins them: it is the same kind of question — "what is in the
+        // rig, and what leaves it" — and it is opened deliberately rather than
+        // watched, so a tab is the right cost.
+        let library_tab =
+            tiles.insert_tab_tile(vec![assets, draw_order, skins, constraints, export]);
         // Animations and events share a tile with the timeline: all three answer
         // "what is in this clip", and the timeline is where you already are when
         // that question comes up.

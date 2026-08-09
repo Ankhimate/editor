@@ -27,6 +27,7 @@ fn main() {
         assets: &assets,
         name: "minimal",
         fps: 30,
+        export_presets: &[],
     })
     .unwrap();
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();

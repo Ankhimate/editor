@@ -37,12 +37,23 @@ no runtime licence to buy, no copyleft to inherit.
 - **Files** — `.ankh` projects (a zip of `project.json` + images), image import,
   PSD import, and atlas/spritesheet import.
 
+- **Export, in any format you can write** — export is a *format editor*, not a
+  fixed list of exporters. A preset is an atlas setting plus templates that say
+  what the files look like, with a live preview against the open rig. Ankhimate's
+  own runtime format ships as one of those templates, so nothing is reachable to
+  us that is not reachable to you. See
+  [`docs/export-context.md`](docs/export-context.md).
+- **A runtime crate** — `ankhimate-runtime` loads an export and plays it:
+  crossfade, events, physics, draw batches. No wgpu, no window.
+
 ## Not there yet
 
-**The export pipeline**, which is the big one: image sequence, spritesheet,
-video, the runtime-format bake and the game-side `runtime` crate are all
-unwritten. Today this is an editor, not a pipeline — a rig cannot yet leave it
-for an engine.
+**Rendered output**: image sequence, spritesheet and video export are unwritten.
+The data pipeline works — a rig and its atlas can leave for an engine — but
+Ankhimate cannot yet hand you a PNG sequence or an MP4 of a clip.
+
+The runtime crate has no worked example yet — `macroquad_player` and
+`docs/runtime-guide.md` are the next task.
 
 Also missing: onion skinning, autosave and crash recovery, localization, and a
 second viewport in its own window (other panels tear off; the canvas does not).
@@ -54,8 +65,8 @@ second viewport in its own window (other panels tear off; the canvas does not).
 | `core` (`ankhimate-core`) | Framework-free data model + `evaluate()`. The single runtime contract used by the editor, exporters, and games. `#![forbid(unsafe_code)]`, compiles for native + `wasm32`. |
 | `editor` (`ankhimate-editor`) | egui/wgpu desktop application. |
 | `formats` (`ankhimate-formats`) | `.ankh` read/write, importers, version migration. |
-| `export` (`ankhimate-export`) | Atlas packing, image/spritesheet/video export, runtime-format bake. *(stub)* |
-| `runtime` (`ankhimate-runtime`) | Thin playback API for games. *(planned)* |
+| `export` (`ankhimate-export`) | Atlas bake + the template engine presets are written against. Headless. |
+| `runtime` (`ankhimate-runtime`) | Playback for games: load, crossfade, events, draw batches. No wgpu. |
 
 ## Build & run
 
@@ -129,4 +140,6 @@ runtime does not use.
 - [`docs/rigging-walkthrough.md`](docs/rigging-walkthrough.md) — how a rig is put together
 - [`docs/what-others-cannot.md`](docs/what-others-cannot.md) — where this goes past the established editors, and where it does not
 - [`docs/graph-editor.md`](docs/graph-editor.md) — the curve editor's interaction rules, and why each one is what it is
+- [`docs/export-context.md`](docs/export-context.md) — writing an export format: syntax, helpers, and every field a template can address
+- [`docs/export-plan.md`](docs/export-plan.md) — why export is a format editor rather than a list of exporters
 - [`docs/adr/`](docs/adr/) — architecture decision records
