@@ -242,6 +242,23 @@ Every key has `time` and a `curve`:
 So `{{curve}}` always prints something, and `{{#if curve.handles}}` detects a
 bezier.
 
+### Which key a curve belongs to
+
+**A key's `curve`, `points` and `is_bezier` describe the segment *leaving* it.**
+
+The schema stores easing the other way round: `ScalarKey::interp` is how that key
+is *arrived at*, so the handles authored on key `i` describe the span
+`i-1 → i`. Most published formats — Spine among them — hang the curve on the key
+that starts the segment, so the context shifts frames by one for you. A template
+reads the key it is on and needs no lookahead.
+
+This is worth stating because getting it wrong is close to invisible: keyframe
+poses stay exactly right, since a curve only affects values *between* keys. Only
+the frames in between drift. The exporter shipped reading the wrong key, which
+left the first key of every track linear and moved every other curve one key
+late — 126 wrong curves in one animation, and a rig that posed correctly on every
+key and moved wrongly between them.
+
 Bone and IK keys carry **`has_next`** — whether another key follows on the same
 channel. **Guard every curve with it.** A curve describes the interpolation
 *towards the next key*, so one written on the last key sends the reader looking

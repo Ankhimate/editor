@@ -1117,25 +1117,38 @@ fn scalar_keys(keys: &[schema::ScalarKey], offset: f32) -> Value {
             .map(|(i, k)| {
                 let time = shift(k.time, offset);
                 let next = keys.get(i + 1);
+                // The easing of the segment *leaving* this key.
+                //
+                // Ankhimate stores a key's `interp` as how it is arrived at, so
+                // the segment from `i` to `i+1` is described by `keys[i + 1]`.
+                // Formats that hang the curve on the key starting the segment —
+                // Spine among them — want that one, not this key's own.
+                //
+                // Reading `k.interp` here shifted every curve one key late and
+                // left the first key linear: keyframe poses matched exactly and
+                // everything between them drifted, which looks like a subtly
+                // wrong animation rather than an off-by-one.
+                let leaving = next.map(|n| &n.interp);
                 json!({
                     "time": time,
                     "value": k.value,
-                    "curve": interp(&k.interp),
+                    "curve": leaving.map_or_else(|| json!("linear"), interp),
                     "has_next": next.is_some(),
                     "points": next.map(|n| control_points(
-                        &k.interp,
+                        &n.interp,
                         (time, k.value),
                         (shift(n.time, offset), n.value),
                     )),
-                    // Padded to a straight line when this key is not a bezier,
-                    // for a consumer concatenating several channels into one
-                    // curve array. See `joined_points`.
+                    // Padded to a straight line when this segment is not a
+                    // bezier, for a consumer concatenating several channels into
+                    // one curve array. See `joined_points`.
                     "line_points": next.map(|n| joined_points(
-                        &k.interp,
+                        &n.interp,
                         (time, k.value),
                         (shift(n.time, offset), n.value),
                     )),
-                    "is_bezier": matches!(k.interp, schema::Interp::Bezier { .. }),
+                    "is_bezier": leaving
+                        .is_some_and(|i| matches!(i, schema::Interp::Bezier { .. })),
                 })
             })
             .collect::<Vec<_>>()
@@ -1150,17 +1163,19 @@ fn vec2_keys(keys: &[schema::Vec2Key], offset: f32) -> Value {
                 let time = shift(k.time, offset);
                 let next = keys.get(i + 1);
                 // Two axes, so two control-point pairs: x's first, then y's.
+                // The easing of the segment *leaving* this key lives on the next
+                // key — see `scalar_keys`.
                 let points = next.map(|n| {
                     let nt = shift(n.time, offset);
-                    let mut p = control_points(&k.interp, (time, k.x), (nt, n.x));
-                    p.extend(control_points(&k.interp, (time, k.y), (nt, n.y)));
+                    let mut p = control_points(&n.interp, (time, k.x), (nt, n.x));
+                    p.extend(control_points(&n.interp, (time, k.y), (nt, n.y)));
                     p
                 });
                 json!({
                     "time": time,
                     "x": k.x,
                     "y": k.y,
-                    "curve": interp(&k.interp),
+                    "curve": next.map_or_else(|| json!("linear"), |n| interp(&n.interp)),
                     "has_next": next.is_some(),
                     "points": points,
                 })
