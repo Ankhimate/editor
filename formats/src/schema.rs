@@ -570,7 +570,9 @@ pub enum Interp {
     Linear,
     Stepped,
     Bezier {
-        /// `[out_x, out_y, in_x, in_y]` in normalized 0..1 time/value space.
+        /// `[out_x, out_y, in_x, in_y]` as fractions of the span to the next
+        /// key. The `x` pair is in 0..1; the `y` pair is unbounded, and a value
+        /// outside 0..1 is an overshoot the sampler reproduces deliberately.
         handles: [f32; 4],
     },
 }

@@ -10,8 +10,9 @@
 //! * drag a bezier handle → set that key's `Interp::Bezier` control points.
 //!
 //! A segment's easing lives on the key that **ends** it, so its two handles hang
-//! off the key before it (`out_handle`) and the key itself (`in_handle`), in
-//! normalized 0..1 time/value space against that segment.
+//! off the key before it (`out_handle`) and the key itself (`in_handle`), as
+//! fractions of that segment. Time is 0..1; value is not, and a handle past
+//! either key is an overshoot (see `docs/graph-editor.md` rules 3 and 4).
 //!
 //! Value editing rebuilds the whole key value (both axes of a vec2) so the
 //! sibling channel is preserved.
@@ -340,10 +341,36 @@ const HANDLE_R: f32 = 3.5;
 const LINEAR_OUT: glam::Vec2 = glam::Vec2::new(1.0 / 3.0, 1.0 / 3.0);
 const LINEAR_IN: glam::Vec2 = glam::Vec2::new(2.0 / 3.0, 2.0 / 3.0);
 
+/// Where to draw a handle so it stays inside the panel, and whether it moved.
+///
+/// The view frames the *sampled curve* (rule 1), and a cubic does not pass
+/// through its control points — so a handle shaping a legitimate overshoot can
+/// land outside the panel. Drawn there it would be unreachable: the hit box is
+/// gated on the panel rect, so the handle could not be dragged back and the only
+/// way out would be undo.
+///
+/// Pinning moves the *marker*, never the value. The flag lets the caller draw a
+/// pinned handle differently, which is the same contract as rule 3 — report,
+/// do not clamp.
+fn pinned(true_pos: egui::Pos2, rect: egui::Rect, radius: f32) -> (egui::Pos2, bool) {
+    let inset = rect.shrink(radius + 1.0);
+    // A panel narrower than the inset would invert the range; `max` keeps the
+    // clamp well-formed rather than producing a NaN.
+    let x = true_pos
+        .x
+        .clamp(inset.left(), inset.right().max(inset.left()));
+    let y = true_pos
+        .y
+        .clamp(inset.top(), inset.bottom().max(inset.top()));
+    let at = egui::pos2(x, y);
+    ((at), (at - true_pos).length() > 0.5)
+}
+
 /// Draw and drag both handles of every segment in one channel.
 ///
-/// Handles live in normalized 0..1 time/value space against the segment they
-/// belong to, so they are converted to and from graph coordinates here. A
+/// Handles live as fractions of the segment they belong to, so they are
+/// converted to and from graph coordinates here. Time is clamped to 0..1 on
+/// drag; value is deliberately free, and a handle past either key overshoots. A
 /// segment whose two keys share a value has no vertical extent to normalize
 /// against; its handle then moves in time only, which is the honest behaviour —
 /// there is no shape to give a flat run.
@@ -393,13 +420,28 @@ fn bezier_handles(
         }
 
         for (which, handle) in [(0usize, out), (1usize, inn)] {
-            let pos = to_screen(handle);
+            // Drawn inside the panel even when the handle itself is not: an
+            // overshoot puts a control point past the curve it shapes, and a
+            // marker drawn off-panel cannot be grabbed to undo it. The stored
+            // value is untouched — only the marker moves.
+            let (pos, is_pinned) = pinned(to_screen(handle), rect, HANDLE_R);
             let stem = anchors[which];
             painter.line_segment(
                 [stem, pos],
                 egui::Stroke::new(1.0, color.gamma_multiply(0.45)),
             );
-            painter.circle_filled(pos, HANDLE_R, color.gamma_multiply(0.8));
+            if is_pinned {
+                // Hollow, so a handle resting at the edge is not mistaken for
+                // one that genuinely sits there. The channel's own colour keeps
+                // it readable against whichever curve it belongs to.
+                painter.circle_stroke(
+                    pos,
+                    HANDLE_R + 1.0,
+                    egui::Stroke::new(1.5, color.gamma_multiply(0.9)),
+                );
+            } else {
+                painter.circle_filled(pos, HANDLE_R, color.gamma_multiply(0.8));
+            }
 
             let hit = egui::Rect::from_center_size(pos, egui::vec2(12.0, 12.0));
             // A handle whose grab box hangs over the row names would steal
@@ -755,4 +797,62 @@ pub fn set_key_for_active_bone(state: &mut AppState, anim: AnimationId) {
 
 fn safe_div(a: f32, b: f32) -> f32 {
     if b.abs() < 1e-6 { 1.0 } else { a / b }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn panel() -> egui::Rect {
+        egui::Rect::from_min_max(egui::pos2(100.0, 50.0), egui::pos2(400.0, 250.0))
+    }
+
+    /// A handle inside the panel is drawn where it is.
+    #[test]
+    fn a_handle_in_view_is_not_moved() {
+        let (at, moved) = pinned(egui::pos2(200.0, 150.0), panel(), HANDLE_R);
+        assert_eq!(at, egui::pos2(200.0, 150.0));
+        assert!(!moved);
+    }
+
+    /// A handle above or below the panel is pulled back to the edge.
+    ///
+    /// The whole point: the grab box is gated on the panel rect, so a marker
+    /// drawn outside it cannot be dragged. An overshoot puts a control point
+    /// past the curve it shapes, which is exactly when this happens.
+    #[test]
+    fn a_handle_out_of_view_is_pulled_to_the_edge_and_flagged() {
+        let rect = panel();
+        for y in [-500.0_f32, 1000.0] {
+            let (at, moved) = pinned(egui::pos2(200.0, y), rect, HANDLE_R);
+            assert!(moved, "a handle at y={y} is outside {rect:?}");
+            assert!(
+                rect.contains(at),
+                "pinned to {at:?}, which is still outside {rect:?}"
+            );
+            // And its grab box overlaps the panel, which is what makes it
+            // reachable at all.
+            let hit = egui::Rect::from_center_size(at, egui::vec2(12.0, 12.0));
+            assert!(rect.intersects(hit));
+        }
+    }
+
+    /// Pinning is inset far enough that the whole marker stays visible.
+    #[test]
+    fn a_pinned_handle_is_not_half_off_the_edge() {
+        let rect = panel();
+        let (at, _) = pinned(egui::pos2(200.0, -500.0), rect, HANDLE_R);
+        assert!(
+            at.y - HANDLE_R >= rect.top(),
+            "the marker's top edge clips: {at:?}"
+        );
+    }
+
+    /// A degenerate panel produces a position rather than a NaN.
+    #[test]
+    fn a_panel_thinner_than_the_marker_still_yields_a_point() {
+        let sliver = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(2.0, 2.0));
+        let (at, _) = pinned(egui::pos2(50.0, 50.0), sliver, HANDLE_R);
+        assert!(at.x.is_finite() && at.y.is_finite(), "{at:?}");
+    }
 }

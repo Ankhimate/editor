@@ -116,11 +116,22 @@ pub fn declared_version(json: &str) -> Option<String> {
 /// `channel` picks the pair for a multi-value timeline: translate writes eight
 /// numbers, x's four then y's four.
 ///
-/// Returns the handles alongside whether they fell outside 0..1. A Spine handle
-/// may overshoot — a curve that dips below its start value before rising has a
-/// control point behind the key — and this model clamps rather than represents
-/// that. The caller reports it; silently clamping is how an import looks
-/// faithful and plays back wrong.
+/// The two axes are bounded differently, and only one of them is clamped.
+///
+/// **Value passes through.** A Spine curve may swing past its own endpoints —
+/// the wind-up before a punch, the settle after it — and this model represents
+/// that: `ease()` feeds the value handle to a plain cubic, and every consumer
+/// lerps unclamped, so a fraction outside 0..1 extrapolates. Clamping it here
+/// flattened every anticipation in an imported rig.
+///
+/// **Time is clamped to the segment.** `solve_bezier_x` inverts `x(t)` by
+/// bisecting `0..1` and assumes `x(t)` is monotonic; a time handle outside the
+/// span makes the curve double back, which is not a function of `t` and cannot
+/// be sampled at all. The editor's own handle drag clamps time for the same
+/// reason.
+///
+/// The returned flag says a **time** handle was clamped, so the caller can
+/// report the one loss that is real.
 pub(crate) fn curve_interp(
     curve: Option<&Value>,
     t0: f32,
@@ -143,13 +154,18 @@ pub(crate) fn curve_interp(
             // normalize against; its value handles are meaningless either way.
             let nx = |x: f32| if dt.abs() < 1e-6 { 0.0 } else { (x - t0) / dt };
             let ny = |y: f32| if dv.abs() < 1e-6 { 0.0 } else { (y - v0) / dv };
-            let raw = [nx(at(0)), ny(at(1)), nx(at(2)), ny(at(3))];
-            let clamped = raw.map(|h| h.clamp(0.0, 1.0));
-            let lost = raw.iter().zip(&clamped).any(|(a, b)| (a - b).abs() > 1e-4);
+            let (out_t, in_t) = (nx(at(0)), nx(at(2)));
+            let (out_v, in_v) = (ny(at(1)), ny(at(3)));
+            let (out_x, in_x) = (out_t.clamp(0.0, 1.0), in_t.clamp(0.0, 1.0));
+            let lost = (out_t - out_x).abs() > 1e-4 || (in_t - in_x).abs() > 1e-4;
+            // A non-finite control point would otherwise reach the sampler and
+            // take the whole track with it. `clamp` used to absorb these; with
+            // the value axis free, nothing else would.
+            let finite = |v: f32| if v.is_finite() { v } else { 0.0 };
             (
                 Interp::Bezier {
-                    out_handle: glam::vec2(clamped[0], clamped[1]),
-                    in_handle: glam::vec2(clamped[2], clamped[3]),
+                    out_handle: glam::vec2(out_x, finite(out_v)),
+                    in_handle: glam::vec2(in_x, finite(in_v)),
                 },
                 lost,
             )
@@ -254,8 +270,8 @@ fn keys_with_curves_on<T>(
             "curve",
             where_.to_string(),
             format!(
-                "{clamped} handle(s) reached outside the span and were clamped; \
-                 the easing overshoots further than this model can express"
+                "{clamped} handle(s) reached outside the segment in time and were \
+                 clamped to it; an easing that doubles back in time cannot be sampled"
             ),
         );
     }

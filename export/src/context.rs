@@ -1219,12 +1219,16 @@ fn vec2_keys(keys: &[schema::Vec2Key], offset: f32) -> Value {
 ///
 /// A bezier key's two control points in **absolute** time/value space.
 ///
-/// Ankhimate stores handles normalized 0..1 across the span to the next key
+/// Ankhimate stores handles as fractions of the span to the next key
 /// (`schema::Interp::Bezier`); several published formats store the same curve as
 /// four absolute numbers. Converting needs the *next* key, and a template cannot
-/// look ahead in an `{{#each}}` — so a preset that printed the normalized
+/// look ahead in an `{{#each}}` — so a preset that printed the fractional
 /// handles into an absolute slot produced a file that parses and animates
 /// wrongly. This is why the conversion lives here.
+///
+/// A value handle outside 0..1 is an overshoot, not an error, and the affine
+/// conversion carries it through to a control point outside the two key values —
+/// which is exactly what a format storing absolute points expects.
 ///
 /// Empty for linear and stepped keys, which carry no control points.
 fn control_points(interp: &schema::Interp, from: (f32, f32), to: (f32, f32)) -> Vec<f32> {

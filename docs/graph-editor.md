@@ -1,10 +1,10 @@
 # Graph editor interaction rules (T-912)
 
-Four rules, each written down because it answers a complaint filed repeatedly
-against the established editors' curve editors — unexpected snapping, curves
-that cannot be seen, and tangents that overshoot without saying so. They are
-easy to undo by accident in a later change, so the reasoning lives here rather
-than only in the diff.
+Four rules and one deferral, each written down because it answers a complaint
+filed repeatedly against the established editors' curve editors — unexpected
+snapping, curves that cannot be seen, tangents that overshoot without saying so,
+and handles that cannot be grabbed back. They are easy to undo by accident in a
+later change, so the reasoning lives here rather than only in the diff.
 
 The source of the complaints is a five-year cluster of independent forum threads
 against Spine's graph editor. That evidence is **title-level**: the forum is
@@ -60,7 +60,26 @@ invisibility this replaced. The editor reports; the animator decides.
 its key is ordinary and flagging it would be noise — a warning that fires on
 everything is a warning nobody reads.
 
-## 4. Tangent values can be typed
+## 4. A handle is always grabbable
+
+**Rule.** A handle whose true position falls outside the panel is drawn pinned to
+the edge, as a hollow ring rather than a filled dot, and stays draggable. Pinning
+moves the marker; the stored value is never touched.
+
+**Why.** Rule 1 frames the *sampled curve*, and a cubic does not pass through its
+control points — so a handle shaping a legitimate overshoot routinely sits
+outside the view. The grab box is gated on the panel rect, so a marker drawn out
+there is unreachable: the handle could not be dragged back and the only way out
+would be undo. Grabbing a pinned handle and dragging snaps it to the pointer,
+which is the recovery gesture.
+
+**What would break it.** Widening the auto-fit to include handle positions
+instead. It sounds like the same fix and is worse twice over: the overshoot
+percentage in rule 3 is computed from that same range, so the badge would report
+a number that is not overshoot, and one handle at four times the span zooms the
+view to mostly dead space, flattening every curve in the panel.
+
+## 5. Tangent values can be typed
 
 **Status: not implemented.** Handles are draggable only.
 

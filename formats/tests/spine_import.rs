@@ -106,15 +106,19 @@ fn an_unsupported_constraint_is_reported_rather_than_dropped() {
     assert!(named.contains(&"wobble"), "{named:?}");
 }
 
-/// A handle reaching outside its span is clamped, and the clamp is reported.
+/// A value control point outside the keys survives import untouched.
 ///
-/// Spine's control points are absolute and unconstrained: an easing that
-/// overshoots puts one behind the key it starts from. Ours are fractions of the
-/// span, so that curve cannot be held — and a clamp nobody mentions is how an
-/// import looks faithful and plays back wrong.
+/// Spine's control points are absolute and unconstrained, so a curve can swing
+/// past its own endpoints — the wind-up before a punch. This model represents
+/// that: `ease()` runs the value handle through a plain cubic and consumers lerp
+/// unclamped, so a fraction outside 0..1 extrapolates.
+///
+/// The importer used to clamp all four components. On Esoteric's spineboy that
+/// flattened 211 curves, most of them the snap in `death`.
 #[test]
-fn an_overshooting_curve_is_clamped_and_said_so() {
-    // The value control point sits at -20, below the segment's start of 0.
+fn a_value_overshoot_survives_import_unclamped() {
+    // The value control point sits at -20, below the segment's start of 0 —
+    // normalized against the 0..30 span, that is -0.667.
     let doc = r#"{
       "skeleton": { "spine": "4.3.23" },
       "bones": [{ "name": "root" }],
@@ -124,6 +128,62 @@ fn an_overshooting_curve_is_clamped_and_said_so() {
       ] } } } }
     }"#;
     let loaded = spine::read(doc, Images::None, "rig").expect("reads");
+    let anim = loaded.animations.values().next().expect("one animation");
+    let keys = match anim.timelines.first().expect("a timeline") {
+        ankhimate_core::animation::Timeline::BoneRotate { keys, .. } => keys,
+        other => panic!("expected a rotate timeline, got {other:?}"),
+    };
+    // The easing belongs to the key it arrives at, so key 1 holds it.
+    match keys[1].interp {
+        ankhimate_core::animation::Interp::Bezier { out_handle, .. } => assert!(
+            (out_handle.y + 0.667).abs() < 1e-3,
+            "the overshoot is kept, not clamped to 0: {out_handle:?}"
+        ),
+        other => panic!("expected a bezier, got {other:?}"),
+    }
+
+    // And nothing is reported as lost, because nothing was: reporting a loss we
+    // no longer take would train the reader to ignore the report.
+    let curves: Vec<&str> = loaded
+        .report
+        .lossy
+        .iter()
+        .filter(|l| l.what == "curve")
+        .map(|l| l.where_.as_str())
+        .collect();
+    assert!(curves.is_empty(), "{:?}", loaded.report.lossy);
+}
+
+/// A control point outside the segment **in time** is clamped, and reported.
+///
+/// `solve_bezier_x` inverts `x(t)` by bisecting 0..1 and assumes `x(t)` is
+/// monotonic. A time handle outside the span makes the curve double back, which
+/// is not a function of `t` and cannot be sampled at all — so unlike an
+/// overshoot in value, this one genuinely cannot be kept.
+#[test]
+fn a_time_overshoot_is_clamped_and_said_so() {
+    // The first control point sits at t = -0.3, before the segment starts.
+    let doc = r#"{
+      "skeleton": { "spine": "4.3.23" },
+      "bones": [{ "name": "root" }],
+      "animations": { "walk": { "bones": { "root": { "rotate": [
+        { "value": 0, "curve": [-0.3, 5, 0.4, 25] },
+        { "time": 0.5, "value": 30 }
+      ] } } } }
+    }"#;
+    let loaded = spine::read(doc, Images::None, "rig").expect("reads");
+    let anim = loaded.animations.values().next().expect("one animation");
+    let keys = match anim.timelines.first().expect("a timeline") {
+        ankhimate_core::animation::Timeline::BoneRotate { keys, .. } => keys,
+        other => panic!("expected a rotate timeline, got {other:?}"),
+    };
+    match keys[1].interp {
+        ankhimate_core::animation::Interp::Bezier { out_handle, .. } => {
+            assert_eq!(out_handle.x, 0.0, "time is pulled back into the segment");
+        }
+        other => panic!("expected a bezier, got {other:?}"),
+    }
+
     let clamped: Vec<&str> = loaded
         .report
         .lossy
@@ -184,4 +244,64 @@ fn the_declared_version_is_readable_without_a_full_parse() {
         Some("4.3.23")
     );
     assert_eq!(spine::declared_version("{}"), None);
+}
+
+/// An overshooting handle survives being written to an `.ankh` and read back.
+///
+/// The schema stores handles as a plain `[f32; 4]` and the conversions are
+/// range-agnostic, so this passes today. It exists to fail if someone later
+/// "tidies" the schema by clamping on the way in or out — that loss would be
+/// silent, permanent, and visible only as an animation that stopped snapping.
+#[test]
+fn an_overshooting_handle_survives_an_ankh_round_trip() {
+    let doc = r#"{
+      "skeleton": { "spine": "4.3.23" },
+      "bones": [{ "name": "root" }],
+      "animations": { "walk": { "bones": { "root": { "rotate": [
+        { "value": 0, "curve": [0.1, -20, 0.2, 45] },
+        { "time": 0.5, "value": 30 }
+      ] } } } }
+    }"#;
+    let imported = spine::read(doc, Images::None, "rig").expect("reads");
+    let before = first_rotate_interp(&imported);
+    match before {
+        ankhimate_core::animation::Interp::Bezier { out_handle, .. } => assert!(
+            out_handle.y < 0.0,
+            "the fixture must overshoot or this proves nothing: {out_handle:?}"
+        ),
+        other => panic!("expected a bezier, got {other:?}"),
+    }
+
+    let json = ankhimate_formats::to_json(&ankhimate_formats::convert::ProjectRef {
+        skeleton: &imported.skeleton,
+        animations: &imported.animations,
+        assets: &imported.assets,
+        name: &imported.name,
+        fps: imported.fps,
+        export_presets: &[],
+    })
+    .expect("a rig with an overshoot serializes");
+    let reloaded = ankhimate_formats::from_json(&json).expect("and reads back");
+
+    assert_eq!(
+        before,
+        first_rotate_interp(&reloaded),
+        "the handles came back changed"
+    );
+}
+
+/// The easing on the second key of the first rotate track.
+fn first_rotate_interp(
+    loaded: &ankhimate_formats::convert::Loaded,
+) -> ankhimate_core::animation::Interp {
+    let anim = loaded.animations.values().next().expect("one animation");
+    let keys = anim
+        .timelines
+        .iter()
+        .find_map(|t| match t {
+            ankhimate_core::animation::Timeline::BoneRotate { keys, .. } => Some(keys),
+            _ => None,
+        })
+        .expect("a rotate timeline");
+    keys[1].interp
 }
