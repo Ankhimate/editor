@@ -303,7 +303,30 @@ fn skeleton(project: &Project) -> Value {
         })
         .collect();
 
-    let constraints: Vec<Value> = project.constraints.iter().map(constraint).collect();
+    let mut constraints: Vec<Value> = project.constraints.iter().map(constraint).collect();
+    // Whether another constraint of a kind this format knows follows this one.
+    //
+    // Constraints solve in authored order, and interleaving kinds is meaningful:
+    // a shoulder transform that runs before an aim IK gives a different pose
+    // than after it. So a format that emits them as one array has to keep the
+    // order, which rules out grouping by kind to make `@last` work.
+    //
+    // That leaves the separator. `@last` marks the last *constraint*, not the
+    // last one the template renders — a kind with no branch emits nothing while
+    // still consuming a comma, and the file ends with a trailing comma before
+    // the closing bracket. Only the context knows the whole list, so it counts.
+    let known: Vec<bool> = project
+        .constraints
+        .iter()
+        .map(|c| matches!(c.kind.as_str(), "ik" | "transform" | "path" | "physics"))
+        .collect();
+    for (i, value) in constraints.iter_mut().enumerate() {
+        let more = known.iter().skip(i + 1).any(|k| *k);
+        if let Some(map) = value.as_object_mut() {
+            map.insert("not_last".into(), json!(more));
+        }
+    }
+    let constraints = constraints;
     // Also split by kind. Most published formats put each constraint type in its
     // own top-level block, and a template cannot emit one: filtering inside
     // `{{#each}}` still visits every item, so `@last` marks the last *constraint*

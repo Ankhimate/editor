@@ -199,6 +199,23 @@ Always `name`, `type` (`ik` / `transform` / `physics` / `path`), `target`,
 
 Branch with `{{#if (eq type "ik")}}`.
 
+Each constraint also carries **`not_last`** — whether another constraint of a
+kind this context knows about follows it. Use it as the separator when emitting
+them as one array:
+
+```
+{{#each skeleton.constraints}}{{#if (eq type "ik")}}{ … }{{#if not_last}},{{/if}}
+{{/if}}…{{/each}}
+```
+
+`@last` is wrong here. It marks the last *constraint*, not the last one your
+template renders, so a kind you have no branch for emits nothing while still
+consuming a comma — and the array ends `…}, ]`, which is a parse error rather
+than a wrong number. Grouping by kind avoids that but breaks something worse:
+constraints solve in authored order, and interleaving kinds is meaningful. A
+shoulder transform that runs before an aim IK gives a different pose than one
+that runs after. Keep the order, use `not_last`.
+
 ## `animations[]`
 
 `name`, `duration` (seconds), `looping`, then timelines grouped by target:
