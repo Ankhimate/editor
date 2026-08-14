@@ -991,6 +991,71 @@ fn a_curve_describes_the_segment_leaving_its_key() {
     );
 }
 
+/// Every constraint kind renders through the shipped preset.
+///
+/// The fixture and all four sample rigs carry only IK and transform
+/// constraints, so the template's `path` and `physics` branches had never run
+/// against data. A branch that no rig reaches is a branch that breaks silently
+/// the first time a user's rig does reach it — and in strict mode a missing
+/// field is a hard render error, so the failure is a refused export rather than
+/// a wrong number.
+#[test]
+fn a_rig_with_every_constraint_kind_still_renders() {
+    let mut project = fixture();
+    project.slots.push(schema::Slot {
+        name: "trail".into(),
+        bone: "spine".into(),
+        attachment: Some("trail-path".into()),
+        color: [1.0, 1.0, 1.0, 1.0],
+        dark_color: None,
+        blend_mode: String::new(),
+        extra: Default::default(),
+    });
+    project.skins[0].entries.push(schema::SkinEntry {
+        slot: "trail".into(),
+        name: "trail-path".into(),
+        attachment: schema::Attachment::Path(schema::Path {
+            vertices: vec![0.0, 0.0, 10.0, 0.0, 20.0, 0.0],
+            closed: false,
+            constant_speed: true,
+            extra: Default::default(),
+        }),
+    });
+
+    let base = project.constraints[0].clone();
+    project.constraints.push(schema::Constraint {
+        name: "trail-follow".into(),
+        kind: "path".into(),
+        bones: vec!["head".into()],
+        slot: Some("trail".into()),
+        path: Some([0.25, 0.5, 1.0, 1.0]),
+        ..base.clone()
+    });
+    project.constraints.push(schema::Constraint {
+        name: "hair-physics".into(),
+        kind: "physics".into(),
+        bones: vec!["head".into()],
+        physics: Some([0.9, 0.4, 0.6, 1.2]),
+        forces: Some([0.0, 0.0, 0.0, -9.8]),
+        channels: Some([true, false]),
+        ..base
+    });
+    project
+        .constraint_order
+        .extend(["trail-follow".into(), "hair-physics".into()]);
+
+    // Strict mode: this errors rather than rendering an empty string if any
+    // branch addresses a field the context does not carry.
+    let rendered = render_spine(&project);
+    let kinds: Vec<&str> = rendered["constraints"]
+        .as_array()
+        .expect("constraints ship")
+        .iter()
+        .filter_map(|c| c["type"].as_str())
+        .collect();
+    assert!(kinds.contains(&"path"), "{kinds:?}");
+}
+
 /// Renders the shipped Spine preset and parses the result as a consumer would.
 ///
 /// Asserting on the *context* is what let a broken region size ship: the fields
