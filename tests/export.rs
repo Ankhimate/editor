@@ -230,15 +230,20 @@ fn fixture() -> Project {
                                 time: 0.0,
                                 x: 0.0,
                                 y: 0.0,
-                                interp: schema::Interp::Bezier {
-                                    handles: [0.25, 0.1, 0.75, 0.9],
-                                },
+                                interp: schema::Interp::Linear,
                             },
+                            // The bezier sits on the key that is *arrived at*,
+                            // which is how the schema stores easing. It
+                            // describes the segment from t=0, so an exporter
+                            // whose format hangs curves on the starting key
+                            // emits it there.
                             schema::Vec2Key {
                                 time: 1.0,
                                 x: 4.0,
                                 y: -6.0,
-                                interp: schema::Interp::Linear,
+                                interp: schema::Interp::Bezier {
+                                    handles: [0.25, 0.1, 0.75, 0.9],
+                                },
                             },
                         ],
                     },
@@ -279,14 +284,16 @@ fn fixture() -> Project {
                             schema::ScalarKey {
                                 time: 0.0,
                                 value: 4.0,
-                                interp: schema::Interp::Bezier {
-                                    handles: [0.3, 0.1, 0.7, 0.9],
-                                },
+                                interp: schema::Interp::Linear,
                             },
+                            // Easing is stored on the key it leads *into*, so
+                            // this bezier describes the segment from t=0.
                             schema::ScalarKey {
                                 time: 0.5,
                                 value: 12.0,
-                                interp: schema::Interp::Linear,
+                                interp: schema::Interp::Bezier {
+                                    handles: [0.3, 0.1, 0.7, 0.9],
+                                },
                             },
                         ],
                     },
@@ -514,13 +521,16 @@ fn the_spine_preset_emits_the_43_layout() {
     assert!(rotate[0]["value"].is_number(), "rotate keys use `value`");
     assert!(rotate[0]["angle"].is_null(), "and not 3.8's `angle`");
 
-    // The curve is absolute time/value. Normalized handles would all sit in
-    // 0..1; the second control point's value here is 10 (the next key's value),
-    // so this assertion fails loudly if the normalized form ever comes back.
-    let curve = rotate[1]["curve"].as_array().expect("a bezier key");
+    // The curve is absolute time/value, and sits on the key the segment starts
+    // from — the schema stores easing on the key it arrives at, so the bezier
+    // authored at t=0.5 describes 0.0 -> 0.5 and is emitted on key 0.
+    // Normalized handles would all sit in 0..1; the second control point's value
+    // here is 30 (the segment's end value), so this fails loudly if the
+    // normalized form ever comes back.
+    let curve = rotate[0]["curve"].as_array().expect("a bezier key");
     assert_eq!(curve.len(), 4);
     assert!(
-        (curve[3].as_f64().unwrap() - 10.0).abs() < 1e-3,
+        (curve[3].as_f64().unwrap() - 30.0).abs() < 1e-3,
         "control points are absolute, not normalized: {curve:?}"
     );
 
@@ -571,9 +581,12 @@ fn the_spine_preset_emits_the_43_layout() {
         rotate.last().unwrap()
     );
     assert!(
-        rotate[1]["curve"].is_array(),
-        "but a key with a successor still does"
+        rotate[0]["curve"].is_array(),
+        "but a key whose outgoing segment eases still does"
     );
+    // And a key whose *next* key is stepped says so, rather than carrying its
+    // own easing: the curve describes the segment leaving the key.
+    assert_eq!(rotate[1]["curve"], "stepped");
 
     let translate = out["animations"]["walk"]["bones"]["head"]["translate"]
         .as_array()
@@ -932,6 +945,52 @@ fn an_ik_key_carries_the_constraints_bend_direction() {
     assert_eq!(keys[0]["bend_direction"], 1.0);
 }
 
+/// A key's curve describes the segment **leaving** it, not arriving at it.
+///
+/// The schema stores a key's `interp` as how that key is *reached* — the easing
+/// belongs to the key ending a segment. Spine, and most published formats, hang
+/// it on the key that starts one. The exporter shifts frames by one; reading
+/// `k.interp` for the segment `k -> k+1` instead left the first key of every
+/// track linear and moved every other curve one key late.
+///
+/// Nothing caught that: keyframe poses matched exactly, because a curve only
+/// affects the values *between* keys. Only the frames in between drifted, which
+/// reads as a subtly wrong animation rather than an off-by-one.
+#[test]
+fn a_curve_describes_the_segment_leaving_its_key() {
+    let ctx = Context::build(&fixture(), None, ExportInfo::default());
+    let spine = ctx.animations[0]["bones"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["name"] == "spine")
+        .expect("the spine bone is keyed")
+        .clone();
+    let rotate = spine["rotate"].as_array().expect("rotate keys").clone();
+
+    // The fixture: key0 t=0 linear, key1 t=0.5 bezier, key2 t=1.0 stepped.
+    // The bezier on key1 is how key1 is *arrived at*, so it eases 0.0 -> 0.5.
+    assert!(
+        rotate[0]["is_bezier"].as_bool().unwrap(),
+        "the segment leaving key0 is the bezier authored on key1"
+    );
+    assert!(
+        !rotate[1]["is_bezier"].as_bool().unwrap(),
+        "key1's own handles describe the segment before it, not after"
+    );
+    assert_eq!(
+        rotate[1]["curve"], "stepped",
+        "key2 is stepped, so the segment leaving key1 is"
+    );
+
+    // The first key of a track is never left without a curve just because
+    // nothing precedes it — that was the visible half of the bug.
+    assert!(
+        !rotate[0]["points"].as_array().unwrap().is_empty(),
+        "the first key carries the easing of its outgoing segment"
+    );
+}
+
 /// Renders the shipped Spine preset and parses the result as a consumer would.
 ///
 /// Asserting on the *context* is what let a broken region size ship: the fields
@@ -1041,12 +1100,14 @@ fn bezier_control_points_are_absolute_not_normalized() {
         .find(|b| b["name"] == "spine")
         .expect("the spine bone is keyed");
 
-    // Key at t=0.5 value=30, next key at t=1.0 value=10; handles [.25,0,.75,1].
-    // Absolute: t = 0.5 + h*0.5, v = 30 + h*(10-30).
-    let key = &spine["rotate"][1];
+    // A key's `interp` is how it is *arrived at*, so the bezier stored on the
+    // t=0.5 key describes the segment 0.0 -> 0.5 and is emitted on key 0. The
+    // segment runs value 0 -> 30 with handles [.25, 0, .75, 1]:
+    // absolute t = 0 + h*0.5, v = 0 + h*30.
+    let key = &spine["rotate"][0];
     let points: Vec<f64> = key["points"]
         .as_array()
-        .expect("a bezier key carries control points")
+        .expect("the key starting a bezier segment carries control points")
         .iter()
         .map(|v| v.as_f64().unwrap())
         .collect();
@@ -1055,10 +1116,14 @@ fn bezier_control_points_are_absolute_not_normalized() {
         4,
         "a scalar channel has one control-point pair"
     );
-    assert!((points[0] - 0.625).abs() < 1e-5, "out_x: {points:?}");
-    assert!((points[1] - 30.0).abs() < 1e-5, "out_y: {points:?}");
-    assert!((points[2] - 0.875).abs() < 1e-5, "in_x: {points:?}");
-    assert!((points[3] - 10.0).abs() < 1e-5, "in_y: {points:?}");
+    assert!((points[0] - 0.125).abs() < 1e-5, "out_x: {points:?}");
+    assert!((points[1] - 0.0).abs() < 1e-5, "out_y: {points:?}");
+    assert!((points[2] - 0.375).abs() < 1e-5, "in_x: {points:?}");
+    assert!((points[3] - 30.0).abs() < 1e-5, "in_y: {points:?}");
+
+    // And the key holding those handles describes the segment *leaving* it,
+    // which the next key marks as stepped.
+    assert_eq!(spine["rotate"][1]["curve"], "stepped");
 
     // The final key has nothing to interpolate towards, so it has no points at
     // all rather than points computed against itself.
