@@ -22,7 +22,7 @@ use eframe::egui;
 ///
 /// Session state: which row is selected is not a property of the rig, and it
 /// would be wrong to find it in a teammate's file.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct ExportUiState {
     pub preset: usize,
     pub template: usize,
@@ -30,6 +30,31 @@ pub struct ExportUiState {
     /// Last error, kept so it stays on screen after the frame that produced it.
     pub error: Option<String>,
     pub last_export: Option<String>,
+    /// The last preview, and what it was rendered from.
+    ///
+    /// The preview runs the **real** pipeline, which bakes an atlas — decoding
+    /// and re-encoding every image — and renders every template for every clip.
+    /// That is right for fidelity and ruinous per frame: at 60fps it re-encodes
+    /// megabytes of PNG a second, and egui repaints continuously while a text
+    /// field has focus, so it fired on every keystroke in the template editor.
+    /// Keyed on the document revision and the selected preset, it runs once per
+    /// actual change instead.
+    cache: Option<CachedPreview>,
+}
+
+/// A rendered preview plus the inputs that produced it.
+#[derive(Debug)]
+struct CachedPreview {
+    revision: u64,
+    preset: usize,
+    /// The plan, or the error rendering it — both are worth not recomputing,
+    /// and an error that flickers because it is recomputed mid-keystroke reads
+    /// as a different bug than the one it is.
+    result: Result<Plan, String>,
+    /// Built alongside, for the context browser: it needs the same schema
+    /// conversion, and doing it separately doubled the cost whenever the browser
+    /// was open.
+    context: serde_json::Value,
 }
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
@@ -288,43 +313,80 @@ fn templates(ui: &mut egui::Ui, state: &mut AppState, preset: &Preset) {
     }
 }
 
-/// Render the preset and show what it would write, without writing anything.
-fn preview(ui: &mut egui::Ui, state: &mut AppState, preset: &Preset) {
+/// Rebuild the cached preview if the rig or the selected preset has moved on.
+///
+/// Everything expensive in this panel happens here, exactly once per change.
+fn refresh_cache(state: &mut AppState, preset: &Preset) {
+    let revision = state.revision;
+    let index = state.session.export.preset;
+    let fresh = state
+        .session
+        .export
+        .cache
+        .as_ref()
+        .is_some_and(|c| c.revision == revision && c.preset == index);
+    if fresh {
+        return;
+    }
+
+    // One schema conversion feeds both the plan and the context browser.
     let schema = ankhimate_formats::convert::to_schema(&state.doc.as_project_ref());
-    match run::plan(&schema, &state.doc.assets, preset) {
-        Ok(plan) => {
-            summary(ui, &plan);
-            let selected = state
-                .session
-                .export
-                .template
-                .min(preset.templates.len() - 1);
-            let name = &preset.templates[selected].name;
-            // Show the first file this template produced. For a per-animation
-            // template that is one of many, which is the point — the user sees
-            // the shape, not every copy.
-            if let Some(file) = plan.files.iter().find(|f| {
-                f.path.ends_with(".json") || f.path.ends_with(".txt") || !f.path.contains('.')
-            }) {
-                ui.collapsing(format!("Preview — {}", file.path), |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height(240.0)
-                        .id_salt("export_preview")
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut file.contents.as_str())
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY),
-                            );
-                        });
-                });
-            } else {
-                let _ = name;
-            }
-        }
+    // `Named`: the preview shows a file count and the rendered text, never the
+    // pixels, so the atlas is baked but its pages are not PNG-compressed.
+    let result = run::plan_with(&schema, &state.doc.assets, preset, run::Images::Named)
+        .map_err(|e| e.to_string());
+    let info = ankhimate_export::context::ExportInfo {
+        output_dir: preset.output_dir.clone(),
+        preset_name: preset.name.clone(),
+        template_name: String::new(),
+        atlas_stem: preset.atlas.stem.clone(),
+    };
+    let context = ankhimate_export::context::Context::build(&schema, None, info).to_value();
+
+    state.session.export.cache = Some(CachedPreview {
+        revision,
+        preset: index,
+        result,
+        context,
+    });
+}
+
+/// Show what the preset would write, without writing anything.
+fn preview(ui: &mut egui::Ui, state: &mut AppState, preset: &Preset) {
+    refresh_cache(state, preset);
+    let Some(cache) = &state.session.export.cache else {
+        return;
+    };
+
+    let plan = match &cache.result {
+        Ok(plan) => plan,
         Err(e) => {
-            ui.colored_label(egui::Color32::from_rgb(220, 90, 90), e.to_string());
+            ui.colored_label(egui::Color32::from_rgb(220, 90, 90), e);
+            return;
         }
+    };
+
+    summary(ui, plan);
+    // Show the first file this template produced. For a per-animation template
+    // that is one of many, which is the point — the user sees the shape, not
+    // every copy.
+    if let Some(file) = plan
+        .files
+        .iter()
+        .find(|f| f.path.ends_with(".json") || f.path.ends_with(".txt") || !f.path.contains('.'))
+    {
+        ui.collapsing(format!("Preview — {}", file.path), |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(240.0)
+                .id_salt("export_preview")
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut file.contents.as_str())
+                            .code_editor()
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+        });
     }
 }
 
@@ -344,14 +406,11 @@ fn summary(ui: &mut egui::Ui, plan: &Plan) {
 
 /// The fields a template can address, at a glance.
 fn context_browser(ui: &mut egui::Ui, state: &mut AppState, preset: &Preset) {
-    let schema = ankhimate_formats::convert::to_schema(&state.doc.as_project_ref());
-    let info = ankhimate_export::context::ExportInfo {
-        output_dir: preset.output_dir.clone(),
-        preset_name: preset.name.clone(),
-        template_name: String::new(),
+    refresh_cache(state, preset);
+    let Some(cache) = &state.session.export.cache else {
+        return;
     };
-    let context = ankhimate_export::context::Context::build(&schema, None, info);
-    let value = context.to_value();
+    let value = &cache.context;
 
     ui.label(egui::RichText::new("Context").strong());
     ui.label(
@@ -363,7 +422,7 @@ fn context_browser(ui: &mut egui::Ui, state: &mut AppState, preset: &Preset) {
         .max_height(260.0)
         .id_salt("export_context")
         .show(ui, |ui| {
-            node(ui, "", &value);
+            node(ui, "", value);
         });
 }
 

@@ -61,6 +61,15 @@ pub struct AppState {
     /// Derived pose for the current frame. Recomputed from the document by
     /// [`Self::refresh_pose`]; the viewport reads only from here.
     pub pose: ankhimate_core::pose::Pose,
+    /// Bumped on every change to [`Self::doc`], for panels that cache work
+    /// derived from it.
+    ///
+    /// A panel whose derived value is expensive — the export preview bakes an
+    /// atlas and renders every template — cannot afford to recompute per frame,
+    /// and has no cheap way to ask "did the rig change?" A monotonic counter is
+    /// that question's answer. It is *not* a dirty flag: it never resets, and
+    /// says nothing about whether the file is saved.
+    pub revision: u64,
 }
 
 impl Default for AppState {
@@ -73,6 +82,7 @@ impl Default for AppState {
             history: History::default(),
             pose: ankhimate_core::pose::Pose::new(),
             physics: ankhimate_core::physics::PhysicsState::new(),
+            revision: 0,
         };
         state.refresh_pose();
         state
@@ -141,6 +151,11 @@ impl AppState {
     /// session is reseated on the new skeleton's default skin, back in Setup
     /// mode — a freshly opened rig is something you look at before you animate.
     pub fn replace_document(&mut self, doc: Document) {
+        // Not `after_document_change`: that prunes a selection against a
+        // skeleton this document no longer has. The revision still has to move —
+        // a whole new rig is the largest change there is, and a cache keyed on
+        // it would otherwise serve the previous rig's export.
+        self.revision = self.revision.wrapping_add(1);
         self.doc = doc;
         self.session = Session::new(self.doc.skeleton.default_skin);
         self.history = History::default();
@@ -810,6 +825,7 @@ impl AppState {
     /// Post-mutation housekeeping: drop selections pointing at deleted entities,
     /// then recompute the pose.
     fn after_document_change(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
         self.session.prune_selection(&self.doc.skeleton);
         // Cheap when nothing needs it: the scan short-circuits unless a weighted
         // mesh is missing its binds.
@@ -2039,6 +2055,50 @@ mod tests {
 
         state.dispatch(Box::new(CreateBone::new(bone("a"))));
         assert_eq!(state.pose.worlds.len(), 1, "pose picked up the new bone");
+    }
+
+    /// Every path that changes the document moves the revision.
+    ///
+    /// Panels cache expensive derived work against this — the export preview
+    /// bakes an atlas and renders every template. A path that mutates the
+    /// document without bumping it serves the *previous* rig's export forever,
+    /// which looks like a corrupt exporter rather than a stale cache.
+    #[test]
+    fn every_document_change_moves_the_revision() {
+        let mut state = AppState::default();
+        let start = state.revision;
+
+        state.dispatch(Box::new(CreateBone::new(bone("a"))));
+        let after_edit = state.revision;
+        assert!(after_edit > start, "an edit bumps it");
+
+        state.undo();
+        let after_undo = state.revision;
+        assert!(after_undo > after_edit, "undo is a change too");
+
+        state.redo();
+        let after_redo = state.revision;
+        assert!(after_redo > after_undo, "and so is redo");
+
+        // File▸Open swaps the document wholesale, bypassing the usual path.
+        state.replace_document(Document::new());
+        assert!(
+            state.revision > after_redo,
+            "replacing the document is the largest change there is"
+        );
+    }
+
+    /// A refused command changes nothing, so it must not move the revision —
+    /// otherwise every rejected gesture invalidates every panel's cache.
+    #[test]
+    fn a_refused_command_leaves_the_revision_alone() {
+        let mut state = AppState::default();
+        state.set_work_mode(WorkMode::Animate);
+        let before = state.revision;
+
+        let accepted = state.dispatch(Box::new(CreateBone::new(bone("a"))));
+        assert!(!accepted, "creating a bone is Setup-only (T-207)");
+        assert_eq!(state.revision, before, "a refusal is not a change");
     }
 
     #[test]

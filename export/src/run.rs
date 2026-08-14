@@ -149,6 +149,32 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
 /// export rather than an approximation of it — a preview that can disagree with
 /// the export is worse than none.
 pub fn plan(project: &Project, assets: &AssetDb, preset: &Preset) -> Result<Plan, ExportError> {
+    plan_with(project, assets, preset, Images::Encoded)
+}
+
+/// Whether a plan carries its atlas pages as encoded PNG bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Images {
+    /// Encode every page. Required before [`write`] — a plan without bytes
+    /// writes no images.
+    Encoded,
+    /// Name the pages but leave their bytes empty.
+    ///
+    /// For a caller that only displays the plan. PNG encoding a 2048² page costs
+    /// tens of milliseconds, and the editor's preview does it only to show a
+    /// count and then drop the bytes. The atlas is still **baked** — regions and
+    /// UVs reach the context, so the rendered text is byte-identical to a real
+    /// export. Only the compression is skipped.
+    Named,
+}
+
+/// [`plan`], with control over whether atlas pages are encoded.
+pub fn plan_with(
+    project: &Project,
+    assets: &AssetDb,
+    preset: &Preset,
+    images: Images,
+) -> Result<Plan, ExportError> {
     let baked: Option<Atlas> = if preset.atlas.enabled {
         Some(atlas::bake(assets, &preset.atlas.settings).map_err(ExportError::Atlas)?)
     } else {
@@ -165,6 +191,7 @@ pub fn plan(project: &Project, assets: &AssetDb, preset: &Preset) -> Result<Plan
             output_dir: preset.output_dir.clone(),
             preset_name: preset.name.clone(),
             template_name: template.name.clone(),
+            atlas_stem: preset.atlas.stem.clone(),
         };
         let context = Context::build(project, baked.as_ref(), info);
 
@@ -197,10 +224,13 @@ pub fn plan(project: &Project, assets: &AssetDb, preset: &Preset) -> Result<Plan
     if let Some(atlas) = &baked {
         for page in &atlas.pages {
             let name = atlas::page_filename(&preset.atlas.stem, page.index);
-            let bytes = atlas::encode_png(page).map_err(|e| ExportError::Io {
-                path: name.clone(),
-                reason: e.to_string(),
-            })?;
+            let bytes = match images {
+                Images::Encoded => atlas::encode_png(page).map_err(|e| ExportError::Io {
+                    path: name.clone(),
+                    reason: e.to_string(),
+                })?,
+                Images::Named => Vec::new(),
+            };
             plan.binaries.push((name, bytes));
         }
     }
@@ -211,8 +241,13 @@ pub fn plan(project: &Project, assets: &AssetDb, preset: &Preset) -> Result<Plan
         for name in names {
             if let Some(id) = assets.by_name(name) {
                 let asset = &assets.images[id];
+                // Already-encoded source bytes, so `Named` saves only the clone.
+                let bytes = match images {
+                    Images::Encoded => asset.bytes.clone(),
+                    Images::Named => Vec::new(),
+                };
                 plan.binaries
-                    .push((format!("images/{}.png", asset.name), asset.bytes.clone()));
+                    .push((format!("images/{}.png", asset.name), bytes));
             }
         }
     }
@@ -226,6 +261,19 @@ pub fn plan(project: &Project, assets: &AssetDb, preset: &Preset) -> Result<Plan
 /// failure rather than a template one. Directories are created as needed;
 /// nothing is removed.
 pub fn write(plan: &Plan, output_dir: &Path) -> Result<(), ExportError> {
+    // A plan built with `Images::Named` carries page names and no bytes. Writing
+    // it would produce zero-length PNGs beside perfectly good JSON — an export
+    // that looks successful and is not, which is the failure this module exists
+    // to prevent. Refuse before creating anything.
+    if let Some((path, _)) = plan.binaries.iter().find(|(_, bytes)| bytes.is_empty()) {
+        return Err(ExportError::Io {
+            path: path.clone(),
+            reason: "this plan was built for preview and carries no image data; \
+                     re-plan with Images::Encoded before writing"
+                .into(),
+        });
+    }
+
     std::fs::create_dir_all(output_dir).map_err(|e| ExportError::Io {
         path: output_dir.display().to_string(),
         reason: e.to_string(),
