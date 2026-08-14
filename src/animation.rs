@@ -20,10 +20,22 @@
 //!
 //! # Bezier evaluation
 //!
-//! `Interp::Bezier` stores two handles in normalized 0..1 time/value space. To
-//! sample, the curve's `x(t) = time` must be inverted to find `t`, then `y(t)`
-//! gives the eased fraction. **Chosen method: Newton-Raphson with a bisection
-//! fallback** (see `solve_bezier_x`) rather than a fixed-step LUT:
+//! `Interp::Bezier` stores two handles as fractions of the span between the two
+//! keys. To sample, the curve's `x(t) = time` must be inverted to find `t`, then
+//! `y(t)` gives the eased fraction.
+//!
+//! **The two axes are bounded differently.** A handle's `x` must stay in 0..1:
+//! `solve_bezier_x` bisects that domain assuming `x(t)` is monotonic, and a
+//! control point outside the span makes the curve double back in time, which is
+//! not a function of `t` and cannot be sampled at all. A handle's `y` is
+//! **unbounded** — a value outside 0..1 makes `ease` return a fraction outside
+//! 0..1, which `Sampleable::lerp` extrapolates through rather than clamping.
+//! That is an overshoot, and it is how anticipation and follow-through are
+//! authored: a bone winds back before it swings, and settles past its target
+//! before returning.
+//!
+//! **Chosen method: Newton-Raphson with a bisection fallback** (see
+//! `solve_bezier_x`) rather than a fixed-step LUT:
 //!
 //! * exact to ~1e-6 in a handful of iterations, versus a LUT's quantization
 //!   error at segment boundaries;
@@ -41,8 +53,11 @@ pub enum Interp {
     Linear,
     /// Hold the previous key's value until this key's time.
     Stepped,
-    /// Cubic bezier in normalized 0..1 time/value space. `out_handle` belongs to
-    /// the previous key, `in_handle` to this one.
+    /// Cubic bezier, handles as fractions of the span between the two keys.
+    /// `out_handle` belongs to the previous key, `in_handle` to this one.
+    ///
+    /// `x` is in 0..1; `y` is unbounded, and a value outside 0..1 overshoots.
+    /// See the module docs for why only one axis is bounded.
     Bezier {
         out_handle: glam::Vec2,
         in_handle: glam::Vec2,
@@ -558,6 +573,11 @@ fn locate<T>(keys: &[Key<T>], time: f32, hint: &mut usize) -> Span {
 }
 
 /// Apply a key's interpolation curve to a normalized 0..1 span fraction.
+///
+/// The **input** is 0..1; the **return** need not be. A bezier whose value
+/// handles reach outside the span returns a fraction outside 0..1, and callers
+/// extrapolate through it — that is an overshoot, and clamping here would
+/// silently flatten every bounce in the document.
 fn ease(t: f32, interp: Interp) -> f32 {
     match interp {
         Interp::Linear => t,
@@ -931,6 +951,65 @@ mod tests {
         assert!(quarter < 25.0, "should lag linear early: {quarter}");
         let three_q = sample(&keys, 0.75, &mut hint).unwrap();
         assert!(three_q > 75.0, "should lead linear late: {three_q}");
+    }
+
+    /// A value handle outside 0..1 overshoots, and that is the point.
+    ///
+    /// Anticipation and follow-through are made this way: a bone winds back
+    /// before it swings, and settles past its target before returning. `ease`
+    /// returns a fraction outside 0..1 for such a handle and `Sampleable::lerp`
+    /// extrapolates through it — neither clamps, deliberately.
+    ///
+    /// The Spine importer used to flatten these on the way in, on the grounds
+    /// that handles were "normalized 0..1". Nothing enforced that, and this is
+    /// what it was throwing away.
+    #[test]
+    fn a_value_handle_outside_the_span_overshoots() {
+        let keys = vec![
+            Key::linear(0.0, 0.0),
+            Key {
+                time: 1.0,
+                value: 100.0,
+                interp: Interp::Bezier {
+                    // Below the start, then past the end.
+                    out_handle: glam::vec2(0.3, -0.5),
+                    in_handle: glam::vec2(0.7, 1.5),
+                },
+            },
+        ];
+        let mut hint = 0;
+        let samples: Vec<f32> = (0..=100)
+            .map(|i| sample(&keys, i as f32 / 100.0, &mut hint).unwrap())
+            .collect();
+
+        let lowest = samples.iter().cloned().fold(f32::INFINITY, f32::min);
+        let highest = samples.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        assert!(lowest < -1.0, "should dip below the first key: {lowest}");
+        assert!(highest > 101.0, "should pass the last key: {highest}");
+    }
+
+    /// Overshooting in the middle does not move where the curve starts and ends.
+    ///
+    /// A handle only shapes the approach; the keys themselves are the contract.
+    /// An implementation that clamped the eased fraction to fix the overshoot
+    /// would keep these endpoints and still be wrong, so this pins the half that
+    /// must not change alongside the half that must.
+    #[test]
+    fn bezier_endpoints_hold_despite_wild_value_handles() {
+        let keys = vec![
+            Key::linear(0.0, 0.0),
+            Key {
+                time: 1.0,
+                value: 100.0,
+                interp: Interp::Bezier {
+                    out_handle: glam::vec2(0.3, -0.5),
+                    in_handle: glam::vec2(0.7, 1.5),
+                },
+            },
+        ];
+        let mut hint = 0;
+        assert!((sample(&keys, 0.0, &mut hint).unwrap() - 0.0).abs() < EPS);
+        assert!((sample(&keys, 1.0, &mut hint).unwrap() - 100.0).abs() < EPS);
     }
 
     #[test]
