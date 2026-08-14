@@ -66,15 +66,66 @@ pub struct Loaded {
 pub struct LoadReport {
     /// References to entities that were not in the file (`what`, `name`).
     pub dangling: Vec<(&'static str, String)>,
+    /// What an import could not represent, and what it did instead.
+    ///
+    /// Loading an `.ankh` is lossless, so this stays empty there. Importing a
+    /// foreign format is not: a source may carry curves per axis where a
+    /// `Vec2Key` has one for both, or handles this model cannot express. Those
+    /// are decisions the file's author should see rather than discover later in
+    /// a playback that drifts — so an importer records them here instead of
+    /// silently choosing.
+    pub lossy: Vec<Lossy>,
+}
+
+/// One thing an import could not carry across, with enough context to find it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lossy {
+    /// What kind of thing lost something — `"curve"`, `"attachment"`, `"timeline"`.
+    pub what: &'static str,
+    /// Where, in the source's own names: `"walk/hip/translate"`.
+    pub where_: String,
+    /// What was done instead, in the author's terms.
+    pub detail: String,
 }
 
 impl LoadReport {
-    fn dangling(&mut self, what: &'static str, name: &str) {
+    /// Record a reference that did not resolve.
+    ///
+    /// Public because importers live outside this module: a name that fails to
+    /// resolve is reported, never fatal (ADR 0004).
+    pub fn dangling(&mut self, what: &'static str, name: &str) {
         self.dangling.push((what, name.to_string()));
     }
 
+    /// Record something an import could not represent exactly.
+    pub fn lossy(
+        &mut self,
+        what: &'static str,
+        where_: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
+        self.lossy.push(Lossy {
+            what,
+            where_: where_.into(),
+            detail: detail.into(),
+        });
+    }
+
     pub fn is_clean(&self) -> bool {
-        self.dangling.is_empty()
+        self.dangling.is_empty() && self.lossy.is_empty()
+    }
+
+    /// A count per `what`, so a UI can summarise without listing thousands.
+    ///
+    /// A rig with one lossy curve and a rig with four hundred are different
+    /// situations, and a report that shows the first ten of each hides which
+    /// one the user has.
+    pub fn lossy_summary(&self) -> std::collections::BTreeMap<&'static str, usize> {
+        let mut counts = std::collections::BTreeMap::new();
+        for l in &self.lossy {
+            *counts.entry(l.what).or_insert(0) += 1;
+        }
+        counts
     }
 }
 

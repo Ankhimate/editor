@@ -20,6 +20,7 @@ pub mod convert;
 pub mod migrate;
 pub mod psd;
 pub mod schema;
+pub mod spine;
 
 use std::path::Path;
 
