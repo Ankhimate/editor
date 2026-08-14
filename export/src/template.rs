@@ -69,6 +69,33 @@ handlebars_helper!(sub_helper: |a: f64, b: f64| a - b);
 handlebars_helper!(mul_helper: |a: f64, b: f64| a * b);
 handlebars_helper!(div_helper: |a: f64, b: f64| if b == 0.0 { 0.0 } else { a / b });
 handlebars_helper!(json_helper: |v: Json| serde_json::to_string(v).unwrap_or_default());
+// `numbers`: a JSON array printed with every float rounded.
+//
+// `json` prints an f32 widened to f64 in full — `0.4` arrives as
+// `0.4000000059604645`, which is correct and unreadable, and makes an export
+// diff against a hand-authored file useless. `round` cannot help: it takes one
+// number, and a template cannot map it over an array.
+handlebars_helper!(numbers_helper: |v: Json, places: i64| {
+    let m = 10f64.powi(places.clamp(0, 10) as i32);
+    let snap = |f: f64| {
+        let r = (f * m).round() / m;
+        if r == 0.0 { 0.0 } else { r }
+    };
+    let parts: Vec<String> = v
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|x| match x.as_f64() {
+                    Some(f) => serde_json::Number::from_f64(snap(f))
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "0".into()),
+                    None => serde_json::to_string(x).unwrap_or_default(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    format!("[{}]", parts.join(","))
+});
 handlebars_helper!(len_helper: |v: Json| match v {
     Value::Array(a) => a.len() as i64,
     Value::Object(o) => o.len() as i64,
@@ -126,6 +153,7 @@ impl Engine {
         registry.register_helper("div", Box::new(div_helper));
         registry.register_helper("or", Box::new(or_helper));
         registry.register_helper("json", Box::new(json_helper));
+        registry.register_helper("numbers", Box::new(numbers_helper));
         registry.register_helper("len", Box::new(len_helper));
         registry.register_helper("hex", Box::new(hex_helper));
         Self { registry }

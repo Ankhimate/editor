@@ -40,6 +40,7 @@ looks fine and has a bone with no name in it.
 | `{{deg r}}` / `{{rad d}}` | Convert angles. The context is already in degrees; `rad` is for engines that want radians |
 | `{{round v places}}` | Trim float noise. Keeps exports diffable |
 | `{{json x}}` | Dump a whole subtree as JSON. The escape hatch when a loop is not worth writing |
+| `{{numbers x places}}` | Like `json` for a number array, but rounded. `json` widens an `f32` to `f64` and prints `0.4000000059604645`; `round` takes one number and cannot be mapped over a list |
 | `{{hex color}}` | `[1,0,0.5,1]` → `ff0080ff` |
 | `{{pad n width}}` | `{{pad 7 4}}` → `0007`, for frame numbers |
 | `{{len x}}` | Length of a list, object or string |
@@ -97,18 +98,45 @@ array order can just walk it.
 `name`, `bones[]`, `constraints[]`, and `entries[]` of
 `{ slot, name, attachment }`.
 
+`slots[]` holds **the same entries grouped by slot** — `{ slot, attachments[] }`,
+each attachment `{ name, attachment }`. Use it for a format that nests
+attachments as `slot: { name: {…} }`: walking the flat `entries[]` emits a slot's
+key once per attachment, which is valid JSON that a parser silently collapses to
+whichever came last. Handlebars cannot group, so the grouping ships.
+
 Every attachment has a `type`; the rest depends on it.
 
 | `type` | Fields |
 |---|---|
-| `region` | `texture`, `x`, `y`, `rotation`, `scale_x`, `scale_y`, `width`, `height`, `uv`, `pivot_x`, `pivot_y`, `sequence` |
-| `mesh` | `texture`, `vertices[]`, `uvs[]`, `triangles[]`, `edges[]`, `weights[]`, `weighted`, `vertex_count`, `linked`, `sequence` |
+| `region` | `texture`, `x`, `y`, `rotation`, `scale_x`, `scale_y`, `width`, `height`, `source_width`, `source_height`, `uv`, `pivot_x`, `pivot_y`, `sequence` |
+| `mesh` | `texture`, `vertices[]`, `uvs[]`, `triangles[]`, `edges[]`, `edges_x2[]`, `weights[]`, `flat_vertices[]`, `weighted`, `vertex_count`, `hull`, `source_width`, `source_height`, `scaled_width`, `scaled_height`, `linked`, `sequence` |
 | `clipping` | `vertices[]`, `vertex_count`, `end_slot` |
 | `bounding_box` | `vertices[]`, `vertex_count`, `weights[]`, `weighted` |
 | `path` | `vertices[]`, `vertex_count`, `closed`, `constant_speed` |
 | `point` | `x`, `y`, `rotation` |
 
 `vertices` and `uvs` are flat: `[x, y, x, y, …]`.
+
+### Sizes, and which one a format wants
+
+A region's `width`/`height` are its size in **rig space**, and `scale_x`/`scale_y`
+the scaling the artist applied. Those two are the rig's own truth and most
+formats — Spine among them — want them passed straight through.
+
+`source_width`/`source_height` are the image file's own pixel size, offered for a
+format that addresses the file instead. On a rig authored against half-resolution
+art the two disagree by the art scale. They fall back to the declared size when
+the asset is unknown, so they are always safe to address.
+
+Do **not** reconstruct a scale by dividing rig size by file size. Odd pixel
+dimensions make it fractional — a genuinely half-scale rig reports 1.9778 on one
+attachment and 2.0 on the next — and it overwrites any scale the artist actually
+authored. This exporter shipped that bug; every region landed slightly off.
+
+A mesh is the other way round. Its vertices are already rig-space, so a format
+declaring a mesh's dimensions alongside them wants `scaled_width`/`scaled_height`
+— the file size multiplied by the rig's art scale — not the file's own numbers.
+`source_width`/`source_height` remain available for the UV-space case.
 
 **Weights come pre-packed**, because restructuring nested arrays is the one thing
 a logic-less template genuinely cannot do:
@@ -117,8 +145,45 @@ a logic-less template genuinely cannot do:
 weights[i] = { count: 2, bones: [ {bone, x, y, weight}, {bone, x, y, weight} ] }
 ```
 
-`x`/`y` repeat the vertex position per influence, which is the convention every
-runtime format uses.
+`x`/`y` are the vertex expressed in **that influence's bone space** — not the
+mesh's, and not repeated across influences.
+
+The rig stores one position per vertex, in the space of the bone its slot hangs
+from, because `core` skins by transforming that single position through each
+bound bone. A runtime that stores weights per influence expects the inverse
+already applied, so skinning is a weighted sum. The context does that conversion:
+`vertex × host_bone.world × influence_bone.world⁻¹`, over the setup pose.
+
+Two bones therefore give a vertex two different coordinates, and they agree only
+when the bones coincide. This shipped writing the shared mesh-space position for
+every influence: a vertex bound to one bone survived, one bound to two bones far
+apart did not, and every weighted mesh on a real rig came out scattered.
+
+`flat_vertices` is the same data as **one flat number array**, bones addressed by
+index: per vertex either a plain `x, y` pair when unweighted, or a count followed
+by `bone_index, x, y, weight` per influence. Several formats specify exactly this
+encoding, and a template can produce neither the flattening nor the name-to-index
+resolution.
+
+`edges` is flat vertex-index pairs; `edges_x2` is the same list with each index
+doubled, for formats that address the flat vertex array by component offset.
+
+When a mesh has **no authored edges** — every mesh imported from a format that
+did not carry them — both fields fall back to the mesh's **boundary**, computed
+from the triangulation: an edge belonging to exactly one triangle is on the
+perimeter, one belonging to two is interior. Emitting nothing instead is read by
+consumers as "the edge structure was dropped in transit"; Spine warns "mesh
+internal edges lost" and rebuilds its own triangulation.
+
+`hull` is how many leading vertices form the outline, which formats storing an
+outline require to come **first** in the array. It is the boundary vertex count
+when the boundary really is the leading run `0..n`, and `vertex_count` otherwise.
+Vertex *order* cannot reveal a perimeter — `editor/src/meshgen.rs` explains why
+guessing from it is unsound — but the triangulation can, so the boundary is
+computed and then *checked* to be a prefix. Ankhimate's tracer builds meshes
+contour-first, so it normally is. When it is not, reporting every vertex as hull
+costs the consumer its interior edges; claiming a hull that slices the mesh in
+the wrong place would be far worse.
 
 ### `skeleton.constraints[]`
 
@@ -144,7 +209,29 @@ Branch with `{{#if (eq type "ik")}}`.
   `attachment`.
 - `deform[]` — `{ slot, attachment, keys[] }`, each key with flat `offsets[]`.
 - `draw_order[]` — `{ time, offsets[] }`.
-- `ik[]`, `transform[]` — constraint channels over time.
+- `ik[]`, `transform[]` — constraint channels over time. `ik[]` is one entry per
+  *channel* (`mix`, `softness`, `bend_direction`).
+- `ik_by_constraint[]` — the same IK timelines merged into one key list per
+  constraint, each key carrying whichever channels are keyed at that time. Use
+  this for the common format that writes `"constraint": [ { time, mix, softness } ]`;
+  a channel with no key at that time is **absent**, not defaulted.
+
+  **`bend_direction` is the exception**: it is always present, seeded from the
+  constraint's own setup value and overwritten where the animation keys it.
+  Ankhimate has no bend-direction timeline in most rigs — which way a chain bends
+  is a property of the constraint — but formats that read it per key default a
+  missing one to "positive". Leaving it absent straightened every backward-
+  bending knee for the length of the animation while the setup pose stayed
+  correct, so the export looked right until it moved.
+
+  A merged key's **`points`** is every channel's control points concatenated —
+  `mix` first, then `softness` — and each channel also has its own
+  `mix_points` / `softness_points`. `points` is present whenever *any* channel is
+  a bezier, with linear channels contributing their straight line: a format that
+  reads one curve array per key reads it positionally, so a short array
+  misassigns every number after the gap. That is exactly the defect that reached
+  Spine as `[error] Invalid curve` — a four-number softness curve written where
+  eight were expected.
 - `events[]` — `{ time, name, int, float, string, audio, volume, balance }`.
 
 Every key has `time` and a `curve`:
@@ -154,6 +241,30 @@ Every key has `time` and a `curve`:
 
 So `{{curve}}` always prints something, and `{{#if curve.handles}}` detects a
 bezier.
+
+Bone and IK keys carry **`has_next`** — whether another key follows on the same
+channel. **Guard every curve with it.** A curve describes the interpolation
+*towards the next key*, so one written on the last key sends the reader looking
+for a frame that does not exist; Spine answers `[error] Invalid curve` and then
+a null-frame NPE. `points` is already absent there, but `curve` is per-key in the
+schema regardless of position, so a template branching on `"stepped"` needs
+`has_next` to know when to stay silent:
+
+```
+{{#if has_next}}{{#if points}}, "curve": {{numbers points 4}}{{else}}{{#if (eq curve "stepped")}}, "curve": "stepped"{{/if}}{{/if}}{{/if}}
+```
+
+Bone and IK keys additionally carry **`points`** — the same bezier as control
+points in *absolute* time/value space, four numbers for a scalar channel and
+eight for a two-axis one (x's pair first, then y's). It is `null` on a linear or
+stepped key, and on the last key of a channel, which has nothing to interpolate
+towards.
+
+Reach for `points` whenever the target format stores curves as absolute
+coordinates — most do. `handles` are normalized 0..1 across the span to the next
+key, so printing them into an absolute slot yields a file that parses, imports,
+and animates *wrongly*. The conversion needs the next key's time and value, and a
+template cannot look ahead inside `{{#each}}`; that is why it is computed here.
 
 **Not exported:** ruler markers (editor-only notes, deliberately withheld) and
 per-bone track offsets — those are *baked into key times* before you see them, so

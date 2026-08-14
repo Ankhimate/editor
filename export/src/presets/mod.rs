@@ -31,6 +31,33 @@ pub const GENERIC_JSON: &str = include_str!("generic_json.json");
 /// a bone format invented on Phaser's behalf.
 pub const PHASER_ATLAS: &str = include_str!("phaser_atlas.json");
 
+/// Spine JSON, targeting the 4.3-shaped schema.
+///
+/// Written from Esoteric Software's published format documentation plus the
+/// **observed shape of a 4.3 export** — the same clean-room footing as every
+/// other preset here (PLAN §0). No Spine runtime source and no other editor's
+/// Spine exporter was consulted; several of the latter are GPL-3.0 and this is
+/// exactly the artefact where copying would be both tempting and detectable.
+///
+/// What 4.3 changed that this template depends on:
+///
+/// - constraints live in **one `constraints` array** tagged by `"type"`, not in
+///   separate `ik`/`transform`/`path` blocks;
+/// - bones carry `inherit`, not `transform`;
+/// - slot colour timelines are `rgba`, and bone rotate keys use `value`;
+/// - a bezier key's `curve` is four (or eight, for two-axis channels) numbers in
+///   **absolute** time/value space. Ankhimate stores handles normalized across
+///   the span to the next key, so the context computes the absolute points —
+///   `context::control_points`. A template cannot: it cannot see the next key.
+///
+/// Defaults are omitted aggressively, which is what makes the output diffable
+/// against a hand-authored file rather than a wall of zeroes.
+///
+/// The export is **partial by design** — see `docs/export-spine.md` for what
+/// does not cross and why. A format that silently drops half a rig is worse
+/// than one that says which half.
+pub const SPINE_JSON: &str = include_str!("spine_json.json");
+
 /// Every preset shipped with the editor.
 ///
 /// # Why there is no Godot preset here
@@ -45,7 +72,7 @@ pub const PHASER_ATLAS: &str = include_str!("phaser_atlas.json");
 /// `.tres`, observe the output, and write a template from that. Until someone
 /// does that, a user targeting Godot has the same tool we would have used.
 pub fn builtin() -> Vec<Preset> {
-    [ANKHIMATE_RUNTIME, GENERIC_JSON, PHASER_ATLAS]
+    [ANKHIMATE_RUNTIME, GENERIC_JSON, PHASER_ATLAS, SPINE_JSON]
         .iter()
         .filter_map(|text| Preset::from_json(text).ok())
         .collect()
