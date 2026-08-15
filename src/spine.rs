@@ -929,10 +929,19 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
                     report.dangling("transform constraint bones", s(tc, "name").unwrap_or("?"));
                     continue;
                 }
-                // `mixY` is omitted when it equals `mixX`, so it inherits rather
-                // than falling back to 1 — otherwise a constraint switched off on
-                // X would still drag its bones along Y.
-                let mix_x = f(tc, "mixX", 1.0);
+                // An omitted mix is **off**, not full.
+                //
+                // A file writes only the channels its constraint drives, so
+                // defaulting the rest to 1 turns a constraint the artist
+                // switched off into one that drags its bones along every axis
+                // it never mentioned. Spineboy's four `aim-*` constraints say
+                // `mixRotate: 0` and nothing else; read with 1.0 defaults they
+                // pulled the torso, head and gun arm toward a crosshair parked
+                // 645 units away, in every animation.
+                //
+                // `mixY` is the exception: it is omitted when it *equals*
+                // `mixX`, so it inherits rather than falling back to 0.
+                let mix_x = f(tc, "mixX", 0.0);
                 let tc_name = s(tc, "name").unwrap_or("transform").to_string();
                 let cid = skel.add_constraint(Constraint::Transform(TransformConstraint {
                     name: tc_name.clone(),
@@ -944,10 +953,13 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
                         scale: glam::vec2(1.0 + f(tc, "scaleX", 0.0), 1.0 + f(tc, "scaleY", 0.0)),
                         shear: glam::vec2(0.0, f(tc, "shearY", 0.0).to_radians()),
                     },
-                    mix_rotate: f(tc, "mixRotate", 1.0),
-                    mix_translate: mix_x.max(f(tc, "mixY", mix_x)),
-                    mix_scale: f(tc, "mixScaleX", 1.0),
-                    mix_shear: f(tc, "mixShearY", 1.0),
+                    mix_rotate: f(tc, "mixRotate", 0.0),
+                    // One mix for both axes here, so a constraint driving only
+                    // one of them takes the one it drives. `shoulder` mirrors a
+                    // shoulder with `mixX: -1` and no `mixY`.
+                    mix_translate: f(tc, "mixY", mix_x),
+                    mix_scale: f(tc, "mixScaleX", 0.0),
+                    mix_shear: f(tc, "mixShearY", 0.0),
                     local: tc.get("local").and_then(|b| b.as_bool()).unwrap_or(false),
                     relative: tc
                         .get("relative")
@@ -1261,14 +1273,14 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
                     frames,
                     0,
                     |k| {
-                        let mix_x = f(k, "mixX", 1.0);
+                        // Same rule as the setup values: a channel a key does
+                        // not mention is off, and `mixY` follows `mixX`.
+                        let mix_x = f(k, "mixX", 0.0);
                         [
-                            f(k, "mixRotate", 1.0),
-                            // Same inheritance as the setup values: an omitted
-                            // `mixY` follows `mixX` rather than falling back to 1.
-                            mix_x.max(f(k, "mixY", mix_x)),
-                            f(k, "mixScaleX", 1.0),
-                            f(k, "mixShearY", 1.0),
+                            f(k, "mixRotate", 0.0),
+                            f(k, "mixY", mix_x),
+                            f(k, "mixScaleX", 0.0),
+                            f(k, "mixShearY", 0.0),
                         ]
                     },
                     |k| f(k, "mixRotate", 1.0),

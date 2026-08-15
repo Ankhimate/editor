@@ -83,6 +83,51 @@ fn both_constraint_layouts_are_read() {
     assert_eq!(loaded.skeleton.constraints.len(), 2);
 }
 
+/// A transform channel the file does not mention is **off**, not full.
+///
+/// A Spine file writes only the channels its constraint drives. Defaulting the
+/// rest to 1 turns a constraint the artist switched off into one that drags its
+/// bones along every axis it never mentioned.
+///
+/// Spineboy's four `aim-*` constraints say `mixRotate: 0` and nothing else. Read
+/// with 1.0 defaults they pulled the torso, head and gun arm toward a crosshair
+/// parked 645 units away — in every animation, on a rig whose every stored key
+/// matched the source exactly.
+#[test]
+fn an_unmentioned_transform_mix_is_off() {
+    let doc = r#"{
+      "skeleton": { "spine": "4.3.23" },
+      "bones": [{ "name": "root" }, { "name": "arm", "parent": "root" }],
+      "constraints": [
+        { "type": "transform", "name": "aim", "source": "root",
+          "bones": ["arm"], "mixRotate": 0 },
+        { "type": "transform", "name": "shoulder", "source": "root",
+          "bones": ["arm"], "mixX": -1 }
+      ]
+    }"#;
+    let loaded = spine::read(doc, Images::None, "rig").expect("reads");
+    let of = |name: &str| {
+        loaded
+            .skeleton
+            .constraints
+            .values()
+            .find_map(|c| match c {
+                ankhimate_core::constraints::Constraint::Transform(t) if t.name == name => {
+                    Some((t.mix_rotate, t.mix_translate, t.mix_scale, t.mix_shear))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no constraint named {name}"))
+    };
+
+    // Every channel off: the constraint does nothing, which is what the file says.
+    assert_eq!(of("aim"), (0.0, 0.0, 0.0, 0.0));
+
+    // Only the channel it names is live — and `mixY` inherits `mixX` rather
+    // than falling back, so a shoulder mirroring on X does not also move on Y.
+    assert_eq!(of("shoulder"), (0.0, -1.0, 0.0, 0.0));
+}
+
 /// A constraint kind this model has no equivalent for is named, not ignored.
 #[test]
 fn an_unsupported_constraint_is_reported_rather_than_dropped() {
