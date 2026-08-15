@@ -260,15 +260,14 @@ pub enum Timeline {
         constraint: ConstraintId,
         keys: Vec<Key<f32>>,
     },
-    /// Absolute per-channel mixes for a transform constraint (T-501), in the
-    /// order `[rotate, translate, scale, shear]`.
+    /// Absolute per-channel mixes for a transform constraint (T-501).
     ///
-    /// One timeline rather than four because the channels are almost always
-    /// keyed together — "the constraint fades in" means all of it — and four
-    /// dopesheet rows per constraint would bury the bone rows that matter.
+    /// One timeline rather than one per channel because the channels are almost
+    /// always keyed together — "the constraint fades in" means all of it — and a
+    /// row per channel would bury the bone rows that matter.
     TransformConstraintMix {
         constraint: ConstraintId,
-        keys: Vec<Key<[f32; 4]>>,
+        keys: Vec<Key<crate::constraints::TransformMix>>,
     },
     /// Per-vertex offsets from the attachment's setup vertices.
     Deform {
@@ -703,6 +702,15 @@ impl Sampleable for Vec<glam::Vec2> {
             }
         }
         out
+    }
+}
+
+impl Sampleable for crate::constraints::TransformMix {
+    /// Per-channel, per-axis. A mix has its own `lerp` because it is seven
+    /// numbers with names, not an array — the shape that let a translate and a
+    /// scale be swapped by index when this was `[f32; 4]`.
+    fn lerp(a: &Self, b: &Self, t: f32) -> Self {
+        a.lerp(b, t)
     }
 }
 
