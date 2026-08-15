@@ -159,6 +159,30 @@ fn unflatten_vec2(values: &[f32]) -> Vec<glam::Vec2> {
         .collect()
 }
 
+/// Core mix → disk mix. The one place the seven fields are named in this
+/// direction, so a translate and a scale cannot be swapped by a second copy.
+fn mix_to_schema(m: ankhimate_core::constraints::TransformMix) -> schema::TransformMix {
+    schema::TransformMix {
+        rotate: m.rotate,
+        translate_x: m.translate.x,
+        translate_y: m.translate.y,
+        scale_x: m.scale.x,
+        scale_y: m.scale.y,
+        shear_x: m.shear.x,
+        shear_y: m.shear.y,
+    }
+}
+
+/// Disk mix → core mix.
+fn mix_from_schema(m: schema::TransformMix) -> ankhimate_core::constraints::TransformMix {
+    ankhimate_core::constraints::TransformMix {
+        rotate: m.rotate,
+        translate: glam::vec2(m.translate_x, m.translate_y),
+        scale: glam::vec2(m.scale_x, m.scale_y),
+        shear: glam::vec2(m.shear_x, m.shear_y),
+    }
+}
+
 fn interp_to_schema(interp: anim::Interp) -> schema::Interp {
     match interp {
         anim::Interp::Linear => schema::Interp::Linear,
@@ -322,7 +346,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 stretch: ik.stretch,
                 stretch_limit: ik.stretch_limit,
                 stiffness: ik.stiffness,
-                mixes: None,
+                transform_mix: None,
                 offsets: None,
                 local: false,
                 relative: false,
@@ -344,7 +368,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 stretch: false,
                 stretch_limit: 1.1,
                 stiffness: 0.0,
-                mixes: Some([tc.mix_rotate, tc.mix_translate, tc.mix_scale, tc.mix_shear]),
+                transform_mix: Some(mix_to_schema(tc.mix)),
                 // Angles are degrees at the document boundary (ADR 0002), the
                 // same as every rotation key.
                 offsets: Some([
@@ -379,7 +403,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 stretch: false,
                 stretch_limit: 1.1,
                 stiffness: 0.0,
-                mixes: None,
+                transform_mix: None,
                 offsets: None,
                 local: false,
                 relative: false,
@@ -402,7 +426,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
                 stretch: false,
                 stretch_limit: 1.1,
                 stiffness: 0.0,
-                mixes: None,
+                transform_mix: None,
                 offsets: None,
                 local: false,
                 relative: false,
@@ -789,10 +813,11 @@ fn timeline_to_schema(
                 constraint: constraint_name(*constraint),
                 keys: keys
                     .iter()
-                    .map(|k| schema::ColorKey {
+                    .map(|k| schema::MixKey {
                         time: k.time,
-                        value: k.value,
+                        value: mix_to_schema(k.value),
                         interp: interp_to_schema(k.interp),
+                        extra: Default::default(),
                     })
                     .collect(),
             }
@@ -980,7 +1005,12 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
         // move.
         let constraint = match c.kind.as_str() {
             "transform" => {
-                let mixes = c.mixes.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+                // A constraint with no mix at all is the "look at" default, the
+                // same shape `TransformConstraint::rotation_only` builds.
+                let m = c.transform_mix.unwrap_or(schema::TransformMix {
+                    rotate: 1.0,
+                    ..Default::default()
+                });
                 let o = c.offsets.unwrap_or([0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
                 Constraint::Transform(TransformConstraint {
                     name: c.name.clone(),
@@ -992,10 +1022,7 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
                         scale: glam::vec2(o[3], o[4]),
                         shear: glam::vec2(o[5].to_radians(), o[6].to_radians()),
                     },
-                    mix_rotate: mixes[0],
-                    mix_translate: mixes[1],
-                    mix_scale: mixes[2],
-                    mix_shear: mixes[3],
+                    mix: mix_from_schema(m),
                     local: c.local,
                     relative: c.relative,
                 })
@@ -1458,7 +1485,7 @@ fn timeline_from_schema(
                     .iter()
                     .map(|k| anim::Key {
                         time: k.time,
-                        value: k.value,
+                        value: mix_from_schema(k.value),
                         interp: interp_from_schema(k.interp),
                     })
                     .collect(),

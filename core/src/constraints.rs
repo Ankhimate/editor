@@ -176,16 +176,88 @@ pub struct TransformConstraint {
     /// Added to the target's transform before mixing — the "offset" that lets a
     /// head track a target while staying tilted 10° from it.
     pub offsets: crate::math::Transform,
-    pub mix_rotate: f32,
-    pub mix_translate: f32,
-    pub mix_scale: f32,
-    pub mix_shear: f32,
+    /// How much of the target each channel contributes.
+    pub mix: TransformMix,
     /// Compare local transforms instead of world ones.
     #[serde(default)]
     pub local: bool,
     /// Add the target's transform to the bone's own rather than replacing it.
     #[serde(default)]
     pub relative: bool,
+}
+
+/// How much of the target's transform each channel of a constraint contributes.
+///
+/// **Every channel mixes per axis where it has axes.** Rotation is one angle so
+/// it stays a scalar; translate, scale and shear each have two, so each gets
+/// two. A constraint can follow its target horizontally and ignore it
+/// vertically, or take its x-scale alone.
+///
+/// The uniform rule is the point. Spine mixes rotate with one number, translate
+/// and scale with two, and shear with one — an asymmetry that has to be
+/// memorised rather than derived, and one that leaves shear's second axis with
+/// no mix at all. `Transform::shear` is a `Vec2` here, so the axis exists and
+/// now so does its mix.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TransformMix {
+    /// Rotation has one axis, so one number.
+    pub rotate: f32,
+    pub translate: glam::Vec2,
+    pub scale: glam::Vec2,
+    pub shear: glam::Vec2,
+}
+
+impl TransformMix {
+    /// Nothing contributed on any channel — the constraint is inert.
+    pub const NONE: Self = Self {
+        rotate: 0.0,
+        translate: glam::Vec2::ZERO,
+        scale: glam::Vec2::ZERO,
+        shear: glam::Vec2::ZERO,
+    };
+
+    /// Rotation fully, nothing else — the common "look at" case.
+    pub const ROTATION_ONLY: Self = Self {
+        rotate: 1.0,
+        ..Self::NONE
+    };
+
+    /// The same amount on every channel and both axes.
+    ///
+    /// What a single-mix model meant, so it is also what a file written before
+    /// the axes were split migrates to.
+    pub fn uniform(amount: f32) -> Self {
+        Self {
+            rotate: amount,
+            translate: glam::Vec2::splat(amount),
+            scale: glam::Vec2::splat(amount),
+            shear: glam::Vec2::splat(amount),
+        }
+    }
+
+    /// Does any channel contribute anything?
+    pub fn is_any(&self) -> bool {
+        self.rotate != 0.0
+            || self.translate != glam::Vec2::ZERO
+            || self.scale != glam::Vec2::ZERO
+            || self.shear != glam::Vec2::ZERO
+    }
+
+    /// Blend toward `other` by `alpha`, for crossfading animated mixes.
+    pub fn lerp(&self, other: &Self, alpha: f32) -> Self {
+        Self {
+            rotate: self.rotate + (other.rotate - self.rotate) * alpha,
+            translate: self.translate.lerp(other.translate, alpha),
+            scale: self.scale.lerp(other.scale, alpha),
+            shear: self.shear.lerp(other.shear, alpha),
+        }
+    }
+}
+
+impl Default for TransformMix {
+    fn default() -> Self {
+        Self::NONE
+    }
 }
 
 impl TransformConstraint {
@@ -196,10 +268,7 @@ impl TransformConstraint {
             target,
             bones,
             offsets: crate::math::Transform::default(),
-            mix_rotate: 1.0,
-            mix_translate: 0.0,
-            mix_scale: 0.0,
-            mix_shear: 0.0,
+            mix: TransformMix::ROTATION_ONLY,
             local: false,
             relative: false,
         }
@@ -207,11 +276,7 @@ impl TransformConstraint {
 
     /// Does any channel do anything?
     pub fn has_effect(&self) -> bool {
-        !self.bones.is_empty()
-            && (self.mix_rotate != 0.0
-                || self.mix_translate != 0.0
-                || self.mix_scale != 0.0
-                || self.mix_shear != 0.0)
+        !self.bones.is_empty() && self.mix.is_any()
     }
 }
 

@@ -53,9 +53,9 @@ pub struct Pose {
     pub deforms: HashMap<(SlotId, String), Vec<glam::Vec2>>,
     /// Animated IK mix overrides. Absent means "use the constraint's own `mix`".
     pub ik_mix: SecondaryMap<ConstraintId, f32>,
-    /// Animated transform-constraint mixes, `[rotate, translate, scale, shear]`
-    /// (T-501). Absent means "use the constraint's own values".
-    pub transform_mix: SecondaryMap<ConstraintId, [f32; 4]>,
+    /// Animated transform-constraint mixes (T-501). Absent means "use the
+    /// constraint's own values".
+    pub transform_mix: SecondaryMap<ConstraintId, crate::constraints::TransformMix>,
     /// Animated IK bend direction and softness overrides (T-504).
     pub ik_bend_direction: SecondaryMap<ConstraintId, f32>,
     pub ik_softness: SecondaryMap<ConstraintId, f32>,
@@ -514,21 +514,15 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                             .copied()
                             .or_else(|| {
                                 skel.constraints.get(*constraint).and_then(|c| match c {
-                                    Constraint::Transform(tc) => Some([
-                                        tc.mix_rotate,
-                                        tc.mix_translate,
-                                        tc.mix_scale,
-                                        tc.mix_shear,
-                                    ]),
+                                    Constraint::Transform(tc) => Some(tc.mix),
                                     Constraint::Ik(_)
                                     | Constraint::Physics(_)
                                     | Constraint::Path(_) => None,
                                 })
                             })
-                            .unwrap_or([0.0; 4]);
-                        let blended =
-                            std::array::from_fn(|i| current[i] + (mixes[i] - current[i]) * alpha);
-                        out.transform_mix.insert(*constraint, blended);
+                            .unwrap_or(crate::constraints::TransformMix::NONE);
+                        out.transform_mix
+                            .insert(*constraint, current.lerp(&mixes, alpha));
                     }
                 }
                 Timeline::Deform {
@@ -662,16 +656,11 @@ fn apply_constraints(
             Constraint::Transform(tc) => {
                 // Per-channel mix overrides from timelines, falling back to the
                 // authored values.
-                let mixes = out.transform_mix.get(id).copied().unwrap_or([
-                    tc.mix_rotate,
-                    tc.mix_translate,
-                    tc.mix_scale,
-                    tc.mix_shear,
-                ]);
-                if mixes.iter().all(|m| *m == 0.0) || tc.bones.is_empty() {
+                let mix = out.transform_mix.get(id).copied().unwrap_or(tc.mix);
+                if !mix.is_any() || tc.bones.is_empty() {
                     continue;
                 }
-                apply_transform_constraint(skel, out, tc, mixes);
+                apply_transform_constraint(skel, out, tc, mix);
             }
             Constraint::Physics(p) => {
                 // Without a `PhysicsState` the constraint applies its rest
@@ -699,7 +688,7 @@ fn apply_transform_constraint(
     skel: &Skeleton,
     out: &mut Pose,
     tc: &crate::constraints::TransformConstraint,
-    [mix_rotate, mix_translate, mix_scale, mix_shear]: [f32; 4],
+    mix: crate::constraints::TransformMix,
 ) {
     if skel.bones.get(tc.target).is_none() {
         return;
@@ -752,14 +741,14 @@ fn apply_transform_constraint(
         };
         let mut next = local;
 
-        if mix_rotate != 0.0 {
+        if mix.rotate != 0.0 {
             // Shortest-arc, so a constraint across the ±π boundary turns the
             // short way — the same defect that broke IK blending.
-            let delta = wrap_angle(goal.rotation - current.rotation) * mix_rotate;
+            let delta = wrap_angle(goal.rotation - current.rotation) * mix.rotate;
             next.rotation = wrap_angle(next.rotation + delta);
         }
-        if mix_translate != 0.0 {
-            let delta = (goal.position - current.position) * mix_translate;
+        if mix.translate != glam::Vec2::ZERO {
+            let delta = goal.position - current.position;
             // A world-space delta has to be rotated into the parent's frame
             // before it can be added to a local position, or a constrained bone
             // under a rotated parent slides off at an angle.
@@ -768,17 +757,22 @@ fn apply_transform_constraint(
             } else {
                 parent_inverse_direction(skel, out, bone, delta)
             };
-            next.position += delta;
+            // Masked **after** the frame conversion, so `translate.x` means
+            // "along this bone's own x" — the axis its gizmo draws. Masking the
+            // world-space delta instead would make it "along world x", which
+            // turns under a rotated parent and matches neither the gizmo nor
+            // any other editor.
+            next.position += delta * mix.translate;
         }
-        if mix_scale != 0.0 {
+        if mix.scale != glam::Vec2::ZERO {
             let delta = goal.scale - current.scale;
-            next.scale += delta * mix_scale;
+            next.scale += delta * mix.scale;
         }
-        if mix_shear != 0.0 {
+        if mix.shear != glam::Vec2::ZERO {
             let delta = glam::Vec2::new(
                 wrap_angle(goal.shear.x - current.shear.x),
                 wrap_angle(goal.shear.y - current.shear.y),
-            ) * mix_shear;
+            ) * mix.shear;
             next.shear += delta;
         }
 
@@ -1157,7 +1151,7 @@ fn apply_fabrik(
 mod tests {
     use super::*;
     use crate::animation::Key;
-    use crate::constraints::{IkConstraint, TransformConstraint};
+    use crate::constraints::{IkConstraint, TransformConstraint, TransformMix};
     use crate::skeleton::Bone;
 
     const EPS: f32 = 1e-4;
@@ -1945,7 +1939,10 @@ mod tests {
     fn a_rotation_constraint_at_half_mix_lands_halfway() {
         let (mut skel, target, driven) = target_and_driven();
         skel.add_constraint(Constraint::Transform(TransformConstraint {
-            mix_rotate: 0.5,
+            mix: TransformMix {
+                rotate: 0.5,
+                ..TransformMix::NONE
+            },
             ..TransformConstraint::rotation_only("look", target, vec![driven])
         }));
 
@@ -1966,7 +1963,10 @@ mod tests {
         for (mix, expected) in [(0.0, 0.0), (1.0, std::f32::consts::FRAC_PI_2)] {
             let (mut skel, target, driven) = target_and_driven();
             skel.add_constraint(Constraint::Transform(TransformConstraint {
-                mix_rotate: mix,
+                mix: TransformMix {
+                    rotate: mix,
+                    ..TransformMix::NONE
+                },
                 ..TransformConstraint::rotation_only("look", target, vec![driven])
             }));
             let mut pose = Pose::new();
@@ -2176,12 +2176,12 @@ mod tests {
                 keys: vec![
                     Key {
                         time: 0.0,
-                        value: [0.0; 4],
+                        value: TransformMix::NONE,
                         interp: crate::animation::Interp::Linear,
                     },
                     Key {
                         time: 1.0,
-                        value: [1.0, 0.0, 0.0, 0.0],
+                        value: TransformMix::ROTATION_ONLY,
                         interp: crate::animation::Interp::Linear,
                     },
                 ],
@@ -2230,8 +2230,11 @@ mod tests {
         });
         let driven = skel.add_bone(bone("driven", Some(parent)));
         skel.add_constraint(Constraint::Transform(TransformConstraint {
-            mix_rotate: 0.0,
-            mix_translate: 1.0,
+            mix: TransformMix {
+                rotate: 0.0,
+                translate: glam::Vec2::ONE,
+                ..TransformMix::NONE
+            },
             ..TransformConstraint::rotation_only("follow", target, vec![driven])
         }));
 
@@ -2243,6 +2246,130 @@ mod tests {
             "driven should sit on the target, got {world:?}"
         );
     }
+    /// A per-axis translate mix masks the bone's **own** axes, not the world's.
+    ///
+    /// The delta is computed in world space and then rotated into the parent's
+    /// frame, so there are two places to apply the mask and they disagree under
+    /// a rotated parent. Masking after the conversion makes `translate.x` mean
+    /// "along this bone's x" — the axis its gizmo draws, and what Spine does.
+    ///
+    /// Here the parent is turned 90°, so the bone's local x runs along world
+    /// **y**. Following the target on x alone therefore moves the bone in world
+    /// y, not world x. Masking the world-space delta instead would move it in
+    /// world x and this test would catch it.
+    #[test]
+    fn a_per_axis_translate_mix_masks_the_bones_own_axes() {
+        let mut skel = Skeleton::new();
+        let target = skel.add_bone(Bone {
+            local_transform: Transform {
+                position: glam::vec2(50.0, 30.0),
+                ..Transform::default()
+            },
+            ..bone("target", None)
+        });
+        let parent = skel.add_bone(Bone {
+            local_transform: Transform {
+                rotation: std::f32::consts::FRAC_PI_2,
+                ..Transform::default()
+            },
+            ..bone("parent", None)
+        });
+        let driven = skel.add_bone(bone("driven", Some(parent)));
+        skel.add_constraint(Constraint::Transform(TransformConstraint {
+            mix: TransformMix {
+                rotate: 0.0,
+                translate: glam::vec2(1.0, 0.0),
+                ..TransformMix::NONE
+            },
+            ..TransformConstraint::rotation_only("follow", target, vec![driven])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        let world = pose.world_position(driven);
+        // The parent's rotation maps local +x onto world +y, so the whole of the
+        // target's offset arrives on world y and none on world x.
+        assert!(
+            world.x.abs() < 1e-2,
+            "world x should be untouched, got {world:?}"
+        );
+        assert!(
+            (world.y - 30.0).abs() < 1e-2,
+            "the driven axis follows the target, got {world:?}"
+        );
+    }
+
+    /// Scale mixes per axis, which is half of what Spine can say.
+    ///
+    /// Spine has `mixScaleX` and `mixScaleY`, so this is parity there — but the
+    /// importer only ever read the x one, silently dropping `mixScaleY`. Both
+    /// are distinct channels now.
+    #[test]
+    fn scale_mixes_each_axis_on_its_own() {
+        let mut skel = Skeleton::new();
+        let target = skel.add_bone(Bone {
+            local_transform: Transform {
+                scale: glam::vec2(3.0, 5.0),
+                ..Transform::default()
+            },
+            ..bone("target", None)
+        });
+        let driven = skel.add_bone(bone("driven", None));
+        skel.add_constraint(Constraint::Transform(TransformConstraint {
+            mix: TransformMix {
+                rotate: 0.0,
+                // x fully, y not at all.
+                scale: glam::vec2(1.0, 0.0),
+                ..TransformMix::NONE
+            },
+            ..TransformConstraint::rotation_only("follow", target, vec![driven])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        let scale = pose.world_decomposed(driven).scale;
+        assert!((scale.x - 3.0).abs() < 1e-3, "x follows: {scale:?}");
+        assert!((scale.y - 1.0).abs() < 1e-3, "y is left alone: {scale:?}");
+    }
+
+    /// Shear mixes per axis, and `shear.x` is an axis Spine cannot mix at all.
+    ///
+    /// Spine writes `mixShearY` and has no field for x. `Transform::shear` is a
+    /// `Vec2` here, so the axis exists — and now so does its mix.
+    ///
+    /// Compared in **local** space on purpose: `Affine2::decompose` folds
+    /// `shear.x` into the x-axis angle, so a world-space constraint cannot tell
+    /// it from rotation. `local: true` compares the bones' own transforms, where
+    /// the two are still distinct.
+    #[test]
+    fn shear_mixes_each_axis_on_its_own() {
+        let mut skel = Skeleton::new();
+        let target = skel.add_bone(Bone {
+            local_transform: Transform {
+                shear: glam::vec2(0.4, 0.6),
+                ..Transform::default()
+            },
+            ..bone("target", None)
+        });
+        let driven = skel.add_bone(bone("driven", None));
+        skel.add_constraint(Constraint::Transform(TransformConstraint {
+            mix: TransformMix {
+                rotate: 0.0,
+                // x fully, y not at all.
+                shear: glam::vec2(1.0, 0.0),
+                ..TransformMix::NONE
+            },
+            local: true,
+            ..TransformConstraint::rotation_only("follow", target, vec![driven])
+        }));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        let shear = pose.locals.get(driven).expect("driven is posed").shear;
+        assert!((shear.x - 0.4).abs() < 1e-3, "x follows: {shear:?}");
+        assert!(shear.y.abs() < 1e-3, "y is left alone: {shear:?}");
+    }
+
     // ── IK completeness (T-504) ──────────────────────────────────────────
 
     /// A chain of `n` bones, each 10 long, laid end to end along +X, plus a

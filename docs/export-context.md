@@ -191,13 +191,54 @@ Always `name`, `type` (`ik` / `transform` / `physics` / `path`), `target`,
 `bones[]`, `mix`. Then, by type:
 
 - **ik** — `bend_direction`, `softness`, `stretch`, `stretch_limit`, `stiffness`
-- **transform** — `mixes {rotate, translate, scale, shear}`,
+- **transform** — `mixes`, `drives` (see below),
   `offsets {x, y, rotation, scale_x, scale_y, shear_x, shear_y}`, `local`, `relative`
 - **physics** — `physics {inertia, strength, damping, mass}`,
   `forces {wind_x, wind_y, gravity_x, gravity_y}`, `channels {rotate, translate}`
 - **path** — `slot`, `path {position, spacing, mix_rotate, mix_translate}`
 
 Branch with `{{#if (eq type "ik")}}`.
+
+### A transform constraint's mixes are per axis
+
+**Every channel mixes per axis wherever it has axes.** Rotation is one angle, so
+one number; translate, scale and shear have two each:
+
+```
+mixes { rotate,
+        translate_x, translate_y,
+        scale_x, scale_y,
+        shear_x, shear_y,
+        translate, scale, shear }
+```
+
+The uniform rule is the point. Spine mixes rotate with one number, translate and
+scale with two, and shear with one — an asymmetry that has to be memorised, and
+one that leaves shear's second axis with no mix at all. A constraint here can
+follow its target horizontally and ignore it vertically, mix `scaleX` without
+`scaleY`, or shear on x — none of which Spine can express.
+
+The three unsuffixed names — `translate`, `scale`, `shear` — are for a format
+with one mix per channel. Each reports the **driven** axis: the non-zero one when
+the axes differ, so a template printing `mixes.translate` into a single slot
+still gets the number that makes the constraint work. They are also what a
+template written before the axes were split already addresses, which is why
+splitting them needed no `CONTEXT_VERSION` bump.
+
+**`drives`** mirrors the same set as booleans — `rotate`, `translate_x`,
+`translate_y`, `scale_x`, … plus the unsuffixed `translate` / `scale` / `shear`
+meaning "either axis", and `any` for the whole constraint. Guard each field you
+emit with its own flag:
+
+```
+{{#if drives.translate_x}}, "mixX": {{round mixes.translate_x 4}}{{/if}}
+```
+
+A mix of 0 contributes nothing, so a channel the artist left alone must not be
+declared. Formats that name the driven channels separately from the amounts —
+Spine among them — treat a named channel as switched *on*: declaring one at 0
+made a constraint copy its target's scale and shear and stretched every bone it
+governed.
 
 Each constraint also carries **`not_last`** — whether another constraint of a
 kind this context knows about follows it. Use it as the separator when emitting

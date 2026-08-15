@@ -216,7 +216,7 @@ fn summary(state: &AppState, constraint: &Constraint) -> String {
             "transform · {} bone(s) → {} · rot {:.0}%",
             tc.bones.len(),
             bone_name(tc.target),
-            tc.mix_rotate * 100.0
+            tc.mix.rotate * 100.0
         ),
         Constraint::Physics(p) => format!("physics · {}", bone_name(p.bone)),
         Constraint::Path(p) => format!("path · {} bone(s)", p.bones.len()),

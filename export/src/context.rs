@@ -770,10 +770,30 @@ fn constraint(c: &schema::Constraint) -> Value {
             map.insert("stiffness".into(), json!(c.stiffness));
         }
         "transform" => {
-            if let Some(m) = c.mixes {
+            if let Some(m) = c.transform_mix {
+                // Per axis, plus the whole-channel names a template written
+                // before the axes were split already addresses.
+                //
+                // Those older names report the driven axis rather than
+                // disappearing: a template printing `mixes.translate` into a
+                // format with one number per channel still gets the number that
+                // makes the constraint work. Keeping them is why this change
+                // needs no `CONTEXT_VERSION` bump.
+                let driven = |x: f32, y: f32| if y == 0.0 { x } else { y };
                 map.insert(
                     "mixes".into(),
-                    json!({ "rotate": m[0], "translate": m[1], "scale": m[2], "shear": m[3] }),
+                    json!({
+                        "rotate": m.rotate,
+                        "translate": driven(m.translate_x, m.translate_y),
+                        "scale": driven(m.scale_x, m.scale_y),
+                        "shear": driven(m.shear_x, m.shear_y),
+                        "translate_x": m.translate_x,
+                        "translate_y": m.translate_y,
+                        "scale_x": m.scale_x,
+                        "scale_y": m.scale_y,
+                        "shear_x": m.shear_x,
+                        "shear_y": m.shear_y,
+                    }),
                 );
                 // Which channels the constraint actually drives.
                 //
@@ -786,16 +806,31 @@ fn constraint(c: &schema::Constraint) -> Value {
                 // exporter declared all four unconditionally and did exactly
                 // that.
                 //
-                // A template cannot build a conditional object from four floats,
-                // so the decision ships as data.
+                // A template cannot build a conditional object from floats, so
+                // the decision ships as data. The per-channel flags mean "either
+                // axis", so a format with one mix per channel still asks one
+                // question.
+                let any = m.rotate != 0.0
+                    || m.translate_x != 0.0
+                    || m.translate_y != 0.0
+                    || m.scale_x != 0.0
+                    || m.scale_y != 0.0
+                    || m.shear_x != 0.0
+                    || m.shear_y != 0.0;
                 map.insert(
                     "drives".into(),
                     json!({
-                        "rotate": m[0] != 0.0,
-                        "translate": m[1] != 0.0,
-                        "scale": m[2] != 0.0,
-                        "shear": m[3] != 0.0,
-                        "any": m.iter().any(|v| *v != 0.0),
+                        "rotate": m.rotate != 0.0,
+                        "translate": m.translate_x != 0.0 || m.translate_y != 0.0,
+                        "scale": m.scale_x != 0.0 || m.scale_y != 0.0,
+                        "shear": m.shear_x != 0.0 || m.shear_y != 0.0,
+                        "translate_x": m.translate_x != 0.0,
+                        "translate_y": m.translate_y != 0.0,
+                        "scale_x": m.scale_x != 0.0,
+                        "scale_y": m.scale_y != 0.0,
+                        "shear_x": m.shear_x != 0.0,
+                        "shear_y": m.shear_y != 0.0,
+                        "any": any,
                     }),
                 );
             }
@@ -947,12 +982,26 @@ fn animation(anim: &schema::Animation, project: &Project) -> Value {
             schema::Timeline::TransformConstraintMix { constraint, keys } => {
                 transform.push(json!({
                     "constraint": constraint,
-                    "keys": keys.iter().map(|k| json!({
-                        "time": k.time,
-                        "rotate": k.value[0], "translate": k.value[1],
-                        "scale": k.value[2], "shear": k.value[3],
-                        "curve": interp(&k.interp),
-                    })).collect::<Vec<_>>(),
+                    // Per axis, with the whole-channel names kept beside them
+                    // for a template written before the axes were split. See
+                    // the setup-value emission in `constraint` for why.
+                    "keys": keys.iter().map(|k| {
+                        let driven = |x: f32, y: f32| if y == 0.0 { x } else { y };
+                        json!({
+                            "time": k.time,
+                            "rotate": k.value.rotate,
+                            "translate": driven(k.value.translate_x, k.value.translate_y),
+                            "scale": driven(k.value.scale_x, k.value.scale_y),
+                            "shear": driven(k.value.shear_x, k.value.shear_y),
+                            "translate_x": k.value.translate_x,
+                            "translate_y": k.value.translate_y,
+                            "scale_x": k.value.scale_x,
+                            "scale_y": k.value.scale_y,
+                            "shear_x": k.value.shear_x,
+                            "shear_y": k.value.shear_y,
+                            "curve": interp(&k.interp),
+                        })
+                    }).collect::<Vec<_>>(),
                 }))
             }
             schema::Timeline::Deform {

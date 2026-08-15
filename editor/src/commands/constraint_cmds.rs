@@ -204,17 +204,14 @@ impl EditCommand for RemoveConstraint {
 /// Everything editable about a transform constraint, as one value.
 ///
 /// One command for the whole struct rather than one per field: the fields are
-/// edited together in one inspector section, and a drag across four mix sliders
-/// should not leave four entries in the undo stack.
+/// edited together in one inspector section, and a drag across the mix sliders
+/// should not leave one entry per slider in the undo stack.
 #[derive(Clone, PartialEq)]
 pub struct TransformProps {
     pub target: BoneId,
     pub bones: Vec<BoneId>,
     pub offsets: ankhimate_core::math::Transform,
-    pub mix_rotate: f32,
-    pub mix_translate: f32,
-    pub mix_scale: f32,
-    pub mix_shear: f32,
+    pub mix: ankhimate_core::constraints::TransformMix,
     pub local: bool,
     pub relative: bool,
 }
@@ -225,10 +222,7 @@ impl TransformProps {
             target: tc.target,
             bones: tc.bones.clone(),
             offsets: tc.offsets,
-            mix_rotate: tc.mix_rotate,
-            mix_translate: tc.mix_translate,
-            mix_scale: tc.mix_scale,
-            mix_shear: tc.mix_shear,
+            mix: tc.mix,
             local: tc.local,
             relative: tc.relative,
         }
@@ -238,10 +232,7 @@ impl TransformProps {
         tc.target = self.target;
         tc.bones = self.bones.clone();
         tc.offsets = self.offsets;
-        tc.mix_rotate = self.mix_rotate;
-        tc.mix_translate = self.mix_translate;
-        tc.mix_scale = self.mix_scale;
-        tc.mix_shear = self.mix_shear;
+        tc.mix = self.mix;
         tc.local = self.local;
         tc.relative = self.relative;
     }
@@ -881,7 +872,10 @@ mod tests {
                 Box::new(SetTransformProps::new(
                     id,
                     TransformProps {
-                        mix_rotate: mix,
+                        mix: ankhimate_core::constraints::TransformMix {
+                            rotate: mix,
+                            ..base.mix
+                        },
                         ..base.clone()
                     },
                 )),
@@ -893,7 +887,7 @@ mod tests {
         let Some(Constraint::Transform(tc)) = doc.skeleton.constraints.get(id) else {
             panic!("still there");
         };
-        assert_eq!(tc.mix_rotate, 1.0, "one undo returns to before the drag");
+        assert_eq!(tc.mix.rotate, 1.0, "one undo returns to before the drag");
     }
 }
 

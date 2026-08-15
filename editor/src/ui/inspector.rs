@@ -583,29 +583,55 @@ fn constraint_inspector(
                 });
         });
 
-        // The four channel mixes. Separate because "follow its rotation but not
-        // its position" is the common case, not the exception.
+        // The channel mixes. Separate because "follow its rotation but not its
+        // position" is the common case, not the exception.
+        //
+        // Rotation is one angle, so one slider. The other three have two axes
+        // each and get one slider per axis on a single row: "follow it
+        // horizontally but not vertically" is a real rig — a shoulder mirroring
+        // its opposite number does exactly that — and a model that cannot say it
+        // has to fake it with an extra bone.
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [64.0, 18.0],
+                egui::Label::new(egui::RichText::new("Rotate").size(10.5)),
+            );
+            ui.add_enabled(
+                setup,
+                egui::Slider::new(&mut next.mix.rotate, 0.0..=1.0).max_decimals(2),
+            )
+            .on_hover_text("How much of the target's rotation this bone takes");
+        });
         for (label, value, hint) in [
             (
-                "Rotate",
-                &mut next.mix_rotate,
-                "How much of the target's rotation this bone takes",
-            ),
-            (
                 "Translate",
-                &mut next.mix_translate,
-                "How much of the target's position this bone takes",
+                &mut next.mix.translate,
+                "How much of the target's position this bone takes, per axis",
             ),
-            ("Scale", &mut next.mix_scale, "…its scale"),
-            ("Shear", &mut next.mix_shear, "…its shear"),
+            ("Scale", &mut next.mix.scale, "…its scale, per axis"),
+            ("Shear", &mut next.mix.shear, "…its shear, per axis"),
         ] {
             ui.horizontal(|ui| {
                 ui.add_sized(
                     [64.0, 18.0],
                     egui::Label::new(egui::RichText::new(label).size(10.5)),
                 );
-                ui.add_enabled(setup, egui::Slider::new(value, 0.0..=1.0).max_decimals(2))
-                    .on_hover_text(hint);
+                // A mirror wants -1, so the range is signed. Spine's own
+                // shoulder constraint is `mixX: -1`.
+                ui.add_enabled(
+                    setup,
+                    egui::Slider::new(&mut value.x, -1.0..=1.0)
+                        .max_decimals(2)
+                        .text("x"),
+                )
+                .on_hover_text(hint);
+                ui.add_enabled(
+                    setup,
+                    egui::Slider::new(&mut value.y, -1.0..=1.0)
+                        .max_decimals(2)
+                        .text("y"),
+                )
+                .on_hover_text(hint);
             });
         }
 

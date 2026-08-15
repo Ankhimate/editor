@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 pub type Extra = BTreeMap<String, serde_json::Value>;
 
 /// The current schema version. Bump on any breaking change and add a migration.
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -371,9 +371,10 @@ pub struct Constraint {
     // ── Transform constraints (T-501) ────────────────────────────────────
     // Defaulted and skipped when empty, so an IK constraint's JSON is
     // unchanged by their existence.
-    /// `[rotate, translate, scale, shear]`.
+    /// How much of the target each channel contributes. Named apart from the
+    /// IK `mix` above, which is one number for a different constraint kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mixes: Option<[f32; 4]>,
+    pub transform_mix: Option<TransformMix>,
     /// `[x, y, rotation_degrees, scale_x, scale_y, shear_x_deg, shear_y_deg]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offsets: Option<[f32; 7]>,
@@ -547,10 +548,10 @@ pub enum Timeline {
         constraint: String,
         keys: Vec<ScalarKey>,
     },
-    /// `[rotate, translate, scale, shear]` per key (T-501).
+    /// Per-channel mixes for a transform constraint, per key (T-501).
     TransformConstraintMix {
         constraint: String,
-        keys: Vec<ColorKey>,
+        keys: Vec<MixKey>,
     },
     Deform {
         slot: String,
@@ -600,6 +601,52 @@ pub struct ColorKey {
     pub value: [f32; 4],
     #[serde(default, flatten)]
     pub interp: Interp,
+}
+
+/// How much of the target each channel of a transform constraint contributes.
+///
+/// **Per axis wherever a channel has axes.** Rotation is one angle, so one
+/// number; translate, scale and shear have two each. A constraint can follow its
+/// target horizontally and ignore it vertically.
+///
+/// Named fields rather than an array: this is on disk, and a positional
+/// `[f32; 7]` is exactly how a translate and a scale end up swapped by someone
+/// counting indices. Every field defaults to 0, so a file writes only the
+/// channels its constraint actually drives.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct TransformMix {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rotate: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub translate_x: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub translate_y: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub scale_x: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub scale_y: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub shear_x: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub shear_y: f32,
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+/// One key of a transform-constraint mix timeline (T-501).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MixKey {
+    pub time: f32,
+    #[serde(flatten)]
+    pub value: TransformMix,
+    #[serde(default, flatten)]
+    pub interp: Interp,
+    /// Catches v1's `value: [f32; 4]`, which the migration reads and clears.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: Extra,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
