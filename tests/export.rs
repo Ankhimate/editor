@@ -157,7 +157,7 @@ fn fixture() -> Project {
                 stretch: false,
                 stretch_limit: 1.1,
                 stiffness: 0.0,
-                mixes: None,
+                transform_mix: None,
                 offsets: None,
                 local: false,
                 relative: false,
@@ -179,7 +179,13 @@ fn fixture() -> Project {
                 stretch: false,
                 stretch_limit: 1.1,
                 stiffness: 0.0,
-                mixes: Some([1.0, 0.5, 0.0, 0.0]),
+                // Translate mixed on x alone — the shape a mirror uses, and the
+                // one a single mix per channel could not hold.
+                transform_mix: Some(schema::TransformMix {
+                    rotate: 1.0,
+                    translate_x: 0.5,
+                    ..Default::default()
+                }),
                 offsets: Some([2.0, 3.0, 15.0, 0.0, 0.0, 0.0, 0.0]),
                 local: false,
                 relative: false,
@@ -310,12 +316,15 @@ fn fixture() -> Project {
                     },
                     schema::Timeline::TransformConstraintMix {
                         constraint: "head-follow".into(),
-                        // `[rotate, translate, scale, shear]`, which the schema
-                        // carries in a `ColorKey`'s four-float payload.
-                        keys: vec![schema::ColorKey {
+                        keys: vec![schema::MixKey {
                             time: 0.0,
-                            value: [1.0, 0.5, 0.0, 0.0],
+                            value: schema::TransformMix {
+                                rotate: 1.0,
+                                translate_x: 0.5,
+                                ..Default::default()
+                            },
                             interp: schema::Interp::Linear,
+                            extra: Default::default(),
                         }],
                     },
                 ],
@@ -745,7 +754,7 @@ fn a_transform_constraint_drives_only_its_live_channels() {
     let mut project = fixture();
     for c in &mut project.constraints {
         if c.kind == "transform" {
-            c.mixes = Some([0.0; 4]);
+            c.transform_mix = Some(schema::TransformMix::default());
         }
     }
     let rendered = render_spine(&project);
@@ -896,8 +905,13 @@ fn a_weighted_vertex_follows_its_bone_through_constraints() {
     // expectation from the same `evaluate()` call the exporter uses, so an
     // error common to both cancels and the assert still passes. Only a constant
     // that came from a verified export can catch that.
+    //
+    // This moved from (8.643, 9.072) when the fixture's constraint went from
+    // mixing translate on both axes at 0.5 to mixing x alone: y is no longer
+    // pulled toward the target, so it moved four times as far as x did. A
+    // change here that is *not* explained by the fixture is a regression.
     assert!(
-        (got.0 - 8.643).abs() < 0.01 && (got.1 - 9.072).abs() < 0.01,
+        (got.0 - 8.384).abs() < 0.01 && (got.1 - 8.106).abs() < 0.01,
         "the emitted offset moved: {got:?}"
     );
 }
