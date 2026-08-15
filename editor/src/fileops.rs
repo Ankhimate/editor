@@ -18,6 +18,14 @@ const FILTER_NAME: &str = "Ankhimate project";
 pub enum FileOutcome {
     Saved(PathBuf),
     Opened(PathBuf),
+    /// A foreign rig was read in. Carries what the conversion could not keep, so
+    /// the caller can show it: unlike opening an `.ankh`, importing *invents*
+    /// data, and a status line is too small to admit to hundreds of
+    /// approximations.
+    Imported {
+        path: PathBuf,
+        report: ankhimate_formats::convert::LoadReport,
+    },
     /// User dismissed the native dialog.
     Cancelled,
     Error(String),
@@ -98,6 +106,92 @@ pub fn open_path(state: &mut AppState, path: &Path) -> FileOutcome {
             FileOutcome::Opened(path.to_path_buf())
         }
         Err(e) => FileOutcome::Error(format!("open failed: {e}")),
+    }
+}
+
+/// File▸Import▸Spine JSON — prompt, then hand off to [`import_spine_path`].
+pub fn import_spine(state: &mut AppState) -> FileOutcome {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Spine skeleton", &["json"])
+        .set_title("Import Spine JSON")
+        .pick_file()
+    else {
+        return FileOutcome::Cancelled;
+    };
+    import_spine_path(state, &path)
+}
+
+/// Read a Spine skeleton and swap the document in.
+///
+/// Images come from whichever layout sits beside the skeleton: an `.atlas` with
+/// its page images, or a loose `images/` directory. Both ship in the wild — a
+/// rig exported for a runtime has an atlas, one exported for re-editing usually
+/// does not — and picking between them is not something to make the user
+/// declare when the files on disk already say which it is.
+///
+/// The dialog-free seam, so a headless test can drive it.
+pub fn import_spine_path(state: &mut AppState, path: &Path) -> FileOutcome {
+    let json = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) => return FileOutcome::Error(format!("could not read {}: {e}", path.display())),
+    };
+    let dir = path.parent().unwrap_or(Path::new("."));
+
+    // Read up front so an unreadable atlas fails here, with the file name still
+    // in hand, rather than halfway through the conversion.
+    let atlas_text = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("atlas"))
+        .and_then(|p| std::fs::read_to_string(p).ok());
+
+    let open_page = |file: &str| image::open(dir.join(file)).ok().map(|i| i.to_rgba8());
+    let images_dir = dir.join("images");
+    let open_loose = |name: &str| {
+        // Spine writes an attachment path with `/` for a subdirectory and no
+        // extension, which is how the files sit on disk.
+        image::open(images_dir.join(format!("{name}.png")))
+            .ok()
+            .map(|i| i.to_rgba8())
+    };
+    let images = match &atlas_text {
+        Some(text) => ankhimate_formats::spine::Images::Atlas {
+            text,
+            pages: &open_page,
+        },
+        None if images_dir.is_dir() => ankhimate_formats::spine::Images::Loose(&open_loose),
+        // Geometry still imports; every attachment lands in the report.
+        None => ankhimate_formats::spine::Images::None,
+    };
+
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("imported")
+        .to_string();
+    match ankhimate_formats::spine::read(&json, images, &name) {
+        Ok(loaded) => {
+            let report = loaded.report;
+            state.replace_document(Document {
+                skeleton: loaded.skeleton,
+                animations: loaded.animations,
+                assets: loaded.assets,
+                meta: DocumentMeta {
+                    name: loaded.name,
+                    fps: loaded.fps,
+                },
+                psd_layer_paths: Default::default(),
+                export_presets: loaded.export_presets,
+            });
+            FileOutcome::Imported {
+                path: path.to_path_buf(),
+                report,
+            }
+        }
+        Err(e) => FileOutcome::Error(format!("{}: {e}", path.display())),
     }
 }
 
@@ -255,5 +349,103 @@ mod tests {
                 .unwrap_or("")
                 .contains("unresolved")
         );
+    }
+
+    /// A Spine skeleton with one bone, one slot, and a curve that overshoots.
+    const SPINE_RIG: &str = r#"{
+      "skeleton": { "spine": "4.3.23" },
+      "bones": [{ "name": "root" }, { "name": "arm", "parent": "root", "x": 12 }],
+      "slots": [{ "name": "hand", "bone": "arm" }],
+      "animations": { "wave": { "bones": { "arm": { "rotate": [
+        { "value": 0, "curve": [0.1, -20, 0.2, 30] },
+        { "time": 0.5, "value": 30 }
+      ] } } } }
+    }"#;
+
+    /// Importing replaces the document with the foreign rig.
+    ///
+    /// Drives the seam the File▸Import menu item calls, past the native dialog.
+    #[test]
+    fn importing_a_spine_rig_replaces_the_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hero.json");
+        std::fs::write(&path, SPINE_RIG).unwrap();
+
+        let mut state = AppState::default();
+        state.dispatch(Box::new(CreateBone::new(bone("leftover"))));
+        let before = state.revision;
+
+        let outcome = import_spine_path(&mut state, &path);
+        assert!(
+            matches!(outcome, FileOutcome::Imported { .. }),
+            "expected an import outcome"
+        );
+        // The previous document is gone, not merged into.
+        assert!(state.doc.skeleton.bones.values().any(|b| b.name == "arm"));
+        assert!(
+            !state
+                .doc
+                .skeleton
+                .bones
+                .values()
+                .any(|b| b.name == "leftover")
+        );
+        assert_eq!(state.doc.meta.name, "hero");
+        assert_eq!(state.doc.animations.len(), 1);
+        assert_ne!(state.revision, before, "a new rig is a document change");
+    }
+
+    /// A rig with no images still imports, and says what it could not find.
+    ///
+    /// Geometry is the expensive part to rebuild by hand; refusing the whole
+    /// file because its art is elsewhere would throw that away. The missing
+    /// pieces are named instead.
+    #[test]
+    fn importing_without_images_reports_rather_than_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hero.json");
+        // A region attachment whose image is nowhere beside the skeleton.
+        let rig = SPINE_RIG.replace(
+            r#""animations""#,
+            r#""skins": [{ "name": "default", "attachments": {
+                 "hand": { "glove": { "width": 10, "height": 10 } } } }],
+               "animations""#,
+        );
+        std::fs::write(&path, rig).unwrap();
+
+        let mut state = AppState::default();
+        let FileOutcome::Imported { report, .. } = import_spine_path(&mut state, &path) else {
+            panic!("a rig without images still imports");
+        };
+        assert!(state.doc.skeleton.bones.values().any(|b| b.name == "arm"));
+        assert!(
+            !report.dangling.is_empty(),
+            "the missing image is named: {report:?}"
+        );
+    }
+
+    /// A file that is not a Spine skeleton fails without touching the document.
+    #[test]
+    fn a_bad_import_leaves_the_open_document_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        std::fs::write(&path, r#"{"hello": "world"}"#).unwrap();
+
+        let mut state = AppState::default();
+        state.dispatch(Box::new(CreateBone::new(bone("keep-me"))));
+        let before = state.revision;
+
+        let outcome = import_spine_path(&mut state, &path);
+        assert!(matches!(outcome, FileOutcome::Error(_)));
+        assert!(
+            state
+                .doc
+                .skeleton
+                .bones
+                .values()
+                .any(|b| b.name == "keep-me"),
+            "a failed import must not replace what was open"
+        );
+        assert_eq!(state.revision, before);
     }
 }

@@ -13,6 +13,12 @@ pub struct AnkhimateApp {
     current_path: Option<std::path::PathBuf>,
     /// Transient message shown after a file op (save/open result).
     status: Option<String>,
+    /// What the last import could not carry across, while its report is up.
+    ///
+    /// On the app rather than the session: `replace_document` reseats the
+    /// session, so a report stored there would be wiped by the very import that
+    /// produced it.
+    import_report: Option<ImportReport>,
     /// Preferences that outlive the session: recent files, startup behavior.
     config: crate::config::Config,
     /// Is the startup window up? (T-304)
@@ -349,6 +355,7 @@ impl Default for AnkhimateApp {
             state: AppState::default(),
             current_path: None,
             status: None,
+            import_report: None,
             config: crate::config::Config::default(),
             show_startup: false,
             show_settings: false,
@@ -707,6 +714,23 @@ impl eframe::App for AnkhimateApp {
                                     file_action = Some(FileAction::SaveAs);
                                     ui.close();
                                 }
+                                ui.separator();
+                                // Import replaces the document, so it sits with
+                                // Open rather than with the asset-level imports
+                                // in the library panel.
+                                ui.menu_button("Import", |ui| {
+                                    if ui
+                                        .add(egui::Button::new("Spine JSON…"))
+                                        .on_hover_text(
+                                            "Read a Spine skeleton and its images \
+                                             as a new document",
+                                        )
+                                        .clicked()
+                                    {
+                                        file_action = Some(FileAction::ImportSpine);
+                                        ui.close();
+                                    }
+                                });
                                 ui.separator();
                                 // Recent files (T-304) — the same list the
                                 // startup window shows, reachable mid-session.
@@ -1279,6 +1303,105 @@ impl eframe::App for AnkhimateApp {
             }
         }
 
+        // ── Import report (T-6xx) ────────────────────────────────────────
+        // Shown after an import that lost something, and only then. An import
+        // invents data the source did not have in the shape we hold it, so what
+        // it could not carry across belongs in front of the person who still has
+        // the original file.
+        if self.import_report.is_some() {
+            let mut open = true;
+            // Taken out so the closure can borrow it without holding `self`.
+            let report = self.import_report.take().expect("checked just above");
+            egui::Window::new(format!("Imported {}", report.file))
+                .open(&mut open)
+                .resizable(true)
+                .default_width(460.0)
+                .max_height(420.0)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "The rig is loaded. These are the parts that could not \
+                             be carried across exactly.",
+                        )
+                        .weak(),
+                    );
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        if !report.dangling.is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Unresolved ({})",
+                                    report.dangling.len()
+                                ))
+                                .strong()
+                                .color(ui.visuals().warn_fg_color),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Named by the file but not found in it. Usually a \
+                                     missing image.",
+                                )
+                                .weak()
+                                .small(),
+                            );
+                            for (what, name) in report.dangling.iter().take(40) {
+                                ui.label(format!("   {what}: {name}"));
+                            }
+                            if report.dangling.len() > 40 {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "   … and {} more",
+                                        report.dangling.len() - 40
+                                    ))
+                                    .weak(),
+                                );
+                            }
+                            ui.add_space(8.0);
+                        }
+
+                        // Grouped by kind: a rig with one approximated curve and
+                        // one with four hundred are different situations, and a
+                        // flat list of the first forty hides which you have.
+                        let mut by_kind: std::collections::BTreeMap<&str, Vec<_>> =
+                            Default::default();
+                        for l in &report.lossy {
+                            by_kind.entry(l.what).or_default().push(l);
+                        }
+                        for (what, items) in by_kind {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Approximated — {what} ({})",
+                                    items.len()
+                                ))
+                                .strong(),
+                            );
+                            // The detail repeats across a kind, so one reading of
+                            // it plus the places it happened is the whole story.
+                            if let Some(first) = items.first() {
+                                ui.label(egui::RichText::new(&first.detail).weak().small());
+                            }
+                            for l in items.iter().take(8) {
+                                ui.label(format!("   {}", l.where_));
+                            }
+                            if items.len() > 8 {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "   … and {} more",
+                                        items.len() - 8
+                                    ))
+                                    .weak(),
+                                );
+                            }
+                            ui.add_space(8.0);
+                        }
+                    });
+                });
+            if open {
+                self.import_report = Some(report);
+            }
+        }
+
         // ── Settings (T-701) ─────────────────────────────────────────────
         // Applied live, so the theme is re-applied every frame it is open. Doing
         // it unconditionally would fight anything else that touches the style.
@@ -1448,6 +1571,23 @@ enum FileAction {
     OpenPath(std::path::PathBuf),
     Save,
     SaveAs,
+    /// Read a foreign rig, replacing the document (T-6xx).
+    ImportSpine,
+}
+
+/// What an import could not carry across, held while the report is shown.
+///
+/// Opening an `.ankh` is lossless; importing is not. A source format may carry
+/// a concept this model has at a different resolution, or not at all, and the
+/// conversion has to choose. Those choices belong in front of the person who
+/// still has the original file — not in a status line that scrolls away, and not
+/// discovered weeks later as an animation that drifts.
+struct ImportReport {
+    file: String,
+    /// References that did not resolve at all.
+    dangling: Vec<(&'static str, String)>,
+    /// Approximations, counted by kind, with a few examples of each.
+    lossy: Vec<ankhimate_formats::convert::Lossy>,
 }
 
 impl AnkhimateApp {
@@ -1672,6 +1812,7 @@ impl AnkhimateApp {
             FileAction::OpenPath(path) => fileops::open_path(&mut self.state, &path),
             FileAction::Save => fileops::save(&self.state, &self.current_path),
             FileAction::SaveAs => fileops::save_as(&self.state),
+            FileAction::ImportSpine => fileops::import_spine(&mut self.state),
         };
         match outcome {
             FileOutcome::Saved(path) => {
@@ -1685,6 +1826,25 @@ impl AnkhimateApp {
                 self.status = Some(format!("Opened {}", path.display()));
                 self.config.touch_recent(&path);
                 self.current_path = Some(path);
+            }
+            FileOutcome::Imported { path, report } => {
+                let name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("rig")
+                    .to_string();
+                self.status = Some(format!("Imported {name}"));
+                // Deliberately *not* `current_path` and not a recent file: the
+                // document is now an unsaved `.ankh`, and pointing Save at the
+                // source `.json` would write our format over their skeleton.
+                self.current_path = None;
+                if !report.is_clean() {
+                    self.import_report = Some(ImportReport {
+                        file: name,
+                        dangling: report.dangling,
+                        lossy: report.lossy,
+                    });
+                }
             }
             FileOutcome::Cancelled => {}
             FileOutcome::Error(msg) => self.status = Some(msg),
