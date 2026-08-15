@@ -113,7 +113,7 @@ fn an_unmentioned_transform_mix_is_off() {
             .values()
             .find_map(|c| match c {
                 ankhimate_core::constraints::Constraint::Transform(t) if t.name == name => {
-                    Some((t.mix_rotate, t.mix_translate, t.mix_scale, t.mix_shear))
+                    Some(t.mix)
                 }
                 _ => None,
             })
@@ -121,17 +121,58 @@ fn an_unmentioned_transform_mix_is_off() {
     };
 
     // Every channel off: the constraint does nothing, which is what the file says.
-    assert_eq!(of("aim"), (0.0, 0.0, 0.0, 0.0));
+    assert_eq!(of("aim"), ankhimate_core::constraints::TransformMix::NONE);
 
-    // Only the channel it names is live. `mixX: -1` with no `mixY` is a
-    // per-axis mix this model cannot hold — one number covers both — so the
-    // driven axis wins and the import reports the axis it had to drive too.
-    assert_eq!(of("shoulder"), (0.0, -1.0, 0.0, 0.0));
+    // Only the axis it names is live. `mixX: -1` mirrors horizontally and
+    // leaves y alone — held exactly, because each axis mixes on its own.
+    let shoulder = of("shoulder");
+    assert_eq!(shoulder.translate, glam::vec2(-1.0, 0.0));
+    assert_eq!(shoulder.rotate, 0.0);
+    assert_eq!(shoulder.scale, glam::Vec2::ZERO);
+
+    // And nothing is reported, because nothing was lost. A model that had to
+    // pick one axis for both would have to say so here.
     assert!(
-        loaded.report.lossy.iter().any(|l| l.where_ == "shoulder"),
-        "the axis this cannot hold is named: {:?}",
+        !loaded.report.lossy.iter().any(|l| l.where_ == "shoulder"),
+        "a per-axis mix is held exactly now: {:?}",
         loaded.report.lossy
     );
+}
+
+/// Spine's per-axis mixes all survive, including the two it has no field for.
+///
+/// Spine writes `mixScaleY` but the importer only read `mixScaleX`, and Spine
+/// has no `mixShearX` at all — shear's second axis has no mix there. Both are
+/// channels this model has and that one does not, so both are readable and the
+/// first is a real value that used to be dropped in silence.
+#[test]
+fn every_per_axis_mix_is_read() {
+    let doc = r#"{
+      "skeleton": { "spine": "4.3.23" },
+      "bones": [{ "name": "root" }, { "name": "arm", "parent": "root" }],
+      "constraints": [
+        { "type": "transform", "name": "full", "source": "root", "bones": ["arm"],
+          "mixRotate": 0.1, "mixX": 0.2, "mixY": 0.3,
+          "mixScaleX": 0.4, "mixScaleY": 0.5, "mixShearY": 0.6 }
+      ]
+    }"#;
+    let loaded = spine::read(doc, Images::None, "rig").expect("reads");
+    let mix = loaded
+        .skeleton
+        .constraints
+        .values()
+        .find_map(|c| match c {
+            ankhimate_core::constraints::Constraint::Transform(t) => Some(t.mix),
+            _ => None,
+        })
+        .expect("the constraint imported");
+
+    assert!((mix.rotate - 0.1).abs() < 1e-6);
+    assert_eq!(mix.translate, glam::vec2(0.2, 0.3));
+    // `mixScaleY` was dropped before; it is a distinct axis now.
+    assert_eq!(mix.scale, glam::vec2(0.4, 0.5));
+    // Spine names no `mixShearX`, so it reads as "not driven".
+    assert_eq!(mix.shear, glam::vec2(0.0, 0.6));
 }
 
 /// A constraint kind this model has no equivalent for is named, not ignored.

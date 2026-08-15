@@ -710,10 +710,14 @@ mod tests {
                 scale: glam::vec2(1.5, 0.5),
                 shear: glam::vec2(5.0_f32.to_radians(), 0.0),
             },
-            mix_rotate: 0.75,
-            mix_translate: 0.25,
-            mix_scale: 0.5,
-            mix_shear: 0.1,
+            // Every axis distinct, so a round trip that swapped two of them
+            // fails instead of matching by coincidence.
+            mix: ankhimate_core::constraints::TransformMix {
+                rotate: 0.75,
+                translate: glam::vec2(0.25, -0.6),
+                scale: glam::vec2(0.5, 0.2),
+                shear: glam::vec2(0.1, 0.9),
+            },
             local: true,
             relative: true,
             ..TransformConstraint::rotation_only("look", target, vec![driven])
@@ -731,7 +735,7 @@ mod tests {
                 constraint: cid,
                 keys: vec![Key {
                     time: 0.5,
-                    value: [1.0, 0.0, 0.0, 0.0],
+                    value: ankhimate_core::constraints::TransformMix::ROTATION_ONLY,
                     interp: Interp::Linear,
                 }],
             }],
@@ -747,10 +751,10 @@ mod tests {
             panic!("the constraint came back as a transform constraint");
         };
         assert_eq!(tc.name, "look");
-        assert!((tc.mix_rotate - 0.75).abs() < 1e-6);
-        assert!((tc.mix_translate - 0.25).abs() < 1e-6);
-        assert!((tc.mix_scale - 0.5).abs() < 1e-6);
-        assert!((tc.mix_shear - 0.1).abs() < 1e-6);
+        assert!((tc.mix.rotate - 0.75).abs() < 1e-6);
+        assert!((tc.mix.translate - glam::vec2(0.25, -0.6)).length() < 1e-6);
+        assert!((tc.mix.scale - glam::vec2(0.5, 0.2)).length() < 1e-6);
+        assert!((tc.mix.shear - glam::vec2(0.1, 0.9)).length() < 1e-6);
         assert!(tc.local && tc.relative);
         // Degrees on disk, radians in memory (ADR 0002) — the conversion has to
         // survive both directions.
