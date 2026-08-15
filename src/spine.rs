@@ -939,9 +939,26 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
                 // pulled the torso, head and gun arm toward a crosshair parked
                 // 645 units away, in every animation.
                 //
-                // `mixY` is the exception: it is omitted when it *equals*
-                // `mixX`, so it inherits rather than falling back to 0.
+                // `mixY` is its own channel with its own default, not an
+                // inheritance of `mixX`.
                 let mix_x = f(tc, "mixX", 0.0);
+                let mix_y = f(tc, "mixY", 0.0);
+                // Whichever axis is actually driven. Equal is the common case
+                // and either answers it; they differ only when the file drives
+                // one axis alone, and then the non-zero one is the constraint.
+                let mix_translate = if mix_y == 0.0 { mix_x } else { mix_y };
+                if mix_x != mix_y {
+                    report.lossy(
+                        "constraint",
+                        s(tc, "name").unwrap_or("?").to_string(),
+                        format!(
+                            "translate is mixed per axis in the source \
+                             (x {mix_x}, y {mix_y}); this model has one mix for \
+                             both and takes {mix_translate}, so the other axis \
+                             is driven where the source left it alone"
+                        ),
+                    );
+                }
                 let tc_name = s(tc, "name").unwrap_or("transform").to_string();
                 let cid = skel.add_constraint(Constraint::Transform(TransformConstraint {
                     name: tc_name.clone(),
@@ -954,10 +971,18 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
                         shear: glam::vec2(0.0, f(tc, "shearY", 0.0).to_radians()),
                     },
                     mix_rotate: f(tc, "mixRotate", 0.0),
-                    // One mix for both axes here, so a constraint driving only
-                    // one of them takes the one it drives. `shoulder` mirrors a
-                    // shoulder with `mixX: -1` and no `mixY`.
-                    mix_translate: f(tc, "mixY", mix_x),
+                    // Spine mixes the two translate axes independently and this
+                    // model has one number for both, so a constraint driving
+                    // only one of them cannot be held exactly. The driven axis
+                    // wins — dropping it would lose the constraint's whole
+                    // purpose, where taking it costs a contribution on the axis
+                    // the file left at 0.
+                    //
+                    // Spineboy's `shoulder` mirrors with `mixX: -1` and no
+                    // `mixY`. Reading the omission as "inherit -1" put a
+                    // 19.5-unit vertical shift on the bone carrying the rear arm
+                    // and gun, which is a visible gap at the shoulder.
+                    mix_translate,
                     mix_scale: f(tc, "mixScaleX", 0.0),
                     mix_shear: f(tc, "mixShearY", 0.0),
                     local: tc.get("local").and_then(|b| b.as_bool()).unwrap_or(false),
@@ -1274,11 +1299,13 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
                     0,
                     |k| {
                         // Same rule as the setup values: a channel a key does
-                        // not mention is off, and `mixY` follows `mixX`.
+                        // not mention is off, and the driven translate axis wins
+                        // where this model's single mix cannot hold both.
                         let mix_x = f(k, "mixX", 0.0);
+                        let mix_y = f(k, "mixY", 0.0);
                         [
                             f(k, "mixRotate", 0.0),
-                            f(k, "mixY", mix_x),
+                            if mix_y == 0.0 { mix_x } else { mix_y },
                             f(k, "mixScaleX", 0.0),
                             f(k, "mixShearY", 0.0),
                         ]

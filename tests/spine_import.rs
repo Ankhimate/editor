@@ -123,9 +123,15 @@ fn an_unmentioned_transform_mix_is_off() {
     // Every channel off: the constraint does nothing, which is what the file says.
     assert_eq!(of("aim"), (0.0, 0.0, 0.0, 0.0));
 
-    // Only the channel it names is live — and `mixY` inherits `mixX` rather
-    // than falling back, so a shoulder mirroring on X does not also move on Y.
+    // Only the channel it names is live. `mixX: -1` with no `mixY` is a
+    // per-axis mix this model cannot hold — one number covers both — so the
+    // driven axis wins and the import reports the axis it had to drive too.
     assert_eq!(of("shoulder"), (0.0, -1.0, 0.0, 0.0));
+    assert!(
+        loaded.report.lossy.iter().any(|l| l.where_ == "shoulder"),
+        "the axis this cannot hold is named: {:?}",
+        loaded.report.lossy
+    );
 }
 
 /// A constraint kind this model has no equivalent for is named, not ignored.
