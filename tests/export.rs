@@ -229,13 +229,16 @@ fn fixture() -> Project {
                             },
                         ],
                     },
+                    // The axes are independent tracks: x keys at 0 and 1, y
+                    // keys at 0 and 0.5 with its own easing. A paired
+                    // representation cannot hold this, which is the point.
                     schema::Timeline::BoneTranslate {
                         bone: "head".into(),
+                        axis: schema::Axis::X,
                         keys: vec![
-                            schema::Vec2Key {
+                            schema::ScalarKey {
                                 time: 0.0,
-                                x: 0.0,
-                                y: 0.0,
+                                value: 0.0,
                                 interp: schema::Interp::Linear,
                             },
                             // The bezier sits on the key that is *arrived at*,
@@ -243,15 +246,32 @@ fn fixture() -> Project {
                             // describes the segment from t=0, so an exporter
                             // whose format hangs curves on the starting key
                             // emits it there.
-                            schema::Vec2Key {
+                            schema::ScalarKey {
                                 time: 1.0,
-                                x: 4.0,
-                                y: -6.0,
+                                value: 4.0,
                                 interp: schema::Interp::Bezier {
                                     handles: [0.25, 0.1, 0.75, 0.9],
                                 },
                             },
                         ],
+                        extra: Default::default(),
+                    },
+                    schema::Timeline::BoneTranslate {
+                        bone: "head".into(),
+                        axis: schema::Axis::Y,
+                        keys: vec![
+                            schema::ScalarKey {
+                                time: 0.0,
+                                value: 0.0,
+                                interp: schema::Interp::Linear,
+                            },
+                            schema::ScalarKey {
+                                time: 0.5,
+                                value: -6.0,
+                                interp: schema::Interp::Linear,
+                            },
+                        ],
+                        extra: Default::default(),
                     },
                     schema::Timeline::Deform {
                         slot: "torso".into(),
@@ -1208,15 +1228,26 @@ fn bezier_control_points_are_absolute_not_normalized() {
     // all rather than points computed against itself.
     assert!(spine["rotate"][2]["points"].is_null());
 
-    // A two-axis channel needs both axes' pairs, x's first.
+    // A two-axis property is two tracks, each a scalar channel with its own
+    // control points — four numbers, not eight. The axes have their own key
+    // times and their own easing now, so there is no pair to concatenate.
     let head = walk["bones"]
         .as_array()
         .unwrap()
         .iter()
         .find(|b| b["name"] == "head")
         .unwrap();
-    let translate = head["translate"][0]["points"].as_array().unwrap();
-    assert_eq!(translate.len(), 8, "two axes, two control-point pairs");
+    let x_points = head["translate_x"][0]["points"].as_array().unwrap();
+    assert_eq!(x_points.len(), 4, "one axis, one control-point pair");
+    // And the y track is genuinely its own: the fixture keys it at a different
+    // time, which a paired representation could not express at all.
+    let y_times: Vec<f64> = head["translate_y"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k["time"].as_f64().unwrap())
+        .collect();
+    assert_eq!(y_times, vec![0.0, 0.5], "y keys where x does not");
 }
 
 /// `has_next` marks the keys that may carry a curve.
