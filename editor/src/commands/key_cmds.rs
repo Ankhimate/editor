@@ -18,7 +18,7 @@
 
 use super::EditCommand;
 use crate::doc::Document;
-use ankhimate_core::animation::{Animation, Interp, Key, Timeline};
+use ankhimate_core::animation::{Animation, Axis, Interp, Key, Timeline};
 use ankhimate_core::ids::{AnimationId, BoneId, SlotId};
 
 /// Which bone transform property a timeline drives. The dopesheet groups rows by
@@ -51,6 +51,14 @@ pub enum TimelineAddr {
     Bone {
         bone: BoneId,
         property: BoneProperty,
+        /// Which axis, for a two-axis property. `None` for rotation, which has
+        /// one.
+        ///
+        /// An address names one *track*, and translate/scale/shear are two
+        /// tracks each — so the axis is part of the identity, not a detail of
+        /// the value. Leaving it out is how a y key ends up written to the x
+        /// track.
+        axis: Option<Axis>,
     },
     SlotColor {
         slot: SlotId,
@@ -72,14 +80,26 @@ impl TimelineAddr {
     pub fn stable_id(&self) -> u64 {
         use ankhimate_core::slotmap::Key;
         match self {
-            TimelineAddr::Bone { bone, property } => {
+            TimelineAddr::Bone {
+                bone,
+                property,
+                axis,
+            } => {
+                // Property in the low nibble, axis above it: two tracks of one
+                // property must not collide, or egui hands them one widget id
+                // and the second one's clicks vanish.
                 let p = match property {
                     BoneProperty::Translate => 1,
                     BoneProperty::Rotate => 2,
                     BoneProperty::Scale => 3,
                     BoneProperty::Shear => 4,
                 };
-                bone.data().as_ffi().wrapping_mul(16).wrapping_add(p)
+                let a = match axis {
+                    None => 0,
+                    Some(Axis::X) => 16,
+                    Some(Axis::Y) => 32,
+                };
+                bone.data().as_ffi().wrapping_mul(64).wrapping_add(p + a)
             }
             TimelineAddr::SlotColor { slot } => slot.data().as_ffi() ^ 0xC010_0000_0000_0000,
             TimelineAddr::SlotAttachment { slot } => slot.data().as_ffi() ^ 0xA77A_0000_0000_0000,
@@ -100,13 +120,17 @@ impl TimelineAddr {
                 TimelineAddr::Bone {
                     bone,
                     property: BoneProperty::Translate,
+                    axis,
                 },
-                Timeline::BoneTranslate { bone: b, .. },
-            ) => bone == b,
+                Timeline::BoneTranslate {
+                    bone: b, axis: ax, ..
+                },
+            ) => bone == b && *axis == Some(*ax),
             (
                 TimelineAddr::Bone {
                     bone,
                     property: BoneProperty::Rotate,
+                    ..
                 },
                 Timeline::BoneRotate { bone: b, .. },
             ) => bone == b,
@@ -114,16 +138,22 @@ impl TimelineAddr {
                 TimelineAddr::Bone {
                     bone,
                     property: BoneProperty::Scale,
+                    axis,
                 },
-                Timeline::BoneScale { bone: b, .. },
-            ) => bone == b,
+                Timeline::BoneScale {
+                    bone: b, axis: ax, ..
+                },
+            ) => bone == b && *axis == Some(*ax),
             (
                 TimelineAddr::Bone {
                     bone,
                     property: BoneProperty::Shear,
+                    axis,
                 },
-                Timeline::BoneShear { bone: b, .. },
-            ) => bone == b,
+                Timeline::BoneShear {
+                    bone: b, axis: ax, ..
+                },
+            ) => bone == b && *axis == Some(*ax),
             (TimelineAddr::SlotColor { slot }, Timeline::SlotColor { slot: s, .. }) => slot == s,
             (TimelineAddr::SlotAttachment { slot }, Timeline::SlotAttachment { slot: s, .. }) => {
                 slot == s
@@ -138,24 +168,36 @@ impl TimelineAddr {
     /// An empty timeline of the right variant for this address.
     fn empty_timeline(&self) -> Timeline {
         match self {
-            TimelineAddr::Bone { bone, property } => match property {
-                BoneProperty::Translate => Timeline::BoneTranslate {
-                    bone: *bone,
-                    keys: Vec::new(),
-                },
-                BoneProperty::Rotate => Timeline::BoneRotate {
-                    bone: *bone,
-                    keys: Vec::new(),
-                },
-                BoneProperty::Scale => Timeline::BoneScale {
-                    bone: *bone,
-                    keys: Vec::new(),
-                },
-                BoneProperty::Shear => Timeline::BoneShear {
-                    bone: *bone,
-                    keys: Vec::new(),
-                },
-            },
+            TimelineAddr::Bone {
+                bone,
+                property,
+                axis,
+            } => {
+                // A two-axis property with no axis named would be ambiguous;
+                // x is the one a caller means when it does not say.
+                let axis = axis.unwrap_or(Axis::X);
+                match property {
+                    BoneProperty::Translate => Timeline::BoneTranslate {
+                        bone: *bone,
+                        axis,
+                        keys: Vec::new(),
+                    },
+                    BoneProperty::Rotate => Timeline::BoneRotate {
+                        bone: *bone,
+                        keys: Vec::new(),
+                    },
+                    BoneProperty::Scale => Timeline::BoneScale {
+                        bone: *bone,
+                        axis,
+                        keys: Vec::new(),
+                    },
+                    BoneProperty::Shear => Timeline::BoneShear {
+                        bone: *bone,
+                        axis,
+                        keys: Vec::new(),
+                    },
+                }
+            }
             TimelineAddr::SlotColor { slot } => Timeline::SlotColor {
                 slot: *slot,
                 keys: Vec::new(),
@@ -207,7 +249,9 @@ pub mod presets {
 /// angle channel (rotate and shear alike) is **degrees**, per PLAN §2.7.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KeyValue {
-    Vec2(glam::Vec2),
+    /// Every bone track drives one number now — an axis of a two-axis property,
+    /// or rotation. The `Vec2` variant this replaced carried both axes of a
+    /// paired key, which no longer exists.
     Scalar(f32),
     Color([f32; 4]),
     Visible(bool),
@@ -295,19 +339,10 @@ impl EditCommand for AddKey {
         let time = self.time;
         let interp = self.interp;
         match (&mut anim.timelines[idx], self.value) {
-            (Timeline::BoneTranslate { keys, .. }, KeyValue::Vec2(v))
-            | (Timeline::BoneScale { keys, .. }, KeyValue::Vec2(v))
-            | (Timeline::BoneShear { keys, .. }, KeyValue::Vec2(v)) => {
-                insert_key(
-                    keys,
-                    Key {
-                        time,
-                        value: v,
-                        interp,
-                    },
-                );
-            }
-            (Timeline::BoneRotate { keys, .. }, KeyValue::Scalar(v)) => {
+            (Timeline::BoneTranslate { keys, .. }, KeyValue::Scalar(v))
+            | (Timeline::BoneScale { keys, .. }, KeyValue::Scalar(v))
+            | (Timeline::BoneShear { keys, .. }, KeyValue::Scalar(v))
+            | (Timeline::BoneRotate { keys, .. }, KeyValue::Scalar(v)) => {
                 insert_key(
                     keys,
                     Key {
@@ -1332,6 +1367,7 @@ mod tests {
         TimelineAddr::Bone {
             bone,
             property: BoneProperty::Rotate,
+            axis: None,
         }
     }
 

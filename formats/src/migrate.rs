@@ -20,6 +20,124 @@ pub enum MigrateError {
     InvalidVersion { found: u32 },
 }
 
+/// Bring a **raw** project tree up to [`CURRENT_VERSION`]'s *shape*.
+///
+/// Runs before deserialization, and exists because [`migrate`] cannot: a step
+/// that changes a field's shape produces values the current types reject, so a
+/// v1 file would fail to parse before its migration ever ran. Anything that
+/// merely moves or renames a field belongs in [`migrate`], which is easier to
+/// read against typed data; anything that changes a *type* belongs here.
+///
+/// Unknown versions pass through untouched — [`migrate`] does the validating.
+pub fn migrate_json(mut raw: serde_json::Value) -> Result<serde_json::Value, MigrateError> {
+    let version = raw
+        .get("version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(CURRENT_VERSION as u64);
+    if version < 2 {
+        v1_to_v2_json(&mut raw);
+    }
+    Ok(raw)
+}
+
+/// v1 → v2, on the parts whose *type* changed.
+///
+/// **Bone tracks.** v1 paired the axes of translate, scale and shear into one
+/// keyframe: one time, both values, one easing. v2 gives each axis its own
+/// track, so one v1 timeline becomes two — x keeping the x values, y the y
+/// ones, both inheriting the shared times and easing. That is exactly what the
+/// pairing meant, so an existing rig poses identically; what it gains is the
+/// freedom to move the two apart afterwards.
+///
+/// **Mix keys.** v1's `value: [rotate, translate, scale, shear]` becomes seven
+/// named fields, each pair filled from the one number that covered both axes.
+fn v1_to_v2_json(raw: &mut serde_json::Value) {
+    use serde_json::{Value, json};
+
+    let Some(animations) = raw.get_mut("animations").and_then(|a| a.as_array_mut()) else {
+        return;
+    };
+    for animation in animations {
+        let Some(timelines) = animation
+            .get_mut("timelines")
+            .and_then(|t| t.as_array_mut())
+        else {
+            continue;
+        };
+        let mut out: Vec<Value> = Vec::with_capacity(timelines.len());
+        for timeline in timelines.drain(..) {
+            let kind = timeline
+                .get("kind")
+                .and_then(|k| k.as_str())
+                .unwrap_or_default()
+                .to_string();
+            match kind.as_str() {
+                "bone_translate" | "bone_scale" | "bone_shear" => {
+                    let keys = timeline
+                        .get("keys")
+                        .and_then(|k| k.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    for axis in ["x", "y"] {
+                        let split: Vec<Value> = keys
+                            .iter()
+                            .map(|k| {
+                                // Keep every other field — the easing is
+                                // flattened alongside `x`/`y`, so copying the
+                                // key and swapping the value carries it.
+                                let mut key = k.clone();
+                                if let Some(map) = key.as_object_mut() {
+                                    let value = map.get(axis).cloned().unwrap_or(json!(0.0));
+                                    map.remove("x");
+                                    map.remove("y");
+                                    map.insert("value".into(), value);
+                                }
+                                key
+                            })
+                            .collect();
+                        if split.is_empty() {
+                            continue;
+                        }
+                        let mut t = timeline.clone();
+                        if let Some(map) = t.as_object_mut() {
+                            map.insert("axis".into(), json!(axis));
+                            map.insert("keys".into(), Value::Array(split));
+                        }
+                        out.push(t);
+                    }
+                }
+                "transform_constraint_mix" => {
+                    let mut t = timeline.clone();
+                    if let Some(keys) = t.get_mut("keys").and_then(|k| k.as_array_mut()) {
+                        for key in keys.iter_mut() {
+                            let old = key.get("value").and_then(|v| v.as_array()).cloned();
+                            let Some(values) = old else { continue };
+                            let at =
+                                |i: usize| values.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let (rotate, translate, scale, shear) = (at(0), at(1), at(2), at(3));
+                            if let Some(map) = key.as_object_mut() {
+                                map.remove("value");
+                                map.insert("rotate".into(), json!(rotate));
+                                map.insert("translate_x".into(), json!(translate));
+                                map.insert("translate_y".into(), json!(translate));
+                                map.insert("scale_x".into(), json!(scale));
+                                map.insert("scale_y".into(), json!(scale));
+                                map.insert("shear_x".into(), json!(shear));
+                                map.insert("shear_y".into(), json!(shear));
+                            }
+                        }
+                    }
+                    out.push(t);
+                }
+                _ => out.push(timeline),
+            }
+        }
+        if let Some(slot) = animation.get_mut("timelines") {
+            *slot = Value::Array(out);
+        }
+    }
+}
+
 /// Bring a parsed project up to [`CURRENT_VERSION`].
 pub fn migrate(project: Project) -> Result<Project, MigrateError> {
     if project.version == 0 {
@@ -45,17 +163,25 @@ pub fn migrate(project: Project) -> Result<Project, MigrateError> {
     Ok(project)
 }
 
-/// v1 → v2: constraint mixes gain a per-axis form.
+/// v1 → v2: per-axis constraint mixes, and one track per axis.
 ///
-/// v1 stored `mixes: [rotate, translate, scale, shear]` — one number per
-/// channel, applied to both axes of the channels that have two. v2 mixes each
-/// axis on its own, so a v1 value means "this much on both axes", which is
-/// exactly [`schema::TransformMix`] with the pair filled from one number.
+/// Two changes, both "one number became two".
 ///
-/// The v1 field is read out of `extra`: v2's `Constraint` no longer names
-/// `mixes`, so serde routes the unknown key into the catch-all rather than
-/// failing the parse. That is the same mechanism that lets a v2 file survive a
-/// round-trip through a v1 editor, used here in the other direction.
+/// **Mixes.** v1 stored `mixes: [rotate, translate, scale, shear]` — one number
+/// per channel, applied to both axes of the channels that have two. A v1 value
+/// therefore means "this much on both axes".
+///
+/// **Bone tracks.** v1 paired the axes of translate, scale and shear into one
+/// keyframe: one time, both values, one easing. v2 gives each axis its own
+/// track, so a v1 timeline becomes two — the x track keeping the x values and
+/// the y track the y ones, both inheriting the shared times and easing. That is
+/// exactly what the pairing meant, so an existing rig poses identically; what it
+/// gains is the ability to move the two apart afterwards.
+///
+/// Old fields are read out of `extra`: v2's types no longer name them, so serde
+/// routes the unknown keys into the catch-all rather than failing the parse.
+/// That is the same mechanism that lets a v2 file survive a round-trip through a
+/// v1 editor, used here in the other direction.
 fn v1_to_v2(project: &mut Project) {
     for constraint in &mut project.constraints {
         if let Some(old) = constraint.extra.remove("mixes")
@@ -72,36 +198,6 @@ fn v1_to_v2(project: &mut Project) {
                 shear_x: shear,
                 shear_y: shear,
             });
-        }
-    }
-
-    // Mix timelines keyed four values per key; each becomes the same pair-filled
-    // form. The v1 keys parsed as `MixKey` would read every field as absent, so
-    // they arrive here as zeros and have to be rebuilt from `extra` too.
-    for animation in &mut project.animations {
-        for timeline in &mut animation.timelines {
-            if let schema::Timeline::TransformConstraintMix { keys, .. } = timeline {
-                for key in keys.iter_mut() {
-                    let Some(old) = key.extra.remove("value") else {
-                        continue;
-                    };
-                    let Some(values) = old.as_array() else {
-                        continue;
-                    };
-                    let at =
-                        |i: usize| values.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                    let (rotate, translate, scale, shear) = (at(0), at(1), at(2), at(3));
-                    key.value = schema::TransformMix {
-                        rotate,
-                        translate_x: translate,
-                        translate_y: translate,
-                        scale_x: scale,
-                        scale_y: scale,
-                        shear_x: shear,
-                        shear_y: shear,
-                    };
-                }
-            }
         }
     }
 

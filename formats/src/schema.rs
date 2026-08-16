@@ -500,9 +500,16 @@ fn is_zero_f32(v: &f32) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Timeline {
+    /// One axis of the bone's translation. See [`Axis`].
     BoneTranslate {
         bone: String,
-        keys: Vec<Vec2Key>,
+        #[serde(default)]
+        axis: Axis,
+        keys: Vec<ScalarKey>,
+        /// Catches v1's paired `keys`, which the migration splits and clears.
+        #[serde(flatten)]
+        #[serde(default)]
+        extra: Extra,
     },
     /// Degrees.
     BoneRotate {
@@ -511,12 +518,22 @@ pub enum Timeline {
     },
     BoneScale {
         bone: String,
-        keys: Vec<Vec2Key>,
+        #[serde(default)]
+        axis: Axis,
+        keys: Vec<ScalarKey>,
+        #[serde(flatten)]
+        #[serde(default)]
+        extra: Extra,
     },
     /// Degrees.
     BoneShear {
         bone: String,
-        keys: Vec<Vec2Key>,
+        #[serde(default)]
+        axis: Axis,
+        keys: Vec<ScalarKey>,
+        #[serde(flatten)]
+        #[serde(default)]
+        extra: Extra,
     },
     SlotColor {
         slot: String,
@@ -601,6 +618,20 @@ pub struct ColorKey {
     pub value: [f32; 4],
     #[serde(default, flatten)]
     pub interp: Interp,
+}
+
+/// Which axis of a two-axis property a track drives.
+///
+/// Translate, scale and shear are two independent tracks each, so an animator
+/// can key x at one time and y at another and give each its own easing. A rig
+/// that pairs them shares a time and an easing between the axes, so one always
+/// follows the other's shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Axis {
+    #[default]
+    X,
+    Y,
 }
 
 /// How much of the target each channel of a transform constraint contributes.

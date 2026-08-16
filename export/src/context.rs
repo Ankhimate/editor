@@ -924,18 +924,34 @@ fn animation(anim: &schema::Animation, project: &Project) -> Value {
 
     for timeline in &anim.timelines {
         match timeline {
-            schema::Timeline::BoneTranslate { bone, keys } => {
-                bone_entry(bone, "translate", vec2_keys(keys, offset_of(bone)))
-            }
+            // A two-axis property is two tracks, so each axis gets its own
+            // channel — `translate_x`, `translate_y`. The paired `translate` is
+            // built afterwards for formats that want one key per pair; see
+            // `merge_axes`.
+            schema::Timeline::BoneTranslate {
+                bone, axis, keys, ..
+            } => bone_entry(
+                bone,
+                &format!("translate_{}", axis_label(*axis)),
+                scalar_keys(keys, offset_of(bone)),
+            ),
             schema::Timeline::BoneRotate { bone, keys } => {
                 bone_entry(bone, "rotate", scalar_keys(keys, offset_of(bone)))
             }
-            schema::Timeline::BoneScale { bone, keys } => {
-                bone_entry(bone, "scale", vec2_keys(keys, offset_of(bone)))
-            }
-            schema::Timeline::BoneShear { bone, keys } => {
-                bone_entry(bone, "shear", vec2_keys(keys, offset_of(bone)))
-            }
+            schema::Timeline::BoneScale {
+                bone, axis, keys, ..
+            } => bone_entry(
+                bone,
+                &format!("scale_{}", axis_label(*axis)),
+                scalar_keys(keys, offset_of(bone)),
+            ),
+            schema::Timeline::BoneShear {
+                bone, axis, keys, ..
+            } => bone_entry(
+                bone,
+                &format!("shear_{}", axis_label(*axis)),
+                scalar_keys(keys, offset_of(bone)),
+            ),
             schema::Timeline::SlotColor { slot, keys } => slots.push(json!({
                 "name": slot, "channel": "color",
                 "keys": keys.iter().map(|k| json!({
@@ -1015,6 +1031,11 @@ fn animation(anim: &schema::Animation, project: &Project) -> Value {
                 })).collect::<Vec<_>>(),
             })),
         }
+    }
+
+    // Rebuild the paired view every template written before the split reads.
+    for bone in &mut bones {
+        merge_axes(bone);
     }
 
     json!({
@@ -1182,6 +1203,106 @@ fn shift(time: f32, offset: f32) -> f32 {
     time + offset
 }
 
+fn axis_label(axis: schema::Axis) -> &'static str {
+    match axis {
+        schema::Axis::X => "x",
+        schema::Axis::Y => "y",
+    }
+}
+
+/// Rebuild `translate` / `scale` / `shear` from their per-axis tracks.
+///
+/// The axes are independent tracks here — each with its own key times and its
+/// own easing — which is the point of the split, and more than a format storing
+/// one key per pair can hold. Most published formats *do* store pairs, so the
+/// merged view ships beside the split one and a template picks whichever its
+/// target speaks.
+///
+/// Merging unions the two key times and samples the other axis linearly at any
+/// time it does not key. That is a real approximation: a y track eased by a
+/// bezier contributes a straight line where x has a key and y does not. The
+/// per-axis channels are exact and are what a format with two curves should
+/// read.
+fn merge_axes(bone: &mut Value) {
+    let Some(map) = bone.as_object_mut() else {
+        return;
+    };
+    for channel in ["translate", "scale", "shear"] {
+        let xs = map.get(&format!("{channel}_x")).cloned();
+        let ys = map.get(&format!("{channel}_y")).cloned();
+        let (Some(xs), Some(ys)) = (
+            xs.as_ref().and_then(|v| v.as_array()),
+            ys.as_ref().and_then(|v| v.as_array()),
+        ) else {
+            continue;
+        };
+
+        // Union of both tracks' times, in order and without duplicates.
+        let mut times: Vec<f64> = xs
+            .iter()
+            .chain(ys.iter())
+            .filter_map(|k| k["time"].as_f64())
+            .collect();
+        times.sort_by(|a, b| a.total_cmp(b));
+        times.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+
+        let sample = |track: &[Value], t: f64| -> (f64, Option<Value>) {
+            // The key at this time, if the axis has one — its curve carries.
+            if let Some(k) = track
+                .iter()
+                .find(|k| (k["time"].as_f64().unwrap_or(0.0) - t).abs() < 1e-6)
+            {
+                return (k["value"].as_f64().unwrap_or(0.0), Some(k["curve"].clone()));
+            }
+            // Otherwise a straight line between the keys either side.
+            let before = track
+                .iter()
+                .rfind(|k| k["time"].as_f64().unwrap_or(0.0) < t);
+            let after = track.iter().find(|k| k["time"].as_f64().unwrap_or(0.0) > t);
+            match (before, after) {
+                (Some(a), Some(b)) => {
+                    let (ta, tb) = (
+                        a["time"].as_f64().unwrap_or(0.0),
+                        b["time"].as_f64().unwrap_or(0.0),
+                    );
+                    let (va, vb) = (
+                        a["value"].as_f64().unwrap_or(0.0),
+                        b["value"].as_f64().unwrap_or(0.0),
+                    );
+                    let f = if (tb - ta).abs() < 1e-9 {
+                        0.0
+                    } else {
+                        (t - ta) / (tb - ta)
+                    };
+                    (va + (vb - va) * f, None)
+                }
+                (Some(a), None) => (a["value"].as_f64().unwrap_or(0.0), None),
+                (None, Some(b)) => (b["value"].as_f64().unwrap_or(0.0), None),
+                (None, None) => (0.0, None),
+            }
+        };
+
+        let merged: Vec<Value> = times
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| {
+                let (x, xc) = sample(xs, t);
+                let (y, _) = sample(ys, t);
+                let mut key = Map::new();
+                key.insert("time".into(), json!(t));
+                key.insert("x".into(), json!(x));
+                key.insert("y".into(), json!(y));
+                // X's curve, as the pairing always did: one key holds one
+                // easing, so the axes cannot both keep theirs.
+                key.insert("curve".into(), xc.unwrap_or(Value::Null));
+                key.insert("has_next".into(), json!(i + 1 < times.len()));
+                Value::Object(key)
+            })
+            .collect();
+        map.insert(channel.into(), Value::Array(merged));
+    }
+}
+
 fn scalar_keys(keys: &[schema::ScalarKey], offset: f32) -> Value {
     json!(
         keys.iter()
@@ -1221,35 +1342,6 @@ fn scalar_keys(keys: &[schema::ScalarKey], offset: f32) -> Value {
                     )),
                     "is_bezier": leaving
                         .is_some_and(|i| matches!(i, schema::Interp::Bezier { .. })),
-                })
-            })
-            .collect::<Vec<_>>()
-    )
-}
-
-fn vec2_keys(keys: &[schema::Vec2Key], offset: f32) -> Value {
-    json!(
-        keys.iter()
-            .enumerate()
-            .map(|(i, k)| {
-                let time = shift(k.time, offset);
-                let next = keys.get(i + 1);
-                // Two axes, so two control-point pairs: x's first, then y's.
-                // The easing of the segment *leaving* this key lives on the next
-                // key — see `scalar_keys`.
-                let points = next.map(|n| {
-                    let nt = shift(n.time, offset);
-                    let mut p = control_points(&n.interp, (time, k.x), (nt, n.x));
-                    p.extend(control_points(&n.interp, (time, k.y), (nt, n.y)));
-                    p
-                });
-                json!({
-                    "time": time,
-                    "x": k.x,
-                    "y": k.y,
-                    "curve": next.map_or_else(|| json!("linear"), |n| interp(&n.interp)),
-                    "has_next": next.is_some(),
-                    "points": points,
                 })
             })
             .collect::<Vec<_>>()

@@ -183,6 +183,20 @@ fn mix_from_schema(m: schema::TransformMix) -> ankhimate_core::constraints::Tran
     }
 }
 
+fn axis_to_schema(axis: anim::Axis) -> schema::Axis {
+    match axis {
+        anim::Axis::X => schema::Axis::X,
+        anim::Axis::Y => schema::Axis::Y,
+    }
+}
+
+fn axis_from_schema(axis: schema::Axis) -> anim::Axis {
+    match axis {
+        schema::Axis::X => anim::Axis::X,
+        schema::Axis::Y => anim::Axis::Y,
+    }
+}
+
 fn interp_to_schema(interp: anim::Interp) -> schema::Interp {
     match interp {
         anim::Interp::Linear => schema::Interp::Linear,
@@ -705,24 +719,8 @@ fn timeline_to_schema(
     slot_name: &impl Fn(SlotId) -> String,
     constraint_name: &impl Fn(ConstraintId) -> String,
 ) -> schema::Timeline {
-    let vec2_keys = |keys: &[anim::Key<glam::Vec2>], to_degrees: bool| -> Vec<schema::Vec2Key> {
-        keys.iter()
-            .map(|k| schema::Vec2Key {
-                time: k.time,
-                x: if to_degrees {
-                    k.value.x.to_degrees()
-                } else {
-                    k.value.x
-                },
-                y: if to_degrees {
-                    k.value.y.to_degrees()
-                } else {
-                    k.value.y
-                },
-                interp: interp_to_schema(k.interp),
-            })
-            .collect()
-    };
+    // Two-axis properties are two tracks now, so the paired helper is gone:
+    // every bone track writes scalar keys.
     let scalar_keys = |keys: &[anim::Key<f32>]| -> Vec<schema::ScalarKey> {
         keys.iter()
             .map(|k| schema::ScalarKey {
@@ -734,23 +732,29 @@ fn timeline_to_schema(
     };
 
     match timeline {
-        anim::Timeline::BoneTranslate { bone, keys } => schema::Timeline::BoneTranslate {
+        anim::Timeline::BoneTranslate { bone, axis, keys } => schema::Timeline::BoneTranslate {
             bone: bone_name(*bone),
-            keys: vec2_keys(keys, false),
+            axis: axis_to_schema(*axis),
+            keys: scalar_keys(keys),
+            extra: Default::default(),
         },
         // Rotation keys are already degrees in core (PLAN §2.7).
         anim::Timeline::BoneRotate { bone, keys } => schema::Timeline::BoneRotate {
             bone: bone_name(*bone),
             keys: scalar_keys(keys),
         },
-        anim::Timeline::BoneScale { bone, keys } => schema::Timeline::BoneScale {
+        anim::Timeline::BoneScale { bone, axis, keys } => schema::Timeline::BoneScale {
             bone: bone_name(*bone),
-            keys: vec2_keys(keys, false),
+            axis: axis_to_schema(*axis),
+            keys: scalar_keys(keys),
+            extra: Default::default(),
         },
         // Shear keys are degrees on both sides — no conversion, same as rotate.
-        anim::Timeline::BoneShear { bone, keys } => schema::Timeline::BoneShear {
+        anim::Timeline::BoneShear { bone, axis, keys } => schema::Timeline::BoneShear {
             bone: bone_name(*bone),
-            keys: vec2_keys(keys, false),
+            axis: axis_to_schema(*axis),
+            keys: scalar_keys(keys),
+            extra: Default::default(),
         },
         anim::Timeline::SlotColor { slot, keys } => schema::Timeline::SlotColor {
             slot: slot_name(*slot),
@@ -1324,19 +1328,6 @@ fn timeline_from_schema(
     constraint_ids: &HashMap<String, ConstraintId>,
     report: &mut LoadReport,
 ) -> Option<anim::Timeline> {
-    let vec2_keys = |keys: &[schema::Vec2Key], from_degrees: bool| {
-        keys.iter()
-            .map(|k| anim::Key {
-                time: k.time,
-                value: if from_degrees {
-                    glam::vec2(k.x.to_radians(), k.y.to_radians())
-                } else {
-                    glam::vec2(k.x, k.y)
-                },
-                interp: interp_from_schema(k.interp),
-            })
-            .collect()
-    };
     let scalar_keys = |keys: &[schema::ScalarKey]| {
         keys.iter()
             .map(|k| anim::Key {
@@ -1372,22 +1363,31 @@ fn timeline_from_schema(
     }
 
     Some(match timeline {
-        schema::Timeline::BoneTranslate { bone, keys } => anim::Timeline::BoneTranslate {
+        schema::Timeline::BoneTranslate {
+            bone, axis, keys, ..
+        } => anim::Timeline::BoneTranslate {
             bone: bone!(bone),
-            keys: vec2_keys(keys, false),
+            axis: axis_from_schema(*axis),
+            keys: scalar_keys(keys),
         },
         schema::Timeline::BoneRotate { bone, keys } => anim::Timeline::BoneRotate {
             bone: bone!(bone),
             keys: scalar_keys(keys),
         },
-        schema::Timeline::BoneScale { bone, keys } => anim::Timeline::BoneScale {
+        schema::Timeline::BoneScale {
+            bone, axis, keys, ..
+        } => anim::Timeline::BoneScale {
             bone: bone!(bone),
-            keys: vec2_keys(keys, false),
+            axis: axis_from_schema(*axis),
+            keys: scalar_keys(keys),
         },
         // Degrees on both sides (see the writer) — no conversion.
-        schema::Timeline::BoneShear { bone, keys } => anim::Timeline::BoneShear {
+        schema::Timeline::BoneShear {
+            bone, axis, keys, ..
+        } => anim::Timeline::BoneShear {
             bone: bone!(bone),
-            keys: vec2_keys(keys, false),
+            axis: axis_from_schema(*axis),
+            keys: scalar_keys(keys),
         },
         schema::Timeline::SlotColor { slot, keys } => anim::Timeline::SlotColor {
             slot: slot!(slot),

@@ -26,7 +26,7 @@ use crate::commands::key_cmds::{
 use crate::commands::slot_cmds::{SetDrawOrder, SetSlotAttachment, SetSlotColor};
 use crate::doc::Document;
 use crate::session::Session;
-use ankhimate_core::animation::{Interp, Timeline};
+use ankhimate_core::animation::{Axis, Interp, Timeline};
 use ankhimate_core::ids::{AnimationId, BoneId, SlotId};
 use ankhimate_core::math::Transform;
 
@@ -149,53 +149,81 @@ fn bone_keys(
     };
 
     let rot_delta = ankhimate_core::transforms::wrap_angle(local.rotation - setup.rotation);
-    let channels: [(BoneProperty, KeyValue, bool); 4] = [
+    // One entry per **track**: each axis of translate/scale/shear, plus
+    // rotation. Tested per axis, so nudging a bone along x keys x alone — the
+    // pairing this replaced keyed both and left a redundant y key behind on
+    // every horizontal move.
+    let d_pos = local.position - setup.position;
+    let d_shear = local.shear - setup.shear;
+    let channels: [(BoneProperty, Option<Axis>, f32, f32, bool); 7] = [
         (
             BoneProperty::Translate,
-            KeyValue::Vec2(local.position - setup.position),
-            (local.position - setup.position).length() > 1e-4,
+            Some(Axis::X),
+            d_pos.x,
+            0.0,
+            d_pos.x.abs() > 1e-4,
+        ),
+        (
+            BoneProperty::Translate,
+            Some(Axis::Y),
+            d_pos.y,
+            0.0,
+            d_pos.y.abs() > 1e-4,
         ),
         (
             BoneProperty::Rotate,
-            KeyValue::Scalar(rot_delta.to_degrees()),
+            None,
+            rot_delta.to_degrees(),
+            0.0,
             rot_delta.abs() > 1e-4,
         ),
         (
             BoneProperty::Scale,
-            KeyValue::Vec2(glam::vec2(
-                ratio(local.scale.x, setup.scale.x),
-                ratio(local.scale.y, setup.scale.y),
-            )),
-            (local.scale - setup.scale).length() > 1e-4,
+            Some(Axis::X),
+            ratio(local.scale.x, setup.scale.x),
+            1.0,
+            (local.scale.x - setup.scale.x).abs() > 1e-4,
+        ),
+        (
+            BoneProperty::Scale,
+            Some(Axis::Y),
+            ratio(local.scale.y, setup.scale.y),
+            1.0,
+            (local.scale.y - setup.scale.y).abs() > 1e-4,
+        ),
+        // Degrees, like the rotate channel above.
+        (
+            BoneProperty::Shear,
+            Some(Axis::X),
+            d_shear.x.to_degrees(),
+            0.0,
+            d_shear.x.abs() > 1e-4,
         ),
         (
             BoneProperty::Shear,
-            // Degrees, like the rotate channel above.
-            KeyValue::Vec2(glam::vec2(
-                (local.shear.x - setup.shear.x).to_degrees(),
-                (local.shear.y - setup.shear.y).to_degrees(),
-            )),
-            (local.shear - setup.shear).length() > 1e-4,
+            Some(Axis::Y),
+            d_shear.y.to_degrees(),
+            0.0,
+            d_shear.y.abs() > 1e-4,
         ),
     ];
 
     let mut cmds: Vec<Box<dyn EditCommand>> = Vec::new();
-    for (property, value, changed) in channels {
+    for (property, axis, value, rest, changed) in channels {
         if !changed {
             continue;
         }
-        let addr = TimelineAddr::Bone { bone, property };
+        let addr = TimelineAddr::Bone {
+            bone,
+            property,
+            axis,
+        };
         if time > 0.0 && !timeline_exists(doc, anim, &addr) {
-            let baseline = match property {
-                BoneProperty::Scale => KeyValue::Vec2(glam::vec2(1.0, 1.0)),
-                BoneProperty::Rotate => KeyValue::Scalar(0.0),
-                _ => KeyValue::Vec2(glam::Vec2::ZERO),
-            };
             cmds.push(Box::new(AddKey::new(
                 anim,
                 addr.clone(),
                 0.0,
-                baseline,
+                KeyValue::Scalar(rest),
                 Interp::Linear,
             )));
         }
@@ -203,7 +231,7 @@ fn bone_keys(
             anim,
             addr,
             time,
-            value,
+            KeyValue::Scalar(value),
             Interp::Linear,
         )));
     }
@@ -320,23 +348,21 @@ pub fn bone_key_value(
     pose: &ankhimate_core::pose::Pose,
     bone: BoneId,
     property: BoneProperty,
+    axis: Option<Axis>,
 ) -> Option<KeyValue> {
     let setup = doc.skeleton.bones.get(bone)?.local_transform;
     let local = pose.locals.get(bone).copied()?;
-    Some(match property {
-        BoneProperty::Translate => KeyValue::Vec2(local.position - setup.position),
-        BoneProperty::Rotate => KeyValue::Scalar(
-            ankhimate_core::transforms::wrap_angle(local.rotation - setup.rotation).to_degrees(),
-        ),
-        BoneProperty::Scale => KeyValue::Vec2(glam::vec2(
-            ratio(local.scale.x, setup.scale.x),
-            ratio(local.scale.y, setup.scale.y),
-        )),
-        BoneProperty::Shear => KeyValue::Vec2(glam::vec2(
-            (local.shear.x - setup.shear.x).to_degrees(),
-            (local.shear.y - setup.shear.y).to_degrees(),
-        )),
-    })
+    // A two-axis property addresses one axis per track; `None` means x, which
+    // is what a caller that has not chosen means.
+    let i = axis.unwrap_or(Axis::X).index();
+    Some(KeyValue::Scalar(match property {
+        BoneProperty::Translate => local.position[i] - setup.position[i],
+        BoneProperty::Rotate => {
+            ankhimate_core::transforms::wrap_angle(local.rotation - setup.rotation).to_degrees()
+        }
+        BoneProperty::Scale => ratio(local.scale[i], setup.scale[i]),
+        BoneProperty::Shear => (local.shear[i] - setup.shear[i]).to_degrees(),
+    }))
 }
 
 /// Divide, guarding a near-zero denominator (scale keys multiply).

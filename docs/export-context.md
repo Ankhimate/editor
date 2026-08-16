@@ -261,10 +261,29 @@ that runs after. Keep the order, use `not_last`.
 
 `name`, `duration` (seconds), `looping`, then timelines grouped by target:
 
-- `bones[]` — `{ name, offset, translate[], rotate[], scale[], shear[] }`. A
-  channel is **absent** when the clip does not key it, so guard with `{{#if}}`.
+- `bones[]` — `{ name, offset, translate_x[], translate_y[], rotate[],
+  scale_x[], scale_y[], shear_x[], shear_y[] }`, plus the merged `translate[]`,
+  `scale[]` and `shear[]` described below. A channel is **absent** when the clip
+  does not key it, so guard with `{{#if}}`.
 - `slots[]` — `{ name, channel, keys[] }` where channel is `color`, `visible` or
   `attachment`.
+
+  ### A two-axis property is two tracks
+
+  Translate, scale and shear are each **two independent tracks**: `translate_x`
+  and `translate_y` have their own key times *and* their own easing. An animator
+  can key x at frame 3 and y at frame 7, or ease one and leave the other linear.
+
+  Spine cannot express either — its two curves per property share the keyframe's
+  times — so a format targeting it reads the merged `translate[]`, `scale[]` and
+  `shear[]` instead. Those carry one key per pair in the old shape
+  (`{time, x, y, curve, has_next}`), built by unioning the two tracks' times.
+
+  **The merge is lossy and the split channels are not.** Where one axis keys and
+  the other does not, the other is sampled linearly, so a bezier on the axis
+  without a key contributes a straight line; and one key holds one `curve`, so
+  the merged view carries x's. Read `translate_x` / `translate_y` for a format
+  with two curves, and `translate` only for one that stores pairs.
 - `deform[]` — `{ slot, attachment, keys[] }`, each key with flat `offsets[]`.
 - `draw_order[]` — `{ time, offsets[] }`.
 - `ik[]`, `transform[]` — constraint channels over time. `ik[]` is one entry per

@@ -1013,6 +1013,7 @@ mod tests {
         let addr = TimelineAddr::Bone {
             bone: root,
             property: BoneProperty::Rotate,
+            axis: None,
         };
         state.dispatch(Box::new(AddKey::new(
             anim,
@@ -1071,6 +1072,7 @@ mod tests {
         let addr = TimelineAddr::Bone {
             bone: root,
             property: BoneProperty::Rotate,
+            axis: None,
         };
 
         // Nothing animates rotation yet.
@@ -1112,6 +1114,7 @@ mod tests {
         let translate = TimelineAddr::Bone {
             bone: root,
             property: BoneProperty::Translate,
+            axis: Some(ankhimate_core::animation::Axis::X),
         };
         assert_eq!(
             key_state(&state.doc, &state.session, &translate),
@@ -1138,7 +1141,7 @@ mod tests {
             },
         );
 
-        match bone_key_value(&state.doc, &state.pose, root, BoneProperty::Rotate) {
+        match bone_key_value(&state.doc, &state.pose, root, BoneProperty::Rotate, None) {
             Some(KeyValue::Scalar(degrees)) => {
                 assert!((degrees - 90.0).abs() < 0.5, "got {degrees}")
             }
@@ -1438,6 +1441,7 @@ mod tests {
         let addr = TimelineAddr::Bone {
             bone: root,
             property: BoneProperty::Rotate,
+            axis: None,
         };
         state.dispatch(Box::new(AddKey::new(
             anim,
@@ -1493,6 +1497,7 @@ mod tests {
                 TimelineAddr::Bone {
                     bone,
                     property: BoneProperty::Rotate,
+                    axis: None,
                 },
                 0.0,
                 KeyValue::Scalar(10.0),
@@ -1605,7 +1610,7 @@ mod tests {
             .timelines
             .iter()
             .find_map(|t| match t {
-                Timeline::BoneTranslate { bone, keys } if *bone == root => Some(keys),
+                Timeline::BoneTranslate { bone, keys, .. } if *bone == root => Some(keys),
                 _ => None,
             })
             .expect("translate timeline");
@@ -1769,6 +1774,7 @@ mod tests {
         let addr = TimelineAddr::Bone {
             bone: root,
             property: BoneProperty::Rotate,
+            axis: None,
         };
         state.dispatch(Box::new(AddKey::new(
             anim,
@@ -1830,6 +1836,7 @@ mod tests {
         let addr = TimelineAddr::Bone {
             bone: root,
             property: BoneProperty::Rotate,
+            axis: None,
         };
         state.dispatch(Box::new(AddKey::new(
             anim,

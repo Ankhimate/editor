@@ -380,11 +380,11 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                 None => time,
             };
             match timeline {
-                Timeline::BoneTranslate { bone, keys } => {
+                Timeline::BoneTranslate { bone, axis, keys } => {
                     if let Some(offset) = animation::sample(keys, time, &mut hint)
                         && let Some(local) = out.locals.get_mut(*bone)
                     {
-                        local.position += offset * alpha;
+                        local.position[axis.index()] += offset * alpha;
                     }
                 }
                 Timeline::BoneRotate { bone, keys } => {
@@ -396,24 +396,22 @@ fn apply_animations(skel: &Skeleton, anims: &[(&Animation, f32, f32)], out: &mut
                         local.rotation = wrap_angle(local.rotation + degrees.to_radians() * alpha);
                     }
                 }
-                Timeline::BoneScale { bone, keys } => {
+                Timeline::BoneScale { bone, axis, keys } => {
                     if let Some(factor) = animation::sample(keys, time, &mut hint)
                         && let Some(local) = out.locals.get_mut(*bone)
                     {
                         // Scale is multiplicative, so `alpha` interpolates between
                         // "no effect" (1.0) and the sampled factor.
-                        let blended = glam::Vec2::ONE.lerp(factor, alpha);
-                        local.scale *= blended;
+                        local.scale[axis.index()] *= 1.0 + (factor - 1.0) * alpha;
                     }
                 }
-                Timeline::BoneShear { bone, keys } => {
+                Timeline::BoneShear { bone, axis, keys } => {
                     if let Some(offset) = animation::sample(keys, time, &mut hint)
                         && let Some(local) = out.locals.get_mut(*bone)
                     {
                         // Keys are degrees at the document level, like rotation;
                         // core math is radians (ADR 0002).
-                        local.shear +=
-                            glam::vec2(offset.x.to_radians(), offset.y.to_radians()) * alpha;
+                        local.shear[axis.index()] += offset.to_radians() * alpha;
                     }
                 }
                 Timeline::SlotVisible { slot, keys } => {
@@ -1150,11 +1148,43 @@ fn apply_fabrik(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animation::Key;
+    use crate::animation::{Axis, Interp, Key};
     use crate::constraints::{IkConstraint, TransformConstraint, TransformMix};
     use crate::skeleton::Bone;
 
     const EPS: f32 = 1e-4;
+
+    /// Push both axis tracks of a two-axis property with one key each.
+    ///
+    /// Most tests here key a whole vec2 at one time, which is two tracks now.
+    /// Tests that care about the axes *differing* build them by hand.
+    fn push_vec2(
+        anim: &mut Animation,
+        bone: BoneId,
+        property: fn(BoneId, Axis, Vec<Key<f32>>) -> Timeline,
+        time: f32,
+        value: glam::Vec2,
+    ) {
+        for axis in Axis::BOTH {
+            anim.timelines.push(property(
+                bone,
+                axis,
+                vec![Key::linear(time, value[axis.index()])],
+            ));
+        }
+    }
+
+    fn translate(bone: BoneId, axis: Axis, keys: Vec<Key<f32>>) -> Timeline {
+        Timeline::BoneTranslate { bone, axis, keys }
+    }
+
+    fn scale(bone: BoneId, axis: Axis, keys: Vec<Key<f32>>) -> Timeline {
+        Timeline::BoneScale { bone, axis, keys }
+    }
+
+    fn shear(bone: BoneId, axis: Axis, keys: Vec<Key<f32>>) -> Timeline {
+        Timeline::BoneShear { bone, axis, keys }
+    }
 
     fn bone(name: &str, parent: Option<BoneId>) -> Bone {
         Bone {
@@ -1358,18 +1388,12 @@ mod tests {
         });
 
         let mut anim = Animation::new("a", 1.0);
-        anim.timelines.push(Timeline::BoneTranslate {
-            bone: b,
-            keys: vec![Key::linear(0.0, glam::vec2(10.0, 0.0))],
-        });
+        push_vec2(&mut anim, b, translate, 0.0, glam::vec2(10.0, 0.0));
         anim.timelines.push(Timeline::BoneRotate {
             bone: b,
             keys: vec![Key::linear(0.0, 60.0)],
         });
-        anim.timelines.push(Timeline::BoneScale {
-            bone: b,
-            keys: vec![Key::linear(0.0, glam::vec2(3.0, 1.0))],
-        });
+        push_vec2(&mut anim, b, scale, 0.0, glam::vec2(3.0, 1.0));
 
         let mut pose = Pose::new();
         evaluate(&skel, &[(&anim, 0.0, 1.0)], &mut pose);
@@ -1400,14 +1424,8 @@ mod tests {
         let b = skel.add_bone(bone("b", None));
 
         let mut anim = Animation::new("a", 1.0);
-        anim.timelines.push(Timeline::BoneTranslate {
-            bone: b,
-            keys: vec![Key::linear(0.0, glam::vec2(100.0, 0.0))],
-        });
-        anim.timelines.push(Timeline::BoneScale {
-            bone: b,
-            keys: vec![Key::linear(0.0, glam::vec2(3.0, 3.0))],
-        });
+        push_vec2(&mut anim, b, translate, 0.0, glam::vec2(100.0, 0.0));
+        push_vec2(&mut anim, b, scale, 0.0, glam::vec2(3.0, 3.0));
 
         let mut pose = Pose::new();
         evaluate(&skel, &[(&anim, 0.0, 0.5)], &mut pose);
@@ -1428,10 +1446,7 @@ mod tests {
         let b = skel.add_bone(bone("b", None));
 
         let mut anim = Animation::new("a", 1.0);
-        anim.timelines.push(Timeline::BoneTranslate {
-            bone: b,
-            keys: vec![Key::linear(0.0, glam::vec2(100.0, 0.0))],
-        });
+        push_vec2(&mut anim, b, translate, 0.0, glam::vec2(100.0, 0.0));
 
         let mut pose = Pose::new();
         evaluate(&skel, &[(&anim, 0.0, 0.0)], &mut pose);
@@ -1670,10 +1685,8 @@ mod tests {
         let mut anim = Animation::new("a", 1.0);
         anim.timelines.push(Timeline::BoneTranslate {
             bone: b,
-            keys: vec![
-                Key::linear(0.0, glam::Vec2::ZERO),
-                Key::linear(1.0, glam::vec2(100.0, 0.0)),
-            ],
+            axis: Axis::X,
+            keys: vec![Key::linear(0.0, 0.0), Key::linear(1.0, 100.0)],
         });
 
         let mut pose = Pose::new();
@@ -1711,10 +1724,7 @@ mod tests {
         let mut skel = Skeleton::new();
         let doomed = skel.add_bone(bone("doomed", None));
         let mut anim = Animation::new("a", 1.0);
-        anim.timelines.push(Timeline::BoneTranslate {
-            bone: doomed,
-            keys: vec![Key::linear(0.0, glam::vec2(10.0, 0.0))],
-        });
+        push_vec2(&mut anim, doomed, translate, 0.0, glam::vec2(10.0, 0.0));
 
         skel.remove_bone(doomed);
 
@@ -2246,6 +2256,88 @@ mod tests {
             "driven should sit on the target, got {world:?}"
         );
     }
+    /// The axes of a two-axis property are independent tracks.
+    ///
+    /// Each has its own key times *and* its own easing, so x can hold while y
+    /// moves, or the two can ease differently across the same span. A paired
+    /// keyframe — one time, both values, one easing — cannot express either,
+    /// which is why splitting them is the change and not a refactor.
+    ///
+    /// Spine pairs them: its two curves per property share the keyframe's times,
+    /// so an animator there cannot key x at frame 3 and y at frame 7.
+    #[test]
+    fn the_axes_of_a_property_key_independently() {
+        let mut skel = Skeleton::new();
+        let b = skel.add_bone(bone("b", None));
+
+        let mut anim = Animation::new("a", 1.0);
+        // X moves early and stops; Y starts late. No paired representation can
+        // hold this — it would need a key at every time on both axes.
+        anim.timelines.push(translate(
+            b,
+            Axis::X,
+            vec![Key::linear(0.0, 0.0), Key::linear(0.25, 10.0)],
+        ));
+        anim.timelines.push(translate(
+            b,
+            Axis::Y,
+            vec![Key::linear(0.75, 0.0), Key::linear(1.0, 40.0)],
+        ));
+
+        let mut pose = Pose::new();
+
+        // At t=0.25 x has arrived and y has not started.
+        evaluate(&skel, &[(&anim, 0.25, 1.0)], &mut pose);
+        let at_quarter = pose.locals[b].position;
+        assert!((at_quarter.x - 10.0).abs() < EPS, "{at_quarter:?}");
+        assert!(at_quarter.y.abs() < EPS, "y is untouched: {at_quarter:?}");
+
+        // At t=1.0 x holds its last value while y has run its whole span.
+        evaluate(&skel, &[(&anim, 1.0, 1.0)], &mut pose);
+        let at_end = pose.locals[b].position;
+        assert!((at_end.x - 10.0).abs() < EPS, "x holds: {at_end:?}");
+        assert!((at_end.y - 40.0).abs() < EPS, "y arrives: {at_end:?}");
+    }
+
+    /// Each axis carries its own easing.
+    ///
+    /// The same span, one axis eased and the other linear. One `Interp` per
+    /// keyframe made this impossible: y inherited x's shape.
+    #[test]
+    fn each_axis_carries_its_own_easing() {
+        let mut skel = Skeleton::new();
+        let b = skel.add_bone(bone("b", None));
+
+        let mut anim = Animation::new("a", 1.0);
+        anim.timelines.push(translate(
+            b,
+            Axis::X,
+            vec![Key::linear(0.0, 0.0), Key::linear(1.0, 100.0)],
+        ));
+        anim.timelines.push(translate(
+            b,
+            Axis::Y,
+            vec![
+                Key::linear(0.0, 0.0),
+                Key {
+                    time: 1.0,
+                    value: 100.0,
+                    // Slow out of the gate, so y lags x at the midpoint.
+                    interp: Interp::Bezier {
+                        out_handle: glam::vec2(0.9, 0.0),
+                        in_handle: glam::vec2(1.0, 1.0),
+                    },
+                },
+            ],
+        ));
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[(&anim, 0.5, 1.0)], &mut pose);
+        let mid = pose.locals[b].position;
+        assert!((mid.x - 50.0).abs() < 0.5, "x is linear: {mid:?}");
+        assert!(mid.y < 25.0, "y eases in and lags: {mid:?}");
+    }
+
     /// A per-axis translate mix masks the bone's **own** axes, not the world's.
     ///
     /// The delta is computed in world space and then rotated into the parent's

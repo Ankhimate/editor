@@ -210,14 +210,31 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
             // dot flags the bone, and keying commits what actually changed.
             return crate::edit_router::KeyState::Modified;
         }
-        crate::edit_router::key_state(
-            &state.doc,
-            &state.session,
-            &TimelineAddr::Bone {
-                bone: bone_id,
-                property,
-            },
-        )
+        // A property's dot covers both its tracks: "translate is keyed here"
+        // means either axis is. The dopesheet is where the axes are told apart.
+        axes_of(property)
+            .into_iter()
+            .map(|axis| {
+                crate::edit_router::key_state(
+                    &state.doc,
+                    &state.session,
+                    &TimelineAddr::Bone {
+                        bone: bone_id,
+                        property,
+                        axis,
+                    },
+                )
+            })
+            // The strongest state wins: one keyed axis makes the property
+            // keyed, and saying otherwise would offer to key what is already
+            // there.
+            .max_by_key(|k| match k {
+                crate::edit_router::KeyState::Keyed(_) => 3,
+                crate::edit_router::KeyState::Modified => 2,
+                crate::edit_router::KeyState::Unkeyed => 1,
+                crate::edit_router::KeyState::NoTimeline => 0,
+            })
+            .unwrap_or(crate::edit_router::KeyState::NoTimeline)
     };
 
     // Rotate — single field
@@ -2100,37 +2117,59 @@ fn apply_dot_action(
     let Some(anim) = ui_state.session.active_animation else {
         return;
     };
-    let addr = TimelineAddr::Bone { bone, property };
-
-    match action {
-        DotAction::None => {}
-        DotAction::Key => {
-            // The value the viewport is showing, including an uncommitted pose —
-            // clicking the dot is how you commit exactly that.
-            let Some(value) =
-                crate::edit_router::bone_key_value(&ui_state.doc, &ui_state.pose, bone, property)
-            else {
-                return;
-            };
-            ui_state.dispatch(Box::new(AddKey::new(
-                anim,
-                addr,
-                ui_state.session.playhead,
-                value,
-                Interp::Linear,
-            )));
-            ui_state.session.clear_previews();
-        }
-        DotAction::Unkey => {
-            if let crate::edit_router::KeyState::Keyed(index) =
-                crate::edit_router::key_state(&ui_state.doc, &ui_state.session, &addr)
-            {
-                ui_state.dispatch(Box::new(DeleteKeys::new(
+    // One dot, both tracks: an animator keying "translate" means the property,
+    // and splitting the axes is a timeline concern rather than an inspector one.
+    for axis in axes_of(property) {
+        let addr = TimelineAddr::Bone {
+            bone,
+            property,
+            axis,
+        };
+        match action {
+            DotAction::None => {}
+            DotAction::Key => {
+                // The value the viewport is showing, including an uncommitted
+                // pose — clicking the dot is how you commit exactly that.
+                let Some(value) = crate::edit_router::bone_key_value(
+                    &ui_state.doc,
+                    &ui_state.pose,
+                    bone,
+                    property,
+                    axis,
+                ) else {
+                    continue;
+                };
+                ui_state.dispatch(Box::new(AddKey::new(
                     anim,
-                    vec![KeyRef { addr, index }],
+                    addr,
+                    ui_state.session.playhead,
+                    value,
+                    Interp::Linear,
                 )));
             }
+            DotAction::Unkey => {
+                if let crate::edit_router::KeyState::Keyed(index) =
+                    crate::edit_router::key_state(&ui_state.doc, &ui_state.session, &addr)
+                {
+                    ui_state.dispatch(Box::new(DeleteKeys::new(
+                        anim,
+                        vec![KeyRef { addr, index }],
+                    )));
+                }
+            }
         }
+    }
+    if matches!(action, DotAction::Key) {
+        ui_state.session.clear_previews();
+    }
+}
+
+/// The tracks a property has: one per axis, or a single unaxed one for rotation.
+fn axes_of(property: BoneProperty) -> Vec<Option<ankhimate_core::animation::Axis>> {
+    use ankhimate_core::animation::Axis;
+    match property {
+        BoneProperty::Rotate => vec![None],
+        _ => vec![Some(Axis::X), Some(Axis::Y)],
     }
 }
 

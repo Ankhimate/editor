@@ -22,7 +22,7 @@
 
 use crate::convert::{LoadReport, Loaded};
 use ankhimate_core::animation::Interp;
-use ankhimate_core::animation::{Animation, EventKey, Key, Timeline};
+use ankhimate_core::animation::{Animation, Axis, EventKey, Key, Timeline};
 use ankhimate_core::assets::{AssetDb, ImageAsset};
 use ankhimate_core::attachment::{
     Attachment, BoundingBoxAttachment, ClippingAttachment, MeshAttachment, PointAttachment, Rect,
@@ -176,12 +176,18 @@ pub(crate) fn curve_interp(
 
 /// Build a timeline's keys, deriving each key's easing from the frame before it.
 ///
-/// `value` reads the key's value; `scalar` reads the one number the curve is
-/// normalized against — for a two-channel timeline, whichever channel `channel`
-/// selects.
+/// `value` reads the key's value; `scalar` reads the number the curve is
+/// normalized against. `channel` picks which of a multi-channel curve's control
+/// point groups to read — 0 for x, 1 for y — since Spine writes both in one
+/// array.
+///
+/// Every track here drives **one** channel, so the curve read is the curve
+/// stored: no axis has to stand in for another. That used to need a fallback
+/// (follow y where x is flat) and a report when the two disagreed, both of
+/// which existed only because one key held one easing for both axes.
 ///
 /// `where_` names the track for the report, in the source's own terms
-/// (`"walk/hip/translate"`), so a clamped handle can be found again.
+/// (`"walk/hip/translate/x"`), so a clamped handle can be found again.
 fn keys_with_curves<T>(
     frames: &[Value],
     channel: usize,
@@ -190,34 +196,7 @@ fn keys_with_curves<T>(
     where_: &str,
     report: &mut LoadReport,
 ) -> Vec<Key<T>> {
-    keys_with_curves_on(frames, channel, value, scalar, None, where_, report)
-}
-
-/// How to read a two-axis timeline's other channel: its index, and a reader.
-type AltChannel<'a> = (usize, &'a dyn Fn(&Value) -> f32);
-
-/// [`keys_with_curves`], with a fallback channel for a two-axis timeline.
-///
-/// One `Key` holds one easing, so a two-axis timeline has to pick an axis to
-/// normalize against. X is the natural choice — an animator reaching for a
-/// curve usually shapes the dominant axis — but a track where x never moves has
-/// no span to normalize against, and the handles collapse to zero. The track
-/// then imports as linear on *both* axes while the source eased on y.
-///
-/// `alt` names the other channel and how to read it. It is used per segment,
-/// only where the primary axis is flat, so a normal track is unaffected.
-#[allow(clippy::too_many_arguments)]
-fn keys_with_curves_on<T>(
-    frames: &[Value],
-    channel: usize,
-    value: impl Fn(&Value) -> T,
-    scalar: impl Fn(&Value) -> f32,
-    alt: Option<AltChannel<'_>>,
-    where_: &str,
-    report: &mut LoadReport,
-) -> Vec<Key<T>> {
     let mut clamped = 0usize;
-    let mut split = 0usize;
     let keys: Vec<Key<T>> = frames
         .iter()
         .enumerate()
@@ -226,34 +205,14 @@ fn keys_with_curves_on<T>(
             let interp = match i.checked_sub(1).map(|j| &frames[j]) {
                 None => Interp::Linear,
                 Some(prev) => {
-                    // Follow the axis that actually moves over this segment.
-                    let (ch, from, to) = match alt {
-                        Some((other, read)) if (scalar(k) - scalar(prev)).abs() < 1e-6 => {
-                            (other, read(prev), read(k))
-                        }
-                        _ => (channel, scalar(prev), scalar(k)),
-                    };
-                    // Both axes moving means the source's two curves cannot
-                    // both survive; note it when they actually differ.
-                    if let Some((other, read)) = alt
-                        && (scalar(k) - scalar(prev)).abs() > 1e-6
-                        && (read(k) - read(prev)).abs() > 1e-6
-                        && let Some(Value::Array(h)) = prev.get("curve")
-                        && h.len() > other * 4 + 3
-                    {
-                        let a = &h[channel * 4..channel * 4 + 4];
-                        let b = &h[other * 4..other * 4 + 4];
-                        // Compare the *time* control points: identical timing
-                        // means one easing describes both axes exactly.
-                        let differs = [0usize, 2].iter().any(|&i| {
-                            let (x, y) =
-                                (a[i].as_f64().unwrap_or(0.0), b[i].as_f64().unwrap_or(0.0));
-                            (x - y).abs() > 1e-4
-                        });
-                        split += usize::from(differs);
-                    }
-                    let (interp, lost) =
-                        curve_interp(prev.get("curve"), f(prev, "time", 0.0), from, time, to, ch);
+                    let (interp, lost) = curve_interp(
+                        prev.get("curve"),
+                        f(prev, "time", 0.0),
+                        scalar(prev),
+                        time,
+                        scalar(k),
+                        channel,
+                    );
                     clamped += usize::from(lost);
                     interp
                 }
@@ -272,16 +231,6 @@ fn keys_with_curves_on<T>(
             format!(
                 "{clamped} handle(s) reached outside the segment in time and were \
                  clamped to it; an easing that doubles back in time cannot be sampled"
-            ),
-        );
-    }
-    if split > 0 {
-        report.lossy(
-            "curve",
-            where_.to_string(),
-            format!(
-                "{split} segment(s) eased each axis differently; a key holds one \
-                 easing here, so both axes follow the first axis's curve"
             ),
         );
     }
@@ -1010,45 +959,62 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
                             report,
                         ),
                     }),
-                    // A two-channel timeline carries a curve per channel, but
-                    // one `Key` holds one easing. X is the one an animator
-                    // shapes; Y follows it.
-                    "translate" => timelines.push(Timeline::BoneTranslate {
-                        bone,
-                        keys: keys_with_curves_on(
-                            frames,
-                            0,
-                            |k| glam::vec2(f(k, "x", 0.0), f(k, "y", 0.0)),
-                            |k| f(k, "x", 0.0),
-                            Some((1, &|k| f(k, "y", 0.0))),
-                            &track,
-                            report,
-                        ),
-                    }),
-                    "scale" => timelines.push(Timeline::BoneScale {
-                        bone,
-                        keys: keys_with_curves_on(
-                            frames,
-                            0,
-                            |k| glam::vec2(f(k, "x", 1.0), f(k, "y", 1.0)),
-                            |k| f(k, "x", 1.0),
-                            Some((1, &|k| f(k, "y", 1.0))),
-                            &track,
-                            report,
-                        ),
-                    }),
-                    "shear" => timelines.push(Timeline::BoneShear {
-                        bone,
-                        keys: keys_with_curves_on(
-                            frames,
-                            0,
-                            |k| glam::vec2(f(k, "x", 0.0), f(k, "y", 0.0)),
-                            |k| f(k, "x", 0.0),
-                            Some((1, &|k| f(k, "y", 0.0))),
-                            &track,
-                            report,
-                        ),
-                    }),
+                    // Spine gives each axis its own curve, and so does this
+                    // model: two tracks, each reading the channel it belongs
+                    // to. The pairing this replaced held one easing for both,
+                    // so y always followed x's shape — 152 curves off on
+                    // spineboy alone.
+                    "translate" => {
+                        for axis in Axis::BOTH {
+                            let channel = axis.label();
+                            timelines.push(Timeline::BoneTranslate {
+                                bone,
+                                axis,
+                                keys: keys_with_curves(
+                                    frames,
+                                    axis.index(),
+                                    |k| f(k, channel, 0.0),
+                                    |k| f(k, channel, 0.0),
+                                    &format!("{track}/{channel}"),
+                                    report,
+                                ),
+                            });
+                        }
+                    }
+                    "scale" => {
+                        for axis in Axis::BOTH {
+                            let channel = axis.label();
+                            timelines.push(Timeline::BoneScale {
+                                bone,
+                                axis,
+                                keys: keys_with_curves(
+                                    frames,
+                                    axis.index(),
+                                    |k| f(k, channel, 1.0),
+                                    |k| f(k, channel, 1.0),
+                                    &format!("{track}/{channel}"),
+                                    report,
+                                ),
+                            });
+                        }
+                    }
+                    "shear" => {
+                        for axis in Axis::BOTH {
+                            let channel = axis.label();
+                            timelines.push(Timeline::BoneShear {
+                                bone,
+                                axis,
+                                keys: keys_with_curves(
+                                    frames,
+                                    axis.index(),
+                                    |k| f(k, channel, 0.0),
+                                    |k| f(k, channel, 0.0),
+                                    &format!("{track}/{channel}"),
+                                    report,
+                                ),
+                            });
+                        }
+                    }
                     _ => {}
                 }
             }

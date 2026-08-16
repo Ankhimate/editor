@@ -22,7 +22,7 @@
 //! tentacle curls. In a two-bone editor this is seven constraints hand-chained
 //! together, and it does not behave the same.
 
-use ankhimate_core::animation::{Animation, Key, Timeline};
+use ankhimate_core::animation::{Animation, Axis, Key, Timeline};
 use ankhimate_core::constraints::{Constraint, IkConstraint};
 use ankhimate_core::ids::BoneId;
 use ankhimate_core::math::Transform;
@@ -140,14 +140,26 @@ fn build() -> (
         // Offsets from the setup pose, not absolute positions — `BoneTranslate`
         // adds to the setup translation, so keying `(0,0)` at either end returns
         // the target exactly where the rig opens.
-        timelines: vec![Timeline::BoneTranslate {
-            bone: target,
-            keys: vec![
-                Key::linear(0.0, glam::Vec2::ZERO),
-                Key::linear(1.0, glam::vec2(-reach * 0.32, -reach * 0.65)),
-                Key::linear(2.0, glam::Vec2::ZERO),
-            ],
-        }],
+        timelines: vec![
+            Timeline::BoneTranslate {
+                bone: target,
+                axis: Axis::X,
+                keys: vec![
+                    Key::linear(0.0, 0.0),
+                    Key::linear(1.0, -reach * 0.32),
+                    Key::linear(2.0, 0.0),
+                ],
+            },
+            Timeline::BoneTranslate {
+                bone: target,
+                axis: Axis::Y,
+                keys: vec![
+                    Key::linear(0.0, 0.0),
+                    Key::linear(1.0, -reach * 0.65),
+                    Key::linear(2.0, 0.0),
+                ],
+            },
+        ],
         events: Vec::new(),
         markers: Vec::new(),
         bone_offsets: Vec::new(),

@@ -7,7 +7,7 @@
 
 use crate::app_state::AppState;
 use crate::commands::key_cmds::{BoneProperty, TimelineAddr};
-use ankhimate_core::animation::{Interp, Timeline};
+use ankhimate_core::animation::{Axis, Interp, Timeline};
 use ankhimate_core::ids::{AnimationId, BoneId, SlotId};
 
 /// A single key as the timeline UI needs it: where it is and how it eases.
@@ -278,44 +278,24 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
         let values = keys.iter().map(|k| k.value).collect();
         (infos, vec![GraphChannel { axis, values }])
     };
-    let vec2 = |keys: &[ankhimate_core::animation::Key<glam::Vec2>]| {
-        let infos: Vec<KeyInfo> = keys
-            .iter()
-            .enumerate()
-            .map(|(i, k)| KeyInfo {
-                index: i,
-                time: k.time,
-                interp: k.interp,
-            })
-            .collect();
-        let xs = keys.iter().map(|k| k.value.x).collect();
-        let ys = keys.iter().map(|k| k.value.y).collect();
-        (
-            infos,
-            vec![
-                GraphChannel {
-                    axis: 0,
-                    values: xs,
-                },
-                GraphChannel {
-                    axis: 1,
-                    values: ys,
-                },
-            ],
-        )
-    };
-
     match timeline {
-        Timeline::BoneTranslate { bone, keys } => {
-            let (k, ch) = vec2(keys);
+        Timeline::BoneTranslate { bone, axis, keys } => {
+            // One row per track. The axes are independent now — their own key
+            // times, their own curves — so one row showing both would have to
+            // lie about one of them.
+            let (k, ch) = scalar(keys, axis.index());
             (
                 GroupKey::Bone(*bone),
                 PropertyRow {
-                    label: "translate",
+                    label: match axis {
+                        Axis::X => "translate x",
+                        Axis::Y => "translate y",
+                    },
                     icon: crate::ui::icons::TRANSLATE,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Translate,
+                        axis: Some(*axis),
                     },
                     keys: k,
                     channels: ch,
@@ -334,6 +314,7 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Rotate,
+                        axis: None,
                     },
                     keys: k,
                     channels: ch,
@@ -342,16 +323,23 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 },
             )
         }
-        Timeline::BoneScale { bone, keys } => {
-            let (k, ch) = vec2(keys);
+        Timeline::BoneScale { bone, axis, keys } => {
+            // One row per track. The axes are independent now — their own key
+            // times, their own curves — so one row showing both would have to
+            // lie about one of them.
+            let (k, ch) = scalar(keys, axis.index());
             (
                 GroupKey::Bone(*bone),
                 PropertyRow {
-                    label: "scale",
+                    label: match axis {
+                        Axis::X => "scale x",
+                        Axis::Y => "scale y",
+                    },
                     icon: crate::ui::icons::SCALE,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Scale,
+                        axis: Some(*axis),
                     },
                     keys: k,
                     channels: ch,
@@ -360,16 +348,23 @@ fn describe(timeline: &Timeline) -> (GroupKey, PropertyRow) {
                 },
             )
         }
-        Timeline::BoneShear { bone, keys } => {
-            let (k, ch) = vec2(keys);
+        Timeline::BoneShear { bone, axis, keys } => {
+            // One row per track. The axes are independent now — their own key
+            // times, their own curves — so one row showing both would have to
+            // lie about one of them.
+            let (k, ch) = scalar(keys, axis.index());
             (
                 GroupKey::Bone(*bone),
                 PropertyRow {
-                    label: "shear",
+                    label: match axis {
+                        Axis::X => "shear x",
+                        Axis::Y => "shear y",
+                    },
                     icon: crate::ui::icons::SHEAR,
                     addr: TimelineAddr::Bone {
                         bone: *bone,
                         property: BoneProperty::Shear,
+                        axis: Some(*axis),
                     },
                     keys: k,
                     channels: ch,

@@ -21,7 +21,7 @@ use super::model::{TimelineModel, VisibleRow};
 use super::{Layout, ViewState};
 use crate::app_state::AppState;
 use crate::commands::key_cmds::{AddKey, BoneProperty, KeyRef, KeyValue, MoveKeys, TimelineAddr};
-use ankhimate_core::animation::{Animation, Interp, Timeline};
+use ankhimate_core::animation::{Animation, Axis, Interp, Timeline};
 use ankhimate_core::ids::AnimationId;
 use eframe::egui;
 
@@ -136,11 +136,10 @@ pub fn ui(
             else {
                 continue;
             };
-            for ch in &data.channels {
+            {
                 let mut x = rect.left();
                 while x <= rect.right() {
-                    if let Some(v) = sample_channel(timeline, ch.axis, layout.x_to_time(x).max(0.0))
-                    {
+                    if let Some(v) = sample_channel(timeline, layout.x_to_time(x).max(0.0)) {
                         lo = lo.min(v);
                         hi = hi.max(v);
                     }
@@ -229,7 +228,7 @@ pub fn ui(
             let color = channel_color(style.theme, data.label, ch.axis);
             // Sample the curve across the visible range for a smooth plot.
             draw_channel_curve(
-                &painter, &animation, &data.addr, ch.axis, layout, rect, &val_to_y, color,
+                &painter, &animation, &data.addr, layout, rect, &val_to_y, color,
             );
 
             // Bezier handles, one pair per segment. Drawn before the key dots
@@ -290,7 +289,6 @@ pub fn ui(
                     pending = Some(Edit {
                         addr: data.addr.clone(),
                         index: k.index,
-                        axis: ch.axis,
                         new_val,
                         new_time,
                         old_time: k.time,
@@ -502,7 +500,6 @@ fn bezier_handles(
 struct Edit {
     addr: TimelineAddr,
     index: usize,
-    axis: usize,
     new_val: f32,
     new_time: f32,
     old_time: f32,
@@ -512,7 +509,7 @@ struct Edit {
 /// `MoveKeys`.
 fn apply_edit(state: &mut AppState, anim: AnimationId, animation: &Animation, edit: Edit) {
     // Reconstruct the full key value, preserving the sibling axis of a vec2.
-    let value = current_key_value(animation, &edit.addr, edit.index, edit.axis, edit.new_val);
+    let value = current_key_value(animation, &edit.addr, edit.index, edit.new_val);
     if let Some(value) = value {
         // Overwrite at the (possibly unchanged) time.
         state.dispatch(Box::new(AddKey::new(
@@ -537,37 +534,32 @@ fn apply_edit(state: &mut AppState, anim: AnimationId, animation: &Animation, ed
     }
 }
 
-/// Build the full [`KeyValue`] for a key, replacing `axis` with `new_axis_val`
-/// and keeping the other axis of a vec2 as authored.
+/// Build the [`KeyValue`] for a key from the value a drag produced.
+///
+/// A bone track drives one number, so the dragged value *is* the key's value.
+/// This used to fetch the existing pair and overwrite one axis of it, which
+/// existed only because one keyframe held both — dragging y had to re-state x
+/// to avoid erasing it.
+///
+/// Colour is still packed, so its alpha channel keeps the read-modify-write.
 fn current_key_value(
     animation: &Animation,
     addr: &TimelineAddr,
     index: usize,
-    axis: usize,
-    new_axis_val: f32,
+    new_val: f32,
 ) -> Option<KeyValue> {
     let timeline = animation
         .timelines
         .iter()
         .find(|t| addr.matches_timeline(t))?;
     match timeline {
-        Timeline::BoneRotate { keys, .. } => {
-            keys.get(index).map(|_| KeyValue::Scalar(new_axis_val))
-        }
-        Timeline::BoneTranslate { keys, .. }
+        Timeline::BoneRotate { keys, .. }
+        | Timeline::BoneTranslate { keys, .. }
         | Timeline::BoneScale { keys, .. }
-        | Timeline::BoneShear { keys, .. } => keys.get(index).map(|k| {
-            let mut v = k.value;
-            if axis == 0 {
-                v.x = new_axis_val;
-            } else {
-                v.y = new_axis_val;
-            }
-            KeyValue::Vec2(v)
-        }),
+        | Timeline::BoneShear { keys, .. } => keys.get(index).map(|_| KeyValue::Scalar(new_val)),
         Timeline::SlotColor { keys, .. } => keys.get(index).map(|k| {
             let mut c = k.value;
-            c[3] = new_axis_val.clamp(0.0, 1.0);
+            c[3] = new_val.clamp(0.0, 1.0);
             KeyValue::Color(c)
         }),
         _ => None,
@@ -603,7 +595,6 @@ fn draw_channel_curve(
     painter: &egui::Painter,
     animation: &Animation,
     addr: &TimelineAddr,
-    axis: usize,
     layout: &Layout,
     rect: egui::Rect,
     val_to_y: &impl Fn(f32) -> f32,
@@ -622,7 +613,7 @@ fn draw_channel_curve(
     let mut x = rect.left();
     while x <= rect.right() {
         let t = layout.x_to_time(x).max(0.0);
-        if let Some(v) = sample_channel(timeline, axis, t) {
+        if let Some(v) = sample_channel(timeline, t) {
             pts.push(egui::pos2(x, val_to_y(v)));
         }
         x += step;
@@ -632,17 +623,17 @@ fn draw_channel_curve(
     }
 }
 
-/// Sample one scalar channel of a timeline at `time` using core's sampler.
-fn sample_channel(timeline: &Timeline, axis: usize, time: f32) -> Option<f32> {
+/// Sample a timeline at `time` using core's sampler.
+///
+/// Every bone track is one scalar channel now, so there is no axis to pick.
+fn sample_channel(timeline: &Timeline, time: f32) -> Option<f32> {
     use ankhimate_core::animation::{sample, sample_angle_degrees};
     let mut hint = 0usize;
     match timeline {
         Timeline::BoneRotate { keys, .. } => sample_angle_degrees(keys, time, &mut hint),
         Timeline::BoneTranslate { keys, .. }
         | Timeline::BoneScale { keys, .. }
-        | Timeline::BoneShear { keys, .. } => {
-            sample(keys, time, &mut hint).map(|v| if axis == 0 { v.x } else { v.y })
-        }
+        | Timeline::BoneShear { keys, .. } => sample(keys, time, &mut hint),
         Timeline::SlotColor { keys, .. } => sample(keys, time, &mut hint).map(|c| c[3]),
         _ => None,
     }
@@ -732,7 +723,7 @@ pub fn set_key_for_active_bone(state: &mut AppState, anim: AnimationId) {
     let Some(bone) = state.session.active_bone() else {
         return;
     };
-    let Some(setup) = state
+    let Some(_setup) = state
         .doc
         .skeleton
         .bones
@@ -741,62 +732,44 @@ pub fn set_key_for_active_bone(state: &mut AppState, anim: AnimationId) {
     else {
         return;
     };
-    let Some(local) = state.pose.locals.get(bone).copied() else {
+    let Some(_local) = state.pose.locals.get(bone).copied() else {
         return;
     };
     let time = state.session.playhead;
 
-    let (addr, value) = match state.session.active_transform_tool {
-        crate::session::TransformTool::Translate => (
-            TimelineAddr::Bone {
-                bone,
-                property: BoneProperty::Translate,
-            },
-            KeyValue::Vec2(local.position - setup.position),
-        ),
-        crate::session::TransformTool::Rotate => (
-            TimelineAddr::Bone {
-                bone,
-                property: BoneProperty::Rotate,
-            },
-            KeyValue::Scalar(
-                ankhimate_core::transforms::wrap_angle(local.rotation - setup.rotation)
-                    .to_degrees(),
-            ),
-        ),
-        crate::session::TransformTool::Scale => (
-            TimelineAddr::Bone {
-                bone,
-                property: BoneProperty::Scale,
-            },
-            KeyValue::Vec2(glam::vec2(
-                safe_div(local.scale.x, setup.scale.x),
-                safe_div(local.scale.y, setup.scale.y),
-            )),
-        ),
-        crate::session::TransformTool::Shear => (
-            TimelineAddr::Bone {
-                bone,
-                property: BoneProperty::Shear,
-            },
-            // Degrees on the wire, like rotate (ADR 0002).
-            KeyValue::Vec2(glam::vec2(
-                (local.shear.x - setup.shear.x).to_degrees(),
-                (local.shear.y - setup.shear.y).to_degrees(),
-            )),
-        ),
+    let property = match state.session.active_transform_tool {
+        crate::session::TransformTool::Translate => BoneProperty::Translate,
+        crate::session::TransformTool::Rotate => BoneProperty::Rotate,
+        crate::session::TransformTool::Scale => BoneProperty::Scale,
+        crate::session::TransformTool::Shear => BoneProperty::Shear,
     };
-    state.dispatch(Box::new(AddKey::new(
-        anim,
-        addr,
-        time,
-        value,
-        Interp::Linear,
-    )));
-}
-
-fn safe_div(a: f32, b: f32) -> f32 {
-    if b.abs() < 1e-6 { 1.0 } else { a / b }
+    // Both tracks of a two-axis property, so "key this bone" still keys the
+    // whole property. `bone_key_value` is the one definition of what a posed
+    // value means as a key — this used to hold a second copy of it, and the two
+    // could disagree.
+    let axes: &[Option<Axis>] = match property {
+        BoneProperty::Rotate => &[None],
+        _ => &[Some(Axis::X), Some(Axis::Y)],
+    };
+    for &axis in axes {
+        let addr = TimelineAddr::Bone {
+            bone,
+            property,
+            axis,
+        };
+        let Some(value) =
+            crate::edit_router::bone_key_value(&state.doc, &state.pose, bone, property, axis)
+        else {
+            continue;
+        };
+        state.dispatch(Box::new(AddKey::new(
+            anim,
+            addr,
+            time,
+            value,
+            Interp::Linear,
+        )));
+    }
 }
 
 #[cfg(test)]
