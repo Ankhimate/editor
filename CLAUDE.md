@@ -29,6 +29,13 @@ it on a timeline, export a runtime format. MIT OR Apache-2.0.
   `doc` from a panel directly. Commands that a drag repeats implement `merge` so
   the drag is one undo step, and capture `before` on the *first* apply so undo
   lands where the drag began.
+- **Verbs are named, and the names are a contract.** A keybinding, a menu entry
+  and (soon) a plugin all reach an action through its dotted id in
+  `commands/registry.rs` — `edit.undo`, `tool.create_bone` — never by calling a
+  method. Renaming one silently breaks a user's keymap and any plugin that
+  shadowed it, with no compiler on that side; treat it exactly as a rename in
+  `docs/export-context.md`. An operator's `enabled` is where a precondition
+  lives, so every caller gets the same answer rather than each remembering it.
 - **World transforms are computed, never stored.** Locals are the truth; `Pose`
   derives worlds along `update_order`, which is topologically sorted.
 - **Names on disk, ids in memory** (ADR 0004). Slotmap keys are not stable across

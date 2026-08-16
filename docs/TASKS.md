@@ -847,8 +847,21 @@ fixture migrates and round-trips; CI fails if `CURRENT_VERSION` changes without 
   UI scale, theme + custom color overrides, grid gap/foreground toggle, pixel-art filtering mode,
   bone widget size, non-selected bone translucency, gizmo ring radii, autosave interval, onion-skin
   defaults, ffmpeg path, recent files, "skip startup window".
-- Keymap: an `Action` enum covering every command/tool/transport/mode action; rebindable in a
-  Settings modal (click row → press chord), conflict highlighting, reset-to-default per row.
+- Keymap: **landed as a registry, not the `Action` enum this task specified.** An enum closes the
+  set at compile time, which forecloses the plugin work Phase 10 is built on — a plugin cannot add
+  a variant, and a keymap file naming one cannot survive that plugin being uninstalled. What
+  shipped instead: `commands/registry.rs` (`Operator` — stable dotted id, `enabled`, `invoke`, and
+  shadowing that chains rather than replaces), `commands/operators.rs` (21 built-ins registering
+  through the same door a plugin will), and `keymap.rs` (bindings naming operators by id, exact
+  modifier matching, per-binding `while_typing`, unknown ids kept rather than dropped).
+  Menus read label/shortcut/enabled from the operator, which removed three drifts the duplication
+  had already produced (see commit `3a09c69`).
+  **Still to do here:** the Settings modal itself — click row → press chord, conflict highlighting,
+  reset-to-default per row — and persisting `Keymap` into `Config`, which is why this task stays
+  open. `Config` has no `keymap` field yet; the built-in table is rebuilt each launch.
+  Not yet operators: file actions (they open a native dialog and can fail with a message, which
+  `OpResult` has no room for) and `Shift+H` isolation (two session fields and a status line rather
+  than one verb; wants splitting into `view.isolate` / `view.show_all`).
 - Autosave: timer writes `<name>.ankh.autosave` beside the project (temp dir if unsaved); recovery
   offer on startup when newer than the save.
 **Accept:** rebinding undo to `Ctrl+U` works and persists; kill the process mid-edit → relaunch
