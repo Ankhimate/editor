@@ -42,6 +42,10 @@ pub struct AnkhimateApp {
     /// `AppState` methods directly, so a rebound key and a plugin-shadowed
     /// operator both take effect without touching this file.
     operators: crate::commands::registry::Registry,
+    /// Key bindings, as data rather than as `if key_pressed` arms (T-701).
+    /// Bindings name operators by id, so rebinding a key and shadowing an
+    /// operator are independent of each other.
+    keymap: crate::keymap::Keymap,
 }
 
 /// One window control. Returns whether it was clicked.
@@ -370,6 +374,7 @@ impl Default for AnkhimateApp {
             torn_off: Vec::new(),
             logo: crate::ui::branding::Logo::default(),
             operators: crate::commands::registry::Registry::with_builtins(),
+            keymap: crate::keymap::Keymap::builtin(),
         }
     }
 }
@@ -426,21 +431,18 @@ impl eframe::App for AnkhimateApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.theme.apply(ctx);
 
+        // Undo and redo are no longer read here — they are keymap bindings like
+        // everything else. The flags remain because the Edit menu and the
+        // toolbar still raise them, and `resolve_frame` routes all three to the
+        // same operator.
         let mut trigger_undo = false;
         let mut trigger_redo = false;
         let mut file_action: Option<FileAction> = None;
         if ctx.input(|i| i.modifiers.ctrl) {
-            if ctx.input(|i| i.key_pressed(egui::Key::Z)) {
-                if ctx.input(|i| i.modifiers.shift) {
-                    trigger_redo = true;
-                } else {
-                    trigger_undo = true;
-                }
-            }
-            if ctx.input(|i| i.key_pressed(egui::Key::Y)) {
-                trigger_redo = true;
-            }
-            // File shortcuts: Ctrl+N/O/S, Ctrl+Shift+S.
+            // File shortcuts: Ctrl+N/O/S, Ctrl+Shift+S. Still inline because a
+            // file action is not an operator — it opens a native dialog and can
+            // fail with a message, which `OpResult` has no room for. Folding
+            // these in belongs with the format registry.
             if ctx.input(|i| i.key_pressed(egui::Key::N)) {
                 file_action = Some(FileAction::New);
             }
@@ -454,135 +456,43 @@ impl eframe::App for AnkhimateApp {
                     FileAction::Save
                 });
             }
+            // Clipboard (T-209) moved to the keymap: Ctrl+C/V/D and their
+            // Shift variants are ordinary bindings now.
+        }
 
-            // ── Clipboard (T-209) ────────────────────────────────────────
-            // Shift picks the pose variants: Ctrl+C copies bones, Ctrl+Shift+C
-            // copies the pose; Ctrl+Shift+V pastes a pose mirrored.
-            let typing_now = ctx.memory(|m| m.focused().is_some());
-            if !typing_now {
-                let (c, v, d, shift) = ctx.input(|i| {
-                    (
-                        i.key_pressed(egui::Key::C),
-                        i.key_pressed(egui::Key::V),
-                        i.key_pressed(egui::Key::D),
-                        i.modifiers.shift,
-                    )
-                });
-                if c {
-                    self.run_operator(if shift { "edit.copy_pose" } else { "edit.copy" });
-                }
-                if v {
-                    self.run_operator(if shift {
-                        "edit.paste_mirrored"
-                    } else {
-                        "edit.paste"
-                    });
-                }
-                if d {
-                    self.run_operator("edit.duplicate");
-                }
-            }
+        // ── Keymap (T-701) ───────────────────────────────────────────────
+        // One table pass replaces what used to be twenty-odd `key_pressed`
+        // arms. Which bindings survive a focused text field is the binding's
+        // own business, not this site's: `Ctrl+Z` opts in, bare letters do not.
+        let typing = ctx.memory(|m| m.focused().is_some());
+        let fired: Vec<String> = ctx.input(|i| {
+            self.keymap
+                .resolve(i, typing)
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        });
+        for id in fired {
+            self.run_operator(&id);
         }
 
         // ── Playback shortcuts (T-202) ───────────────────────────────────
         // Suppressed while a text field has focus so typing a name does not
         // scrub the timeline.
-        let typing = ctx.memory(|m| m.focused().is_some());
         if !typing {
-            // ── Mode, tools, keying (T-207) ──────────────────────────────
-            let (tab, key_k, v, b, w) = ctx.input(|i| {
+            // Shift+H isolates the viewport to the selection, or leaves
+            // isolation when there is nothing selected or it is already on
+            // (T-903). Still inline: it toggles two session fields and writes a
+            // status line rather than naming one verb, so it wants splitting
+            // into `view.isolate` / `view.show_all` before it becomes a binding.
+            let (h, ctrl, shift) = ctx.input(|i| {
                 (
-                    i.key_pressed(egui::Key::Tab),
-                    i.key_pressed(egui::Key::K),
-                    i.key_pressed(egui::Key::V),
-                    i.key_pressed(egui::Key::B),
-                    i.key_pressed(egui::Key::W),
+                    i.key_pressed(egui::Key::H),
+                    i.modifiers.ctrl,
+                    i.modifiers.shift,
                 )
             });
-            // Visibility filters. Bare digits rather than a modifier: these get
-            // flipped constantly while rigging, and a chord is a chord too many.
-            let (hide_art, hide_bones) = ctx.input(|i| {
-                (
-                    i.key_pressed(egui::Key::Num1),
-                    i.key_pressed(egui::Key::Num2),
-                )
-            });
-            if hide_art {
-                self.run_operator("view.toggle_artwork");
-            }
-            if hide_bones {
-                self.run_operator("view.toggle_bones");
-            }
-            if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Comma)) {
-                self.run_operator("app.settings");
-            }
-            // F2 renames the selection — the key every file manager and 3D tool
-            // uses for it, so it needs no discovering. Only with something
-            // selected: an empty rename dialog would be a dead end.
-            if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
-                // The "needs a selection" guard moved onto the operator, so the
-                // menu entry and any rebinding get it too.
-                self.run_operator("edit.rename");
-            }
-            // M drops a marker at the playhead (T-906) — the same gesture K uses
-            // for a key, on the strip above it. Named after the frame it lands
-            // on, because an animator marking a pose knows which pose it is and
-            // a dialog mid-scrub would break the rhythm; rename is on its
-            // right-click menu.
-            if ctx.input(|i| i.key_pressed(egui::Key::M) && !i.modifiers.any()) {
-                self.run_operator("anim.add_marker");
-            }
-            if tab {
-                self.run_operator("mode.toggle");
-            }
-            if key_k {
-                // Commits any posed-but-unkeyed bone; declines in Setup mode.
-                self.run_operator("anim.key_pose");
-            }
             {
-                // The Setup-only guard on the structural tools now lives on the
-                // operators, which is why there is no `can_edit_structure()`
-                // read left here.
-                if v {
-                    self.run_operator("tool.select");
-                }
-                if b {
-                    self.run_operator("tool.create_bone");
-                }
-                if w {
-                    self.run_operator("tool.weight_paint");
-                }
-            }
-
-            // Transform mode for the Select tool's gizmo: T/R/S/H. Guarded on
-            // `!ctrl` so Ctrl+S stays Save.
-            {
-                let (t, r, s, h, ctrl, shift) = ctx.input(|i| {
-                    (
-                        i.key_pressed(egui::Key::T),
-                        i.key_pressed(egui::Key::R),
-                        i.key_pressed(egui::Key::S),
-                        i.key_pressed(egui::Key::H),
-                        i.modifiers.ctrl,
-                        i.modifiers.shift,
-                    )
-                });
-                // Shift excluded as well as Ctrl: Shift+H is isolation (T-903),
-                // and without this the bare-key match would fire Shear too.
-                if !ctrl && !shift {
-                    if t {
-                        self.run_operator("gizmo.translate");
-                    }
-                    if r {
-                        self.run_operator("gizmo.rotate");
-                    }
-                    if s {
-                        self.run_operator("gizmo.scale");
-                    }
-                    if h {
-                        self.run_operator("gizmo.shear");
-                    }
-                }
                 // Shift+H isolates the viewport to the selection, or leaves
                 // isolation when there is nothing selected or it is already on
                 // (T-903). One key both ways: there is nothing to remember, and

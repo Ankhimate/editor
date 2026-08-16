@@ -6,6 +6,7 @@ pub mod config;
 pub mod doc;
 pub mod edit_router;
 pub mod fileops;
+pub mod keymap;
 pub mod meshgen;
 pub mod renderer;
 pub mod session;
