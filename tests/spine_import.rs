@@ -286,14 +286,17 @@ fn a_time_overshoot_is_clamped_and_said_so() {
     assert_eq!(clamped, ["walk/root/rotate"], "{:?}", loaded.report.lossy);
 }
 
-/// A curve is normalized against the axis that actually moves.
+/// Each axis keeps its **own** curve.
 ///
-/// A `Vec2Key` holds one easing for both axes, so a two-axis timeline has to
-/// pick one to measure against. X is the usual choice — but a track where x
-/// never moves has no span, and the handles collapse to zero. The track then
-/// imports as linear on *both* axes while the source eased on y.
+/// This is the whole point of splitting the tracks. Spine gives translate two
+/// curves — four control points for x, four for y — and a paired keyframe holds
+/// one easing for both, so one axis always inherited the other's shape.
+///
+/// The fixture eases y and leaves x flat, which is the case that used to need a
+/// fallback ("follow y where x has no span") and a report when the two
+/// disagreed. Neither exists now: x reads x's curve and y reads y's.
 #[test]
-fn a_two_axis_curve_follows_the_axis_that_moves() {
+fn each_axis_keeps_its_own_curve() {
     let doc = r#"{
       "skeleton": { "spine": "4.3.23" },
       "bones": [{ "name": "root" }],
@@ -304,21 +307,39 @@ fn a_two_axis_curve_follows_the_axis_that_moves() {
     }"#;
     let loaded = spine::read(doc, Images::None, "rig").expect("reads");
     let anim = loaded.animations.values().next().expect("one animation");
-    let keys = anim
-        .timelines
-        .iter()
-        .find_map(|t| match t {
-            ankhimate_core::animation::Timeline::BoneTranslate { keys, .. } => Some(keys),
-            _ => None,
-        })
-        .expect("a translate timeline");
+
+    let track = |want: ankhimate_core::animation::Axis| {
+        anim.timelines
+            .iter()
+            .find_map(|t| match t {
+                ankhimate_core::animation::Timeline::BoneTranslate { axis, keys, .. }
+                    if *axis == want =>
+                {
+                    Some(keys.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("a {want:?} track"))
+    };
+
     // The easing belongs to the key it arrives at, so key 1 holds it.
-    match keys[1].interp {
+    // Y moves 0 -> 8 with its control point at 8, so its handle reaches the top.
+    match track(ankhimate_core::animation::Axis::Y)[1].interp {
         ankhimate_core::animation::Interp::Bezier { in_handle, .. } => assert!(
             in_handle.y > 0.5,
-            "y's own handle should survive, got {in_handle:?}"
+            "y keeps its own handle, got {in_handle:?}"
         ),
-        other => panic!("expected a bezier, got {other:?}"),
+        other => panic!("expected a bezier on y, got {other:?}"),
+    }
+
+    // X never moves, so its own curve is flat — and that is now *x's* answer
+    // rather than something y is forced to inherit.
+    match track(ankhimate_core::animation::Axis::X)[1].interp {
+        ankhimate_core::animation::Interp::Bezier { in_handle, .. } => assert!(
+            in_handle.y.abs() < 1e-3,
+            "x has no span of its own, got {in_handle:?}"
+        ),
+        other => panic!("expected a bezier on x, got {other:?}"),
     }
 }
 

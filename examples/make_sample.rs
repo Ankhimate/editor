@@ -12,7 +12,7 @@
 //! draw order, keyframes, an IK constraint and an event together, which makes it
 //! a decent smoke test for the whole pipeline.
 
-use ankhimate_core::animation::{Animation, EventKey, Interp, Key, Marker, Timeline};
+use ankhimate_core::animation::{Animation, Axis, EventKey, Interp, Key, Marker, Timeline};
 use ankhimate_core::assets::{AssetDb, ImageAsset};
 use ankhimate_core::attachment::{Attachment, Rect, RegionAttachment};
 use ankhimate_core::constraints::{Constraint, IkConstraint};
@@ -415,8 +415,11 @@ fn main() {
             rotate(arm_r, &[(0.0, 20.0), (0.5, -20.0), (1.0, 20.0)]),
             rotate(forearm_r, &[(0.0, -5.0), (0.5, -15.0), (1.0, -5.0)]),
             // The body bobs twice per cycle — once per footfall.
+            // Only y moves, so only a y track exists — the pairing this
+            // replaced would have carried a flat x track alongside it.
             Timeline::BoneTranslate {
                 bone: root,
+                axis: Axis::Y,
                 keys: [
                     (0.0, 0.0),
                     (0.25, -6.0),
@@ -427,7 +430,7 @@ fn main() {
                 .iter()
                 .map(|(time, y)| Key {
                     time: *time,
-                    value: glam::vec2(0.0, *y),
+                    value: *y,
                     interp: Interp::Linear,
                 })
                 .collect(),
@@ -458,23 +461,27 @@ fn main() {
         events: Vec::new(),
         markers: Vec::new(),
         bone_offsets: Vec::new(),
-        timelines: vec![Timeline::BoneTranslate {
-            bone: foot_target,
-            keys: [
-                (0.0, glam::vec2(0.0, 0.0)),
-                (0.25, glam::vec2(45.0, 35.0)),
-                (0.5, glam::vec2(80.0, 0.0)),
-                (0.75, glam::vec2(40.0, -6.0)),
-                (1.0, glam::vec2(0.0, 0.0)),
-            ]
+        timelines: Axis::BOTH
             .iter()
-            .map(|(time, offset)| Key {
-                time: *time,
-                value: *offset,
-                interp: Interp::Linear,
+            .map(|&axis| Timeline::BoneTranslate {
+                bone: foot_target,
+                axis,
+                keys: [
+                    (0.0, glam::vec2(0.0, 0.0)),
+                    (0.25, glam::vec2(45.0, 35.0)),
+                    (0.5, glam::vec2(80.0, 0.0)),
+                    (0.75, glam::vec2(40.0, -6.0)),
+                    (1.0, glam::vec2(0.0, 0.0)),
+                ]
+                .iter()
+                .map(|(time, offset)| Key {
+                    time: *time,
+                    value: offset[axis.index()],
+                    interp: Interp::Linear,
+                })
+                .collect(),
             })
             .collect(),
-        }],
     });
 
     // ── Write it ─────────────────────────────────────────────────────────

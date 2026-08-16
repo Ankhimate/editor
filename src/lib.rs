@@ -49,7 +49,13 @@ pub fn to_json(project: &ProjectRef<'_>) -> Result<String, Error> {
 
 /// Parse `project.json` bytes into a document, migrating older versions forward.
 pub fn from_json(json: &str) -> Result<Loaded, Error> {
-    let project: schema::Project = serde_json::from_str(json)?;
+    // Migrate the **untyped** tree first. A step that changes a field's shape —
+    // v1's paired `keys: [{time, x, y}]` becoming two scalar tracks — produces
+    // values the current types cannot parse, so deserializing before migrating
+    // fails on exactly the files migration exists to rescue.
+    let raw: serde_json::Value = serde_json::from_str(json)?;
+    let raw = migrate::migrate_json(raw)?;
+    let project: schema::Project = serde_json::from_value(raw)?;
     let project = migrate::migrate(project)?;
     Ok(convert::from_schema(&project))
 }
@@ -94,12 +100,30 @@ pub fn load(path: &Path) -> Result<(Loaded, Vec<ImageBlob>), Error> {
     let contents = container::read(path)?;
     let mut loaded = from_json(&contents.project_json)?;
 
-    // name → file, from the index we just parsed.
+    // file → name, from the asset index in `project.json`.
+    //
+    // Read out of the raw tree rather than by re-deserializing: a file whose
+    // *shape* needs migrating — v1's paired animation keys — cannot parse into
+    // the current types at all. This used to `serde_json::from_str::<Project>`
+    // here and swallow the failure with `Err(_) => Default::default()`, so on
+    // such a file the index came back empty and every image silently lost its
+    // binding while the rig itself loaded fine.
     let index: std::collections::HashMap<String, String> =
-        match serde_json::from_str::<schema::Project>(&contents.project_json) {
-            Ok(p) => p.assets.into_iter().map(|a| (a.file, a.name)).collect(),
-            Err(_) => Default::default(),
-        };
+        serde_json::from_str::<serde_json::Value>(&contents.project_json)
+            .ok()
+            .and_then(|v| v.get("assets").and_then(|a| a.as_array()).cloned())
+            .map(|assets| {
+                assets
+                    .iter()
+                    .filter_map(|a| {
+                        Some((
+                            a.get("file")?.as_str()?.to_string(),
+                            a.get("name")?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
     let mut unclaimed = Vec::new();
     for blob in contents.images {
