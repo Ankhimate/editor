@@ -37,7 +37,115 @@ pub fn migrate_json(mut raw: serde_json::Value) -> Result<serde_json::Value, Mig
     if version < 2 {
         v1_to_v2_json(&mut raw);
     }
+    if version < 3 {
+        v2_to_v3_json(&mut raw);
+    }
     Ok(raw)
+}
+
+/// v2 → v3: a weighted mesh's deform keys one offset per **influence**.
+///
+/// v2 keyed one per vertex, which moves every copy of a weighted vertex
+/// together — the copy bound to the thigh and the copy bound to the shin get
+/// the same push, so a crease that moves one and holds the other cannot be
+/// authored. v3 keys them separately.
+///
+/// A v2 key expands by repeating each vertex's offset across its influences,
+/// which is exactly what one offset per vertex meant. An existing rig therefore
+/// deforms identically; what it gains is somewhere to put the difference.
+fn v2_to_v3_json(raw: &mut serde_json::Value) {
+    use serde_json::{Value, json};
+
+    let counts = influence_counts(raw);
+    if counts.is_empty() {
+        return;
+    }
+    let Some(animations) = raw.get_mut("animations").and_then(|a| a.as_array_mut()) else {
+        return;
+    };
+    for animation in animations {
+        let Some(timelines) = animation
+            .get_mut("timelines")
+            .and_then(|t| t.as_array_mut())
+        else {
+            continue;
+        };
+        for timeline in timelines.iter_mut() {
+            if timeline.get("kind").and_then(|k| k.as_str()) != Some("deform") {
+                continue;
+            }
+            let Some(per_vertex) = timeline
+                .get("attachment")
+                .and_then(|a| a.as_str())
+                .and_then(|name| counts.get(name))
+                .cloned()
+            else {
+                // Rigid mesh, or one this file no longer has: a per-vertex key
+                // is already the right shape.
+                continue;
+            };
+            let Some(keys) = timeline.get_mut("keys").and_then(|k| k.as_array_mut()) else {
+                continue;
+            };
+            for key in keys.iter_mut() {
+                let Some(offsets) = key.get("offsets").and_then(|o| o.as_array()).cloned() else {
+                    continue;
+                };
+                let mut expanded: Vec<Value> = Vec::new();
+                for (vertex, influences) in per_vertex.iter().enumerate() {
+                    let x = offsets.get(vertex * 2).cloned().unwrap_or(json!(0.0));
+                    let y = offsets.get(vertex * 2 + 1).cloned().unwrap_or(json!(0.0));
+                    for _ in 0..*influences {
+                        expanded.push(x.clone());
+                        expanded.push(y.clone());
+                    }
+                }
+                if let Some(map) = key.as_object_mut() {
+                    map.insert("offsets".into(), Value::Array(expanded));
+                }
+            }
+        }
+    }
+}
+
+/// How many influences each vertex of each weighted mesh has, by attachment
+/// name.
+///
+/// A v1/v2 deform key holds one offset per vertex; v3 holds one per influence.
+/// Expanding a key needs the mesh it belongs to, and only weighted meshes are
+/// listed — a rigid one's deform already has the right shape.
+fn influence_counts(raw: &serde_json::Value) -> std::collections::HashMap<String, Vec<usize>> {
+    let mut out = std::collections::HashMap::new();
+    let Some(skins) = raw.get("skins").and_then(|s| s.as_array()) else {
+        return out;
+    };
+    for skin in skins {
+        let Some(entries) = skin.get("entries").and_then(|e| e.as_array()) else {
+            continue;
+        };
+        for entry in entries {
+            let Some(att) = entry.get("attachment") else {
+                continue;
+            };
+            if att.get("type").and_then(|t| t.as_str()) != Some("mesh") {
+                continue;
+            }
+            let Some(weights) = att.get("weights").and_then(|w| w.as_array()) else {
+                continue;
+            };
+            if weights.is_empty() {
+                continue;
+            }
+            let per_vertex: Vec<usize> = weights
+                .iter()
+                .map(|w| w.as_array().map_or(0, |a| a.len()))
+                .collect();
+            if let Some(name) = entry.get("name").and_then(|n| n.as_str()) {
+                out.insert(name.to_string(), per_vertex);
+            }
+        }
+    }
+    out
 }
 
 /// v1 → v2, on the parts whose *type* changed.
@@ -154,6 +262,10 @@ pub fn migrate(project: Project) -> Result<Project, MigrateError> {
     while project.version < CURRENT_VERSION {
         match project.version {
             1 => v1_to_v2(&mut project),
+            // The deform reshape is entirely a `migrate_json` step — it changes
+            // a key's length, not its type — so this arm only carries the
+            // version forward.
+            2 => project.version = 3,
             // Unreachable while the guard above holds, but a silent infinite
             // loop is the worst way to find out otherwise.
             other => return Err(MigrateError::InvalidVersion { found: other }),
