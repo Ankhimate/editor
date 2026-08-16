@@ -327,10 +327,19 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
             // `bone_world` per vertex, so a mesh with no weights and a vertex
             // with no weights are handled by the same path.
             let deform = mesh_deform(state, slot_id);
+            let weighted = !mesh.weights.is_empty();
             let vertices = (0..mesh.setup_vertices.len())
                 .map(|i| {
-                    let offset = deform.and_then(|d| d.get(i).copied()).unwrap_or_default();
-                    let world = mesh.skin_vertex_with_ffd(i, offset, &state.pose, bone_world);
+                    // A weighted mesh deforms per influence, so a vertex takes
+                    // its slice of the key; a rigid one takes its single entry.
+                    let offsets: Vec<glam::Vec2> = match deform {
+                        Some(d) if weighted => {
+                            d.get(mesh.influence_range(i)).unwrap_or_default().to_vec()
+                        }
+                        Some(d) => vec![d.get(i).copied().unwrap_or_default()],
+                        None => Vec::new(),
+                    };
+                    let world = mesh.skin_vertex_with_deform(i, &offsets, &state.pose, bone_world);
                     let uv = mesh.uvs.get(i).copied().unwrap_or(glam::Vec2::ZERO);
                     MeshVertex {
                         position: [world.x, world.y],

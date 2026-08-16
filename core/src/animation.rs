@@ -308,7 +308,19 @@ pub enum Timeline {
         constraint: ConstraintId,
         keys: Vec<Key<crate::constraints::TransformMix>>,
     },
-    /// Per-vertex offsets from the attachment's setup vertices.
+    /// Offsets from the attachment's setup vertices.
+    ///
+    /// **One entry per influence on a weighted mesh, per vertex otherwise.**
+    /// A weighted mesh's influences are laid out flat in vertex order — vertex
+    /// 0's influences, then vertex 1's — so a key is as long as the mesh has
+    /// influences, and `MeshAttachment::influence_range` maps a vertex to its
+    /// slice of one.
+    ///
+    /// A weighted vertex is skinned by pushing one point through each bone that
+    /// moves it, and a deform can push those copies apart: the copy bound to the
+    /// thigh moving while the copy bound to the shin holds is how a knee
+    /// creases. One offset per vertex cannot say that — it moves every copy
+    /// together, which is only right while a vertex's bones point the same way.
     Deform {
         slot: SlotId,
         attachment: String,

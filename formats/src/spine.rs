@@ -1089,21 +1089,15 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
                         continue;
                     };
                     let count = mesh.setup_vertices.len();
-                    // One weight list per vertex, so the influence stream can be
-                    // walked in step with the vertices it belongs to.
-                    let influences: Vec<Vec<f32>> = mesh
-                        .weights
-                        .iter()
-                        .map(|v| v.iter().map(|w| w.weight).collect())
-                        .collect();
-                    let weighted = !influences.is_empty();
-                    if weighted {
-                        report.lossy(
-                            "deform",
-                            format!("{slot_name}/{att_name}"),
-                            "a weighted mesh's deform is approximated in mesh space",
-                        );
-                    }
+                    // A weighted mesh deforms per influence in both models, so
+                    // the stream carries straight across. The length differs
+                    // from the vertex count: spineboy's `front-foot` has 14
+                    // vertices and 21 influences, and a deform run reaching
+                    // float 36 fits the 42-float influence stream while
+                    // overrunning a 28-float vertex one.
+                    let influence_count = mesh.influence_count();
+                    let weighted = influence_count > 0;
+                    let slots_len = if weighted { influence_count } else { count };
                     for k in frames {
                         note(f(k, "time", 0.0), &mut duration);
                     }
@@ -1114,49 +1108,17 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
                             frames,
                             0,
                             |k| {
+                                // `offset` counts floats into the dense stream,
+                                // so the first pair lands at `offset / 2`.
                                 let offset =
                                     k.get("offset").and_then(|o| o.as_u64()).unwrap_or(0) as usize;
                                 let run = floats(k, "vertices");
-                                if !weighted {
-                                    let mut out = vec![glam::Vec2::ZERO; count];
-                                    for (i, pair) in run.chunks_exact(2).enumerate() {
-                                        let v = offset / 2 + i;
-                                        if v < count {
-                                            out[v] = glam::vec2(pair[0], pair[1]);
-                                        }
+                                let mut out = vec![glam::Vec2::ZERO; slots_len];
+                                for (i, pair) in run.chunks_exact(2).enumerate() {
+                                    let at = offset / 2 + i;
+                                    if at < slots_len {
+                                        out[at] = glam::vec2(pair[0], pair[1]);
                                     }
-                                    return out;
-                                }
-                                // Rebuild the dense influence stream, then collapse
-                                // each vertex's influences by weight. Ours is one
-                                // offset per vertex in the mesh's own frame; theirs
-                                // is one per influence in each bone's. The weighted
-                                // mean lands in the right place while a vertex's
-                                // bones point roughly the same way — the usual case
-                                // for a deform — and drifts when they do not.
-                                let total: usize =
-                                    influences.iter().map(|w| w.len()).sum::<usize>() * 2;
-                                let mut flat = vec![0.0f32; total];
-                                for (i, v) in run.iter().enumerate() {
-                                    if offset + i < flat.len() {
-                                        flat[offset + i] = *v;
-                                    }
-                                }
-                                let mut out = Vec::with_capacity(count);
-                                let mut cursor = 0usize;
-                                for weights in &influences {
-                                    let mut sum = glam::Vec2::ZERO;
-                                    let mut mass = 0.0;
-                                    for (i, weight) in weights.iter().enumerate() {
-                                        let base = (cursor + i) * 2;
-                                        if base + 1 >= flat.len() {
-                                            break;
-                                        }
-                                        sum += glam::vec2(flat[base], flat[base + 1]) * *weight;
-                                        mass += *weight;
-                                    }
-                                    cursor += weights.len();
-                                    out.push(if mass > 0.0 { sum / mass } else { sum });
                                 }
                                 out
                             },

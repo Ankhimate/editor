@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 pub type Extra = BTreeMap<String, serde_json::Value>;
 
 /// The current schema version. Bump on any breaking change and add a migration.
-pub const CURRENT_VERSION: u32 = 2;
+pub const CURRENT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
