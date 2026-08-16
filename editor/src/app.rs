@@ -379,6 +379,49 @@ impl Default for AnkhimateApp {
     }
 }
 
+/// Draw a menu entry for the operator `id` names, and report a click.
+///
+/// Label, enabled state and the shortcut all come from the operator and the
+/// keymap rather than from the call site. Every one of those was previously
+/// written out again at each menu, and they had drifted: Redo advertised
+/// `Ctrl+Y` when the first binding is `Ctrl+Shift+Z`, and Copy, Copy Pose and
+/// Duplicate had no enable rule at all, so they stayed clickable with an empty
+/// selection while their key bindings correctly declined.
+///
+/// A free function rather than a method: the caller holds `&mut self` for the
+/// egui closure, so this borrows only the three pieces it reads.
+///
+/// `suffix` appends to the operator's own label — the Edit menu shows
+/// "Undo Move Bone", where "Move Bone" is the command on top of the stack.
+fn operator_button(
+    ui: &mut egui::Ui,
+    operators: &crate::commands::registry::Registry,
+    keymap: &crate::keymap::Keymap,
+    state: &AppState,
+    id: &str,
+    suffix: Option<&str>,
+) -> bool {
+    let Some(op) = operators.get(id) else {
+        // An id with no operator draws nothing rather than a dead entry. This
+        // is reachable once plugins can register menu items and then be
+        // uninstalled.
+        return false;
+    };
+    let label = match suffix {
+        Some(extra) => format!("{} {extra}", op.label()),
+        None => op.label().to_string(),
+    };
+    let mut button = egui::Button::new(label);
+    if let Some(chord) = keymap.chord_for(id) {
+        button = button.shortcut_text(chord.label());
+    }
+    let clicked = ui.add_enabled(op.enabled(state), button).clicked();
+    if clicked {
+        ui.close();
+    }
+    clicked
+}
+
 impl AnkhimateApp {
     /// Run the operator `id` names, and honour whatever chrome it asked for.
     ///
@@ -438,6 +481,10 @@ impl eframe::App for AnkhimateApp {
         let mut trigger_undo = false;
         let mut trigger_redo = false;
         let mut file_action: Option<FileAction> = None;
+        // An operator a menu entry asked for. Deferred rather than run in place
+        // because drawing the menu borrows `self` immutably and `run_operator`
+        // needs it mutably.
+        let mut menu_operator: Option<&str> = None;
         if ctx.input(|i| i.modifiers.ctrl) {
             // File shortcuts: Ctrl+N/O/S, Ctrl+Shift+S. Still inline because a
             // file action is not an operator — it opens a native dialog and can
@@ -669,11 +716,7 @@ impl eframe::App for AnkhimateApp {
                                 // startup window shows, reachable mid-session.
                                 ui.menu_button("Open Recent", |ui| {
                                     if self.config.recent_files.is_empty() {
-                                        ui.label(
-                                            egui::RichText::new("Nothing yet")
-                                                .weak()
-                                                .small(),
-                                        );
+                                        ui.label(egui::RichText::new("Nothing yet").weak().small());
                                     }
                                     for path in self.config.recent_files.clone() {
                                         let name = path
@@ -696,108 +739,63 @@ impl eframe::App for AnkhimateApp {
                                     self.show_startup = true;
                                     ui.close();
                                 }
-                                if ui
-                                    .add(
-                                        egui::Button::new("Settings…")
-                                            .shortcut_text("Ctrl+,"),
-                                    )
-                                    .clicked()
-                                {
-                                    self.show_settings = true;
-                                    ui.close();
+                                if operator_button(
+                                    ui,
+                                    &self.operators,
+                                    &self.keymap,
+                                    &self.state,
+                                    "app.settings",
+                                    None,
+                                ) {
+                                    menu_operator = Some("app.settings");
                                 }
                                 if ui.button("Quit").clicked() {
                                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                 }
                             });
                             ui.menu_button("Edit", |ui| {
-                                let mut clipboard_action: Option<ClipboardAction> = None;
-                                // `Undo <label>` per T-107.
-                                let undo_text = match self.state.history.undo_label() {
-                                    Some(label) => format!("Undo {label}"),
-                                    None => "Undo".to_string(),
-                                };
-                                if ui
-                                    .add_enabled(
-                                        self.state.history.can_undo(),
-                                        egui::Button::new(undo_text).shortcut_text("Ctrl+Z"),
-                                    )
-                                    .clicked()
-                                {
+                                // Every entry's label, enabled state and shortcut
+                                // come from the operator and the keymap. The
+                                // clicked id is collected and run after the
+                                // closure, since drawing holds `&self`.
+                                let ops = &self.operators;
+                                let keymap = &self.keymap;
+                                let state = &self.state;
+
+                                // `Undo <label>` per T-107 — the name of the
+                                // command on top of the stack, not a static word.
+                                if operator_button(
+                                    ui,
+                                    ops,
+                                    keymap,
+                                    state,
+                                    "edit.undo",
+                                    state.history.undo_label(),
+                                ) {
                                     trigger_undo = true;
-                                    ui.close();
                                 }
-                                let redo_text = match self.state.history.redo_label() {
-                                    Some(label) => format!("Redo {label}"),
-                                    None => "Redo".to_string(),
-                                };
-                                if ui
-                                    .add_enabled(
-                                        self.state.history.can_redo(),
-                                        egui::Button::new(redo_text).shortcut_text("Ctrl+Y"),
-                                    )
-                                    .clicked()
-                                {
+                                if operator_button(
+                                    ui,
+                                    ops,
+                                    keymap,
+                                    state,
+                                    "edit.redo",
+                                    state.history.redo_label(),
+                                ) {
                                     trigger_redo = true;
-                                    ui.close();
                                 }
 
                                 // ── Clipboard (T-209) ────────────────────
                                 ui.separator();
-                                let held = self.state.session.clipboard.describe();
-                                for (label, shortcut, action) in [
-                                    ("Copy Bones", "Ctrl+C", ClipboardAction::CopyBones),
-                                    ("Copy Pose", "Ctrl+Shift+C", ClipboardAction::CopyPose),
+                                for id in [
+                                    "edit.copy",
+                                    "edit.copy_pose",
+                                    "edit.paste",
+                                    "edit.paste_mirrored",
+                                    "edit.duplicate",
                                 ] {
-                                    if ui
-                                        .add(egui::Button::new(label).shortcut_text(shortcut))
-                                        .clicked()
-                                    {
-                                        clipboard_action = Some(action);
-                                        ui.close();
-                                    }
-                                }
-                                let can_paste = !self.state.session.clipboard.is_empty();
-                                if ui
-                                    .add_enabled(
-                                        can_paste,
-                                        egui::Button::new("Paste").shortcut_text("Ctrl+V"),
-                                    )
-                                    .on_hover_text(format!("Holding {held}"))
-                                    .clicked()
-                                {
-                                    clipboard_action = Some(ClipboardAction::Paste);
-                                    ui.close();
-                                }
-                                if ui
-                                    .add_enabled(
-                                        can_paste,
-                                        egui::Button::new("Paste Mirrored")
-                                            .shortcut_text("Ctrl+Shift+V"),
-                                    )
-                                    .on_hover_text("Flips X translation and rotation — the other half of a walk cycle")
-                                    .clicked()
-                                {
-                                    clipboard_action = Some(ClipboardAction::PasteMirrored);
-                                    ui.close();
-                                }
-                                if ui
-                                    .add(egui::Button::new("Duplicate").shortcut_text("Ctrl+D"))
-                                    .clicked()
-                                {
-                                    clipboard_action = Some(ClipboardAction::Duplicate);
-                                    ui.close();
-                                }
-
-                                if let Some(action) = clipboard_action {
-                                    match action {
-                                        ClipboardAction::CopyBones => self.state.copy_selection(),
-                                        ClipboardAction::CopyPose => self.state.copy_pose(),
-                                        ClipboardAction::Paste => self.state.paste(false),
-                                        ClipboardAction::PasteMirrored => self.state.paste(true),
-                                        ClipboardAction::Duplicate => {
-                                            self.state.duplicate_selection()
-                                        }
+                                    if operator_button(ui, ops, keymap, state, id, None) {
+                                        menu_operator = Some(id);
                                     }
                                 }
                             });
@@ -819,13 +817,10 @@ impl eframe::App for AnkhimateApp {
                                     // frame undoes would be a control that does
                                     // nothing.
                                     if tab.is_animation() && !animating {
-                                        ui.add_enabled(
-                                            false,
-                                            egui::Checkbox::new(&mut on, label),
-                                        )
-                                        .on_disabled_hover_text(
-                                            "Switch to Animate (Tab) to use this panel",
-                                        );
+                                        ui.add_enabled(false, egui::Checkbox::new(&mut on, label))
+                                            .on_disabled_hover_text(
+                                                "Switch to Animate (Tab) to use this panel",
+                                            );
                                         continue;
                                     }
                                     if ui.checkbox(&mut on, label).clicked() {
@@ -843,10 +838,7 @@ impl eframe::App for AnkhimateApp {
                                 // drawn", the same question the panel list asks.
                                 ui.checkbox(
                                     &mut self.state.session.show_artwork,
-                                    format!(
-                                        "{}  Artwork",
-                                        crate::ui::icons::IMAGE
-                                    ),
+                                    format!("{}  Artwork", crate::ui::icons::IMAGE),
                                 );
                                 ui.checkbox(
                                     &mut self.state.session.show_bones,
@@ -935,9 +927,7 @@ impl eframe::App for AnkhimateApp {
 
                                 if ui
                                     .add_enabled(setup, egui::Button::new("Set Pose As Setup"))
-                                    .on_hover_text(
-                                        "Bake what is on screen into the setup skeleton",
-                                    )
+                                    .on_hover_text("Bake what is on screen into the setup skeleton")
                                     .clicked()
                                 {
                                     action = Some(PoseAction::SetAsSetup);
@@ -1131,7 +1121,7 @@ impl eframe::App for AnkhimateApp {
             }
             // The workspace does not run at all this frame — no tool rail, no
             // tiles, no panes. Anything queued above still resolves below.
-            self.resolve_frame(file_action, trigger_undo, trigger_redo);
+            self.resolve_frame(file_action, trigger_undo, trigger_redo, menu_operator);
             return;
         }
 
@@ -1466,23 +1456,10 @@ impl eframe::App for AnkhimateApp {
 
         self.draw_torn_off_windows(ctx, &compact_tabs);
 
-        self.resolve_frame(file_action, trigger_undo, trigger_redo);
+        self.resolve_frame(file_action, trigger_undo, trigger_redo, menu_operator);
     }
 
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
-}
-
-/// A File-menu / shortcut request, resolved after the frame's UI is built so the
-/// native dialog does not run mid-layout.
-/// An Edit-menu clipboard request, resolved after the menu closes so the
-/// borrow of `self.state` inside the closure has ended.
-#[derive(Clone, Copy)]
-enum ClipboardAction {
-    CopyBones,
-    CopyPose,
-    Paste,
-    PasteMirrored,
-    Duplicate,
 }
 
 /// A Pose-menu request (T-211), resolved after the menu closes.
@@ -1496,6 +1473,8 @@ enum PoseAction {
     Offset(i32),
 }
 
+/// A File-menu / shortcut request, resolved after the frame's UI is built so the
+/// native dialog does not run mid-layout.
 #[derive(Clone)]
 enum FileAction {
     New,
@@ -1536,6 +1515,7 @@ impl AnkhimateApp {
         file_action: Option<FileAction>,
         trigger_undo: bool,
         trigger_redo: bool,
+        menu_operator: Option<&str>,
     ) {
         // Through the registry rather than `AppState` directly, so the keyboard,
         // the Edit menu and the toolbar — all three of which set these flags —
@@ -1546,6 +1526,9 @@ impl AnkhimateApp {
         }
         if trigger_redo {
             self.run_operator("edit.redo");
+        }
+        if let Some(id) = menu_operator {
+            self.run_operator(id);
         }
         if let Some(action) = file_action {
             self.run_file_action(action);

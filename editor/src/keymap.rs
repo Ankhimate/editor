@@ -432,6 +432,35 @@ mod tests {
     }
 
     #[test]
+    fn the_menu_shortcut_is_the_one_that_actually_fires() {
+        // Regression: the Edit menu hardcoded "Ctrl+Y" next to Redo while the
+        // binding it advertised was Ctrl+Shift+Z, and nothing could notice
+        // because the string and the handler were written out separately.
+        // `chord_for` is what the menu now displays, so it must resolve.
+        let keymap = Keymap::builtin();
+        for operator in ["edit.undo", "edit.redo", "edit.copy", "app.settings"] {
+            let chord = keymap
+                .chord_for(operator)
+                .unwrap_or_else(|| panic!("{operator} has no chord to display"));
+            let fired = keymap.resolve_pressed(
+                false,
+                &Modifiers {
+                    ctrl: chord.ctrl,
+                    shift: chord.shift,
+                    alt: chord.alt,
+                    ..Modifiers::NONE
+                },
+                |k| k == chord.key,
+            );
+            assert!(
+                fired.contains(&operator),
+                "{operator} shows {} but that chord fires {fired:?}",
+                chord.label()
+            );
+        }
+    }
+
+    #[test]
     fn chords_read_the_way_they_are_written() {
         assert_eq!(Chord::ctrl_shift(Key::S).label(), "Ctrl+Shift+S");
         assert_eq!(Chord::plain(Key::F2).label(), "F2");
