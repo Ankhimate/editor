@@ -202,27 +202,66 @@ pub fn events_in_window(anim: &Animation, from: f32, to: f32, looping: bool) -> 
     fired
 }
 
+/// Which axis of a two-axis property a track drives.
+///
+/// Translate, scale and shear are each **two independent tracks**, so an
+/// animator can key x at one time and y at another, and give each its own
+/// easing. A bounce that settles horizontally before it settles vertically is
+/// two curves, and pairing the axes into one keyframe cannot say it: the pair
+/// shares a time and shares an easing, so one axis always follows the other's
+/// shape.
+///
+/// Spine pairs them. That is the gap this closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Axis {
+    X,
+    Y,
+}
+
+impl Axis {
+    /// `0` for x, `1` for y — for a format that indexes its channels.
+    pub fn index(self) -> usize {
+        match self {
+            Axis::X => 0,
+            Axis::Y => 1,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Axis::X => "x",
+            Axis::Y => "y",
+        }
+    }
+
+    /// Both, in the order a paired representation writes them.
+    pub const BOTH: [Axis; 2] = [Axis::X, Axis::Y];
+}
+
 /// One animated property track.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Timeline {
-    /// Offset added to the bone's setup translation.
+    /// Offset added to one axis of the bone's setup translation.
     BoneTranslate {
         bone: BoneId,
-        keys: Vec<Key<glam::Vec2>>,
+        axis: Axis,
+        keys: Vec<Key<f32>>,
     },
     /// Offset in **degrees** added to the bone's setup rotation, shortest-arc.
     BoneRotate { bone: BoneId, keys: Vec<Key<f32>> },
-    /// Factor **multiplied** into the bone's setup scale.
+    /// Factor **multiplied** into one axis of the bone's setup scale.
     BoneScale {
         bone: BoneId,
-        keys: Vec<Key<glam::Vec2>>,
+        axis: Axis,
+        keys: Vec<Key<f32>>,
     },
-    /// Offset in **degrees** added to the bone's setup shear — same unit as
-    /// [`Timeline::BoneRotate`], so every angle key on disk and in memory reads
-    /// in degrees.
+    /// Offset in **degrees** added to one axis of the bone's setup shear — same
+    /// unit as [`Timeline::BoneRotate`], so every angle key on disk and in
+    /// memory reads in degrees.
     BoneShear {
         bone: BoneId,
-        keys: Vec<Key<glam::Vec2>>,
+        axis: Axis,
+        keys: Vec<Key<f32>>,
     },
     /// Whether the slot draws at all (T-505). Stepped: a half-visible slot is
     /// what `SlotColor`'s alpha is for, and interpolating a boolean would make
@@ -1196,7 +1235,8 @@ mod tests {
         });
         anim.timelines.push(Timeline::BoneTranslate {
             bone: BoneId::default(),
-            keys: vec![Key::linear(0.0, glam::Vec2::ZERO)],
+            axis: Axis::X,
+            keys: vec![Key::linear(0.0, 0.0)],
         });
         assert!((anim.content_duration() - 2.5).abs() < EPS);
     }
