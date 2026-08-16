@@ -269,6 +269,24 @@ impl MeshAttachment {
     /// origin, tearing the artwork apart. Rigid placement is the correct
     /// fallback, and it is exactly what the mesh drew a moment before it gained
     /// its first weight.
+    /// Where vertex `i`'s influences sit in a flat, vertex-ordered list.
+    ///
+    /// Deform offsets are stored that way for a weighted mesh — one per
+    /// influence, not per vertex — so this is how a consumer finds the ones
+    /// belonging to a vertex. Empty when the mesh is rigid, which is also when a
+    /// deform has one entry per vertex instead.
+    pub fn influence_range(&self, vertex_idx: usize) -> std::ops::Range<usize> {
+        let start: usize = self.weights.iter().take(vertex_idx).map(|w| w.len()).sum();
+        let len = self.weights.get(vertex_idx).map_or(0, |w| w.len());
+        start..start + len
+    }
+
+    /// Total number of influences across every vertex — the length a weighted
+    /// mesh's deform key has.
+    pub fn influence_count(&self) -> usize {
+        self.weights.iter().map(|w| w.len()).sum()
+    }
+
     pub fn skin_vertex_with_ffd(
         &self,
         vertex_idx: usize,
@@ -276,8 +294,35 @@ impl MeshAttachment {
         pose: &crate::pose::Pose,
         mesh_space: &Affine2,
     ) -> Vec2 {
-        let setup_pos = self.setup_vertices[vertex_idx] + ffd_offset;
-        let rigid = mesh_space.transform_point(setup_pos);
+        self.skin_vertex_with_deform(vertex_idx, &[ffd_offset], pose, mesh_space)
+    }
+
+    /// [`skin_vertex_with_ffd`], with one offset **per influence**.
+    ///
+    /// `offsets` is this vertex's slice of a deform key — see
+    /// [`influence_range`]. A weighted vertex is one point pushed through each
+    /// of its bones, so an offset per influence moves those copies
+    /// independently: the copy bound to the thigh can move while the copy bound
+    /// to the shin holds, which is how a knee creases. A single offset moves
+    /// them together and can only approximate that.
+    ///
+    /// A shorter slice than the vertex has influences reuses its last entry, so
+    /// the one-offset case is `&[offset]` and a rigid mesh needs no special
+    /// path.
+    ///
+    /// [`skin_vertex_with_ffd`]: Self::skin_vertex_with_ffd
+    /// [`influence_range`]: Self::influence_range
+    pub fn skin_vertex_with_deform(
+        &self,
+        vertex_idx: usize,
+        offsets: &[Vec2],
+        pose: &crate::pose::Pose,
+        mesh_space: &Affine2,
+    ) -> Vec2 {
+        let base = self.setup_vertices[vertex_idx];
+        // The rigid fallback has no influences to distinguish, so it takes the
+        // first offset — which for a rigid mesh is the only one.
+        let rigid = mesh_space.transform_point(base + offsets.first().copied().unwrap_or_default());
 
         let Some(vertex_weights) = self
             .weights
@@ -289,13 +334,20 @@ impl MeshAttachment {
 
         let mut final_pos = Vec2::ZERO;
         let mut total_weight = 0.0;
-        for vw in vertex_weights {
+        for (i, vw) in vertex_weights.iter().enumerate() {
             if let (Some(inv_bind), Some(world)) = (
                 self.inverse_bind_matrices.get(&vw.bone),
                 pose.worlds.get(vw.bone),
             ) {
+                // This influence's own offset, falling back to the last one
+                // given so a single-offset caller drives every copy alike.
+                let offset = offsets
+                    .get(i)
+                    .or_else(|| offsets.last())
+                    .copied()
+                    .unwrap_or_default();
                 let skin = world.mul(inv_bind);
-                final_pos += skin.transform_point(setup_pos) * vw.weight;
+                final_pos += skin.transform_point(base + offset) * vw.weight;
                 total_weight += vw.weight;
             }
         }
@@ -723,6 +775,94 @@ mod tests {
                 "vertex {i}: rigid {rigid:?} but skinned {skinned:?}"
             );
         }
+    }
+
+    /// A weighted vertex takes **one offset per influence**.
+    ///
+    /// A weighted vertex is one point pushed through each bone that moves it,
+    /// and a deform can push those copies apart — the copy bound to the thigh
+    /// moving while the copy bound to the shin holds is how a knee creases.
+    ///
+    /// One offset per vertex moves every copy together and cannot express that.
+    /// It is also what the Spine importer used to produce, by averaging the
+    /// source's per-influence offsets by weight — an approximation that was
+    /// exact only while a vertex's bones pointed the same way.
+    #[test]
+    fn a_weighted_vertex_deforms_per_influence() {
+        use crate::math::Transform;
+        use crate::pose::{Pose, evaluate};
+        use crate::skeleton::Bone;
+
+        let mut skel = crate::skeleton::Skeleton::new();
+        let bone = |name: &str, parent, pos: Vec2, deg: f32| Bone {
+            name: name.into(),
+            parent,
+            length: 40.0,
+            local_transform: Transform {
+                position: pos,
+                rotation: deg.to_radians(),
+                ..Transform::default()
+            },
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        };
+        let hip = skel.add_bone(bone("hip", None, Vec2::new(0.0, 247.0), 0.0));
+        // Rotated, so the two influences disagree about where an offset points.
+        let torso = skel.add_bone(bone("torso", Some(hip), Vec2::new(0.0, 60.0), 40.0));
+
+        let mut mesh = MeshAttachment {
+            texture: "art".into(),
+            setup_vertices: vec![Vec2::new(20.0, 0.0)],
+            uvs: vec![Vec2::ZERO],
+            triangles: Vec::new(),
+            weights: vec![vec![
+                VertexWeight {
+                    bone: hip,
+                    weight: 0.5,
+                },
+                VertexWeight {
+                    bone: torso,
+                    weight: 0.5,
+                },
+            ]],
+            ..MeshAttachment::default()
+        };
+
+        let mut pose = Pose::new();
+        evaluate(&skel, &[], &mut pose);
+        mesh.bind_to_pose(&pose, pose.world(hip));
+
+        // The vertex has two influences, laid out flat in vertex order.
+        assert_eq!(mesh.influence_count(), 2);
+        assert_eq!(mesh.influence_range(0), 0..2);
+
+        let push = Vec2::new(10.0, 0.0);
+        // Both copies pushed the same way — what one offset per vertex means.
+        let together = mesh.skin_vertex_with_deform(0, &[push, push], &pose, &pose.world(hip));
+        // Only the copy bound to the torso pushed.
+        let apart = mesh.skin_vertex_with_deform(0, &[Vec2::ZERO, push], &pose, &pose.world(hip));
+
+        assert!(
+            (together - apart).length() > 1.0,
+            "moving one influence must differ from moving both: \
+             {together:?} vs {apart:?}"
+        );
+        // Pinned against a measured run, not recomputed here. An expectation
+        // built from the same skinning matrices the code uses cancels the very
+        // error it is meant to catch: pick the wrong offset in both, and they
+        // still agree. Only a constant taken from verified output does not.
+        assert!(
+            (apart - Vec2::new(25.0, 247.0)).length() < 0.05,
+            "the per-influence result moved: {apart:?}"
+        );
+
+        // And the single-offset form still means "every copy alike", so a rigid
+        // mesh and an older caller behave as they did.
+        let single = mesh.skin_vertex_with_ffd(0, push, &pose, &pose.world(hip));
+        assert!(
+            (single - together).length() < 1e-3,
+            "one offset drives every influence: {single:?} vs {together:?}"
+        );
     }
 
     /// And once a bone moves, the skinned vertices follow it — otherwise the
