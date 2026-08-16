@@ -65,6 +65,19 @@ pub struct Config {
     /// turning it off cheap rather than a loss.
     #[serde(default = "default_hover_labels")]
     pub hover_labels: bool,
+    /// Key bindings (T-701).
+    ///
+    /// Written out in full rather than as a diff against the built-in table. A
+    /// diff would be smaller, but it has to answer "is this binding absent
+    /// because the user removed it, or because it did not exist when the file
+    /// was written?" — and answering that wrong either resurrects a binding
+    /// someone deliberately cleared or silently drops a new default. The whole
+    /// table is a few hundred bytes; the ambiguity is not worth saving them.
+    ///
+    /// The cost is that new built-in bindings do not reach a user who already
+    /// has a config. `Keymap::merge_new_defaults` is what repairs that.
+    #[serde(default)]
+    pub keymap: crate::keymap::Keymap,
 }
 
 impl Default for Config {
@@ -78,6 +91,7 @@ impl Default for Config {
             ui_scale: default_ui_scale(),
             torn_off: Vec::new(),
             hover_labels: default_hover_labels(),
+            keymap: crate::keymap::Keymap::builtin(),
         }
     }
 }

@@ -42,10 +42,6 @@ pub struct AnkhimateApp {
     /// `AppState` methods directly, so a rebound key and a plugin-shadowed
     /// operator both take effect without touching this file.
     operators: crate::commands::registry::Registry,
-    /// Key bindings, as data rather than as `if key_pressed` arms (T-701).
-    /// Bindings name operators by id, so rebinding a key and shadowing an
-    /// operator are independent of each other.
-    keymap: crate::keymap::Keymap,
 }
 
 /// One window control. Returns whether it was clicked.
@@ -130,7 +126,14 @@ impl AnkhimateApp {
                 .insert(renderer);
         }
 
-        let config = crate::config::Config::load();
+        let mut config = crate::config::Config::load();
+        // A config written before a binding existed has no row for it, and the
+        // whole table is serialized, so the new key would be live on fresh
+        // installs and dead everywhere else (T-701).
+        let adopted = config.keymap.merge_new_defaults();
+        if adopted > 0 {
+            log::info!("adopted {adopted} new default key binding(s)");
+        }
         let show_startup = !config.skip_startup;
         // Panes that were on a second monitor last session go back there
         // (T-910). A name the build no longer has is simply not torn off, rather
@@ -374,7 +377,6 @@ impl Default for AnkhimateApp {
             torn_off: Vec::new(),
             logo: crate::ui::branding::Logo::default(),
             operators: crate::commands::registry::Registry::with_builtins(),
-            keymap: crate::keymap::Keymap::builtin(),
         }
     }
 }
@@ -512,13 +514,23 @@ impl eframe::App for AnkhimateApp {
         // arms. Which bindings survive a focused text field is the binding's
         // own business, not this site's: `Ctrl+Z` opts in, bare letters do not.
         let typing = ctx.memory(|m| m.focused().is_some());
-        let fired: Vec<String> = ctx.input(|i| {
-            self.keymap
-                .resolve(i, typing)
-                .into_iter()
-                .map(str::to_owned)
-                .collect()
-        });
+        // A settings row waiting for a chord swallows the whole frame's input:
+        // the key you press to *become* a binding must not also fire whatever it
+        // is bound to today. Rebinding undo to Ctrl+U would otherwise undo on
+        // the way past.
+        let capturing = crate::ui::settings::capturing(ctx);
+        let fired: Vec<String> = if capturing {
+            Vec::new()
+        } else {
+            ctx.input(|i| {
+                self.config
+                    .keymap
+                    .resolve(i, typing)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            })
+        };
         for id in fired {
             self.run_operator(&id);
         }
@@ -742,7 +754,7 @@ impl eframe::App for AnkhimateApp {
                                 if operator_button(
                                     ui,
                                     &self.operators,
-                                    &self.keymap,
+                                    &self.config.keymap,
                                     &self.state,
                                     "app.settings",
                                     None,
@@ -759,7 +771,7 @@ impl eframe::App for AnkhimateApp {
                                 // clicked id is collected and run after the
                                 // closure, since drawing holds `&self`.
                                 let ops = &self.operators;
-                                let keymap = &self.keymap;
+                                let keymap = &self.config.keymap;
                                 let state = &self.state;
 
                                 // `Undo <label>` per T-107 — the name of the
@@ -1336,6 +1348,7 @@ impl eframe::App for AnkhimateApp {
                 &mut self.config,
                 &mut self.theme,
                 &mut self.available_themes,
+                &self.operators,
                 &mut open,
             );
             self.theme.apply(ctx);

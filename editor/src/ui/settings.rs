@@ -23,6 +23,7 @@ pub enum Section {
     Appearance,
     Grid,
     Fonts,
+    Keys,
 }
 
 /// Draw the window. Returns `true` when it should close.
@@ -32,6 +33,7 @@ pub fn ui(
     config: &mut Config,
     theme: &mut Theme,
     available: &mut Vec<Theme>,
+    operators: &crate::commands::registry::Registry,
     open: &mut bool,
 ) -> bool {
     if !*open {
@@ -57,6 +59,7 @@ pub fn ui(
                     ("Appearance", crate::ui::icons::PALETTE, Section::Appearance),
                     ("Grid", crate::ui::icons::GRID, Section::Grid),
                     ("Fonts", crate::ui::icons::STRING, Section::Fonts),
+                    ("Keys", crate::ui::icons::PROPERTIES, Section::Keys),
                 ] {
                     if ui
                         .selectable_label(section == value, format!("{icon}  {label}"))
@@ -75,6 +78,7 @@ pub fn ui(
                     Section::Appearance => appearance(ui, config, theme, available),
                     Section::Grid => grid(ui, config),
                     Section::Fonts => fonts(ui, config),
+                    Section::Keys => keys(ui, config, operators),
                 });
 
             ui.separator();
@@ -111,6 +115,151 @@ pub fn ui(
         config.save();
     }
     close
+}
+
+/// The operator currently waiting for a chord, if any.
+///
+/// In egui's temp memory rather than on `Config`: it is transient interaction
+/// state, and a half-finished rebinding must not reach disk.
+const CAPTURING: &str = "keymap_capturing";
+
+/// Is a settings row waiting to swallow the next chord?
+///
+/// `App` asks before running the keymap, so the key you press to rebind does not
+/// also fire the thing it was previously bound to.
+pub fn capturing(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| m.data.get_temp::<String>(egui::Id::new(CAPTURING)))
+        .is_some()
+}
+
+/// Rebindable key list (T-701).
+///
+/// Rows come from the operator registry, so a plugin's operators appear here
+/// with no work — which is the point of the registry over an enum.
+fn keys(ui: &mut egui::Ui, config: &mut Config, operators: &crate::commands::registry::Registry) {
+    let mut capturing: Option<String> = ui
+        .ctx()
+        .memory(|m| m.data.get_temp::<String>(egui::Id::new(CAPTURING)));
+
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new("Click a shortcut, then press the keys you want. Esc cancels.")
+            .weak()
+            .small(),
+    );
+    ui.add_space(6.0);
+
+    // While capturing, the first key event wins. Read before drawing so the row
+    // shows the result in the same frame it is chosen.
+    if let Some(target) = capturing.clone()
+        && let Some(chord) = pressed_chord(ui.ctx())
+    {
+        if chord.key != egui::Key::Escape {
+            config.keymap.rebind(chord, &target);
+            // Written now rather than when the dialog closes. The module note
+            // says config is saved on change for this reason: losing a
+            // rebinding to a crash teaches you not to trust the setting.
+            config.save();
+        }
+        capturing = None;
+    }
+
+    let mut reset: Option<String> = None;
+    egui::Grid::new("keymap_grid")
+        .num_columns(3)
+        .spacing([12.0, 4.0])
+        .striped(true)
+        .show(ui, |ui| {
+            for id in operators.ids() {
+                let Some(op) = operators.get(id) else {
+                    continue;
+                };
+                ui.label(op.label());
+
+                let is_target = capturing.as_deref() == Some(id);
+                let chord = config.keymap.chord_for(id);
+                let text = match (is_target, chord) {
+                    (true, _) => "press keys…".to_string(),
+                    (false, Some(c)) => c.label(),
+                    (false, None) => "—".to_string(),
+                };
+                let button = egui::Button::new(text).min_size(egui::vec2(120.0, 0.0));
+                if ui.add(button).clicked() {
+                    capturing = Some(id.to_string());
+                }
+
+                // A chord bound to something else is a conflict worth naming
+                // before the user discovers it by pressing the key.
+                ui.horizontal(|ui| {
+                    if ui.small_button("Reset").clicked() {
+                        reset = Some(id.to_string());
+                    }
+                    if let Some(c) = chord
+                        && let Some(other) = config.keymap.operator_for(c)
+                        && other != id
+                    {
+                        let name = operators.get(other).map_or(other, |o| o.label());
+                        ui.label(egui::RichText::new(format!("also {name}")).weak().small());
+                    }
+                });
+                ui.end_row();
+            }
+        });
+
+    if let Some(id) = reset {
+        config.keymap.reset(&id);
+        config.save();
+    }
+
+    // Bindings whose operator is gone — an uninstalled plugin, a renamed
+    // built-in. Shown rather than deleted, so reinstalling brings the key back.
+    let stale: Vec<String> = config
+        .keymap
+        .unresolved(operators)
+        .map(|b| format!("{} → {}", b.chord.label(), b.operator))
+        .collect();
+    if !stale.is_empty() {
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new("Bound to something not currently loaded")
+                .weak()
+                .small(),
+        );
+        for line in stale {
+            ui.label(egui::RichText::new(line).weak().small());
+        }
+    }
+
+    ui.ctx().memory_mut(|m| match &capturing {
+        Some(id) => {
+            m.data.insert_temp(egui::Id::new(CAPTURING), id.clone());
+        }
+        None => m.data.remove::<String>(egui::Id::new(CAPTURING)),
+    });
+}
+
+/// The first key pressed this frame, with its modifiers.
+///
+/// Modifier keys alone are skipped: someone reaching for `Ctrl+K` presses Ctrl
+/// first, and capturing that as the binding would make the chord impossible to
+/// enter.
+fn pressed_chord(ctx: &egui::Context) -> Option<crate::keymap::Chord> {
+    ctx.input(|i| {
+        i.events.iter().find_map(|event| match event {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => Some(crate::keymap::Chord {
+                key: *key,
+                ctrl: modifiers.ctrl,
+                shift: modifiers.shift,
+                alt: modifiers.alt,
+            }),
+            _ => None,
+        })
+    })
 }
 
 /// Theme picker plus a live colour editor.

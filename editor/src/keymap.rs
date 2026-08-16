@@ -237,19 +237,112 @@ impl Keymap {
             .map(|b| b.chord)
     }
 
-    /// Bind `chord` to `operator`, replacing any binding that chord already had.
+    /// Move `operator` to `chord`, giving up whatever keys it had.
     ///
-    /// One chord fires one operator; an operator may have several chords. That
-    /// asymmetry is deliberate — `Ctrl+Y` and `Ctrl+Shift+Z` both mean redo, and
-    /// a keymap editor that refused the second would be wrong.
-    pub fn bind(&mut self, chord: Chord, operator: &str) {
+    /// What a settings row does: the user pressed a new chord for this verb and
+    /// expects the old one to stop working. Use [`add_binding`](Self::add_binding)
+    /// for the other intent — a *second* key for the same verb.
+    pub fn rebind(&mut self, chord: Chord, operator: &str) {
+        self.bindings.retain(|b| b.operator != operator);
+        self.add_binding(chord, operator);
+    }
+
+    /// Give `operator` an additional chord, keeping any it already has.
+    ///
+    /// One chord fires one operator, so this displaces whatever held `chord`.
+    /// An operator may hold several chords, though — `Ctrl+Y` and `Ctrl+Shift+Z`
+    /// both mean redo, and a keymap that refused the second would be wrong.
+    ///
+    /// Carries `while_typing` over from whatever the operator was already bound
+    /// to. Rebinding undo must not quietly stop it working inside a text field:
+    /// that flag is a property of the *verb*, not of the key it sits on, and a
+    /// user moving `Ctrl+Z` to `Ctrl+U` has said nothing about text fields.
+    pub fn add_binding(&mut self, chord: Chord, operator: &str) {
+        let while_typing = self
+            .bindings
+            .iter()
+            .find(|b| b.operator == operator)
+            .map(|b| b.while_typing)
+            .unwrap_or_else(|| {
+                // No existing binding to inherit from — fall back to what the
+                // built-in table says about this operator, so rebinding an
+                // operator whose only key the user had cleared still behaves.
+                Self::builtin()
+                    .bindings
+                    .iter()
+                    .find(|b| b.operator == operator)
+                    .is_some_and(|b| b.while_typing)
+            });
         self.bindings.retain(|b| b.chord != chord);
-        self.bindings.push(Binding::new(chord, operator));
+        self.bindings.push(Binding {
+            chord,
+            operator: operator.to_string(),
+            while_typing,
+        });
     }
 
     /// Remove every binding for `chord`.
     pub fn unbind(&mut self, chord: Chord) {
         self.bindings.retain(|b| b.chord != chord);
+    }
+
+    /// Restore `operator` to the keys the built-in table gives it.
+    ///
+    /// Per-operator rather than whole-table: someone who has rebound six things
+    /// and wants the seventh back should not lose the six.
+    pub fn reset(&mut self, operator: &str) {
+        self.bindings.retain(|b| b.operator != operator);
+        for binding in Self::builtin().bindings {
+            if binding.operator == operator {
+                // Displace whatever currently holds the default chord, or the
+                // reset would leave two operators racing for one key.
+                self.bindings.retain(|b| b.chord != binding.chord);
+                self.bindings.push(binding);
+            }
+        }
+    }
+
+    /// Adopt built-in bindings for operators this table has never heard of.
+    ///
+    /// The whole table is serialized, so a config written before a binding
+    /// existed would otherwise never see it — the new key would be dead for
+    /// every existing user and live only for fresh installs, which is the kind
+    /// of difference nobody reproduces.
+    ///
+    /// Keyed on the *operator*, not the chord: an operator the user has bound
+    /// somewhere else is not missing, and re-adding its default would hand them
+    /// a second key they never asked for. An operator they deliberately cleared
+    /// does come back, which is the one case this gets wrong; it is the safer
+    /// side of the trade, since the alternative loses a new feature silently.
+    ///
+    /// Returns how many were added, for the log.
+    pub fn merge_new_defaults(&mut self) -> usize {
+        let known: std::collections::HashSet<&str> =
+            self.bindings.iter().map(|b| b.operator.as_str()).collect();
+        let missing: Vec<Binding> = Self::builtin()
+            .bindings
+            .into_iter()
+            .filter(|b| !known.contains(b.operator.as_str()))
+            .collect();
+        let mut added = 0;
+        for binding in missing {
+            // Never over a chord the user has already spoken for. Counted after
+            // this check, not before, so the number reported is what landed.
+            if self.bindings.iter().any(|b| b.chord == binding.chord) {
+                continue;
+            }
+            self.bindings.push(binding);
+            added += 1;
+        }
+        added
+    }
+
+    /// The operator `chord` currently fires, if any. For conflict highlighting.
+    pub fn operator_for(&self, chord: Chord) -> Option<&str> {
+        self.bindings
+            .iter()
+            .find(|b| b.chord == chord)
+            .map(|b| b.operator.as_str())
     }
 
     /// Bindings naming an operator the registry does not have.
@@ -333,7 +426,7 @@ mod tests {
         let scale = Chord::plain(Key::S);
         assert_eq!(keymap.chord_for("gizmo.scale"), Some(scale));
 
-        keymap.bind(scale, "tool.select");
+        keymap.rebind(scale, "tool.select");
 
         let bound: Vec<_> = keymap
             .bindings()
@@ -366,7 +459,7 @@ mod tests {
         // A plugin's binding must come back when the plugin does, so the loader
         // may not quietly drop what it cannot resolve today.
         let mut keymap = Keymap::builtin();
-        keymap.bind(Chord::plain(Key::G), "someplugin.doathing");
+        keymap.rebind(Chord::plain(Key::G), "someplugin.doathing");
 
         let json = serde_json::to_string(&keymap).expect("serialize");
         let back: Keymap = serde_json::from_str(&json).expect("deserialize");
@@ -458,6 +551,135 @@ mod tests {
                 chord.label()
             );
         }
+    }
+
+    #[test]
+    fn rebinding_undo_keeps_it_working_in_a_text_field() {
+        // `while_typing` belongs to the verb, not the key. A user moving undo to
+        // Ctrl+U has said nothing about text fields, and silently losing undo
+        // there would be a strange punishment for rebinding a key.
+        let mut keymap = Keymap::builtin();
+        keymap.rebind(Chord::ctrl(Key::U), "edit.undo");
+
+        let fired = keymap.resolve_pressed(true, &Modifiers::CTRL, |k| k == Key::U);
+        assert_eq!(fired, ["edit.undo"], "still fires while typing");
+    }
+
+    #[test]
+    fn rebinding_a_bare_key_does_not_gain_text_field_powers() {
+        // The other direction: inheriting must not turn a tool key into one that
+        // fires mid-rename.
+        let mut keymap = Keymap::builtin();
+        keymap.rebind(Chord::plain(Key::G), "gizmo.scale");
+
+        let typing = keymap.resolve_pressed(true, &Modifiers::NONE, |k| k == Key::G);
+        assert!(typing.is_empty());
+    }
+
+    #[test]
+    fn a_new_builtin_reaches_a_config_that_predates_it() {
+        // The hazard of serializing the whole table: a binding added after a
+        // user's config was written would be live for fresh installs and dead
+        // for everyone else.
+        let mut old = Keymap::builtin();
+        old.bindings.retain(|b| b.operator != "anim.add_marker");
+        assert!(old.chord_for("anim.add_marker").is_none());
+
+        let added = old.merge_new_defaults();
+
+        assert_eq!(added, 1);
+        assert_eq!(old.chord_for("anim.add_marker"), Some(Chord::plain(Key::M)));
+    }
+
+    #[test]
+    fn merging_does_not_second_guess_a_rebinding() {
+        // An operator the user moved is not missing. Re-adding its default would
+        // hand them a second key they never asked for.
+        let mut keymap = Keymap::builtin();
+        keymap.unbind(Chord::plain(Key::M));
+        keymap.rebind(Chord::plain(Key::G), "anim.add_marker");
+
+        assert_eq!(keymap.merge_new_defaults(), 0);
+        assert_eq!(
+            keymap.operator_for(Chord::plain(Key::M)),
+            None,
+            "the vacated default stays vacant"
+        );
+    }
+
+    #[test]
+    fn merging_does_not_steal_a_chord_the_user_took() {
+        // `M` reassigned to something else, and the marker operator cleared. The
+        // marker's default must not evict the user's binding.
+        let mut keymap = Keymap::builtin();
+        keymap.bindings.retain(|b| b.operator != "anim.add_marker");
+        keymap.rebind(Chord::plain(Key::M), "tool.select");
+
+        keymap.merge_new_defaults();
+
+        assert_eq!(
+            keymap.operator_for(Chord::plain(Key::M)),
+            Some("tool.select")
+        );
+    }
+
+    #[test]
+    fn reset_restores_one_operator_without_disturbing_the_rest() {
+        let mut keymap = Keymap::builtin();
+        keymap.rebind(Chord::plain(Key::G), "gizmo.scale");
+        keymap.rebind(Chord::plain(Key::J), "tool.select");
+        assert_eq!(keymap.chord_for("gizmo.scale"), Some(Chord::plain(Key::G)));
+
+        keymap.reset("gizmo.scale");
+
+        assert_eq!(
+            keymap.chord_for("gizmo.scale"),
+            Some(Chord::plain(Key::S)),
+            "back to its default"
+        );
+        assert_eq!(
+            keymap.operator_for(Chord::plain(Key::G)),
+            None,
+            "and the key it borrowed is free again"
+        );
+        assert_eq!(
+            keymap.chord_for("tool.select"),
+            Some(Chord::plain(Key::J)),
+            "the other rebinding survived"
+        );
+    }
+
+    #[test]
+    fn reset_displaces_whoever_holds_the_default_chord() {
+        // Otherwise the reset leaves two operators racing for one key, and which
+        // wins depends on table order.
+        let mut keymap = Keymap::builtin();
+        keymap.rebind(Chord::plain(Key::S), "tool.select");
+        keymap.reset("gizmo.scale");
+
+        assert_eq!(
+            keymap.operator_for(Chord::plain(Key::S)),
+            Some("gizmo.scale")
+        );
+        let racers = keymap
+            .bindings()
+            .iter()
+            .filter(|b| b.chord == Chord::plain(Key::S))
+            .count();
+        assert_eq!(racers, 1);
+    }
+
+    #[test]
+    fn a_config_roundtrips_through_json_with_its_rebindings() {
+        let mut keymap = Keymap::builtin();
+        keymap.rebind(Chord::ctrl(Key::U), "edit.undo");
+
+        let json = serde_json::to_string(&keymap).expect("serialize");
+        let back: Keymap = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.chord_for("edit.undo"), Some(Chord::ctrl(Key::U)));
+        let fired = back.resolve_pressed(true, &Modifiers::CTRL, |k| k == Key::U);
+        assert_eq!(fired, ["edit.undo"], "while_typing survived the file");
     }
 
     #[test]
