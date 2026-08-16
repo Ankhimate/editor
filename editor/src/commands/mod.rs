@@ -13,6 +13,18 @@
 //!   same-target edits collapses into one undo step;
 //! * live drags write into `Session::preview_locals` and issue a single command on
 //!   mouse-up, so the document is never touched mid-drag (defect D7).
+//!
+//! # Commands and operators
+//!
+//! An [`EditCommand`] is an *instance*: "move bone `b` from here to there",
+//! holding what it needs to reverse itself. That is the wrong thing for a
+//! keymap or a plugin to name — they want the verb, not one occurrence of it.
+//!
+//! [`registry::Operator`] is the verb: a stable string id, an applicability
+//! test, and an `invoke` that reads live state and dispatches whatever command
+//! the situation calls for. Operators sit *above* commands and never replace
+//! them, so undo, drag-merge and the T-207 mode rule keep their single
+//! enforcement point.
 
 pub mod asset_cmds;
 pub mod attachment_cmds;
@@ -25,7 +37,9 @@ pub mod group_cmds;
 pub mod key_cmds;
 pub mod marker_cmds;
 pub mod mesh_cmds;
+pub mod operators;
 pub mod psd_cmds;
+pub mod registry;
 pub mod skin_cmds;
 pub mod slot_cmds;
 pub mod weight_cmds;

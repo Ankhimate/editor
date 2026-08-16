@@ -37,6 +37,11 @@ pub struct AnkhimateApp {
     /// The program mark. Re-rasterises itself from vector art when the size it
     /// is drawn at changes, so a UI-scale change stays sharp.
     logo: crate::ui::branding::Logo,
+    /// Named verbs, keyed by id. Every built-in registers into it the same way a
+    /// plugin will; key handling below resolves through it rather than calling
+    /// `AppState` methods directly, so a rebound key and a plugin-shadowed
+    /// operator both take effect without touching this file.
+    operators: crate::commands::registry::Registry,
 }
 
 /// One window control. Returns whether it was clicked.
@@ -364,7 +369,35 @@ impl Default for AnkhimateApp {
             naming_group: None,
             torn_off: Vec::new(),
             logo: crate::ui::branding::Logo::default(),
+            operators: crate::commands::registry::Registry::with_builtins(),
         }
+    }
+}
+
+impl AnkhimateApp {
+    /// Run the operator `id` names, and honour whatever chrome it asked for.
+    ///
+    /// The single place an operator's [`UiRequest`] turns into an open window.
+    /// Operators cannot reach these flags themselves — that boundary is what
+    /// keeps a future plugin out of the frame loop and the egui context.
+    ///
+    /// [`UiRequest`]: crate::commands::registry::UiRequest
+    fn run_operator(&mut self, id: &str) -> bool {
+        use crate::commands::registry::UiRequest;
+
+        let Some(result) = self.operators.invoke(id, &mut self.state) else {
+            // Unknown id, or the operator declined as inapplicable. Both are
+            // silent: a key bound to something that does not apply right now
+            // should feel like the key does nothing, not like an error.
+            return false;
+        };
+        match result.ui {
+            Some(UiRequest::Settings) => self.show_settings = !self.show_settings,
+            Some(UiRequest::Rename) => self.show_rename = true,
+            Some(UiRequest::Startup) => self.show_startup = true,
+            None => {}
+        }
+        true
     }
 }
 
@@ -436,17 +469,17 @@ impl eframe::App for AnkhimateApp {
                     )
                 });
                 if c {
-                    if shift {
-                        self.state.copy_pose();
-                    } else {
-                        self.state.copy_selection();
-                    }
+                    self.run_operator(if shift { "edit.copy_pose" } else { "edit.copy" });
                 }
                 if v {
-                    self.state.paste(shift);
+                    self.run_operator(if shift {
+                        "edit.paste_mirrored"
+                    } else {
+                        "edit.paste"
+                    });
                 }
                 if d {
-                    self.state.duplicate_selection();
+                    self.run_operator("edit.duplicate");
                 }
             }
         }
@@ -475,65 +508,55 @@ impl eframe::App for AnkhimateApp {
                 )
             });
             if hide_art {
-                self.state.session.show_artwork = !self.state.session.show_artwork;
+                self.run_operator("view.toggle_artwork");
             }
             if hide_bones {
-                self.state.session.show_bones = !self.state.session.show_bones;
+                self.run_operator("view.toggle_bones");
             }
             if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Comma)) {
-                self.show_settings = !self.show_settings;
+                self.run_operator("app.settings");
             }
             // F2 renames the selection — the key every file manager and 3D tool
             // uses for it, so it needs no discovering. Only with something
             // selected: an empty rename dialog would be a dead end.
-            if ctx.input(|i| i.key_pressed(egui::Key::F2))
-                && !self.state.session.selected_bones.is_empty()
-            {
-                self.show_rename = true;
+            if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
+                // The "needs a selection" guard moved onto the operator, so the
+                // menu entry and any rebinding get it too.
+                self.run_operator("edit.rename");
             }
             // M drops a marker at the playhead (T-906) — the same gesture K uses
             // for a key, on the strip above it. Named after the frame it lands
             // on, because an animator marking a pose knows which pose it is and
             // a dialog mid-scrub would break the rhythm; rename is on its
             // right-click menu.
-            if ctx.input(|i| i.key_pressed(egui::Key::M) && !i.modifiers.any())
-                && let Some(anim) = self.state.session.active_animation
-            {
-                let fps = self.state.doc.meta.fps.max(1) as f32;
-                let frame = (self.state.session.playhead * fps).round() as i64;
-                let playhead = self.state.session.playhead;
-                self.state
-                    .dispatch(Box::new(crate::commands::marker_cmds::AddMarker::new(
-                        anim,
-                        format!("f{frame}"),
-                        playhead,
-                    )));
+            if ctx.input(|i| i.key_pressed(egui::Key::M) && !i.modifiers.any()) {
+                self.run_operator("anim.add_marker");
             }
             if tab {
-                self.state.toggle_work_mode();
+                self.run_operator("mode.toggle");
             }
             if key_k {
-                // Commits any posed-but-unkeyed bone; a no-op in Setup mode.
-                self.state.key_pending_pose();
+                // Commits any posed-but-unkeyed bone; declines in Setup mode.
+                self.run_operator("anim.key_pose");
             }
             {
-                use crate::session::Tool;
-                let setup = self.state.session.can_edit_structure();
+                // The Setup-only guard on the structural tools now lives on the
+                // operators, which is why there is no `can_edit_structure()`
+                // read left here.
                 if v {
-                    self.state.session.tool = Tool::Select;
+                    self.run_operator("tool.select");
                 }
-                if b && setup {
-                    self.state.session.tool = Tool::CreateBone;
+                if b {
+                    self.run_operator("tool.create_bone");
                 }
-                if w && setup {
-                    self.state.session.tool = Tool::WeightPaint;
+                if w {
+                    self.run_operator("tool.weight_paint");
                 }
             }
 
             // Transform mode for the Select tool's gizmo: T/R/S/H. Guarded on
             // `!ctrl` so Ctrl+S stays Save.
             {
-                use crate::session::TransformTool;
                 let (t, r, s, h, ctrl, shift) = ctx.input(|i| {
                     (
                         i.key_pressed(egui::Key::T),
@@ -548,16 +571,16 @@ impl eframe::App for AnkhimateApp {
                 // and without this the bare-key match would fire Shear too.
                 if !ctrl && !shift {
                     if t {
-                        self.state.session.active_transform_tool = TransformTool::Translate;
+                        self.run_operator("gizmo.translate");
                     }
                     if r {
-                        self.state.session.active_transform_tool = TransformTool::Rotate;
+                        self.run_operator("gizmo.rotate");
                     }
                     if s {
-                        self.state.session.active_transform_tool = TransformTool::Scale;
+                        self.run_operator("gizmo.scale");
                     }
                     if h {
-                        self.state.session.active_transform_tool = TransformTool::Shear;
+                        self.run_operator("gizmo.shear");
                     }
                 }
                 // Shift+H isolates the viewport to the selection, or leaves
@@ -1604,11 +1627,15 @@ impl AnkhimateApp {
         trigger_undo: bool,
         trigger_redo: bool,
     ) {
+        // Through the registry rather than `AppState` directly, so the keyboard,
+        // the Edit menu and the toolbar — all three of which set these flags —
+        // resolve to the same operator, and a plugin shadowing `edit.undo`
+        // reaches every one of them.
         if trigger_undo {
-            self.state.undo();
+            self.run_operator("edit.undo");
         }
         if trigger_redo {
-            self.state.redo();
+            self.run_operator("edit.redo");
         }
         if let Some(action) = file_action {
             self.run_file_action(action);
