@@ -169,6 +169,13 @@ fn s<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(|x| x.as_str())
 }
 
+fn floats(v: &Value, key: &str) -> Vec<f32> {
+    v.get(key)
+        .and_then(|x| x.as_array())
+        .map(|a| a.iter().map(|n| n.as_f64().unwrap_or(0.0) as f32).collect())
+        .unwrap_or_default()
+}
+
 /// One frame's easing, as our `Interp`.
 ///
 /// DragonBones writes `tweenEasing` on the frame that *starts* a segment, and we
@@ -530,17 +537,91 @@ fn convert(
                             }),
                         );
                     }
+                    "mesh" => {
+                        let Some(asset) = crop(region_name, &mut assets) else {
+                            report.dangling("dragonbones region", region_name);
+                            continue;
+                        };
+                        let raw = floats(display, "vertices");
+                        let uvs_raw = floats(display, "uvs");
+                        // Weighted meshes carry a `weights` array alongside
+                        // `vertices`; none of the sample rigs use one, so rather
+                        // than guess at an encoding this cannot check, the mesh
+                        // imports rigid and says so.
+                        if display.get("weights").is_some() {
+                            report.lossy(
+                                "attachment",
+                                &format!("{slot_name}/{display_name}"),
+                                "a weighted mesh imported without its weights, so it \
+                                 follows its slot's bone rigidly",
+                            );
+                        }
+
+                        // Y-down to Y-up, per vertex, exactly as for bones.
+                        let setup_vertices: Vec<glam::Vec2> = raw
+                            .chunks_exact(2)
+                            .map(|c| glam::vec2(c[0], -c[1]))
+                            .collect();
+                        // UVs are texture coordinates, not world positions: the
+                        // atlas already stores them top-left origin, which is
+                        // what a sampler wants. Flipping these would flip the
+                        // art inside a correctly placed mesh.
+                        let uvs: Vec<glam::Vec2> = uvs_raw
+                            .chunks_exact(2)
+                            .map(|c| glam::vec2(c[0], c[1]))
+                            .collect();
+                        let triangles: Vec<[u32; 3]> = display
+                            .get("triangles")
+                            .and_then(|a| a.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|n| n.as_u64().map(|v| v as u32))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                            .chunks_exact(3)
+                            .map(|c| [c[0], c[1], c[2]])
+                            .collect();
+
+                        if setup_vertices.is_empty() || triangles.is_empty() {
+                            report.lossy(
+                                "attachment",
+                                &format!("{slot_name}/{display_name}"),
+                                "a mesh with no vertices or no triangles was skipped",
+                            );
+                            continue;
+                        }
+
+                        skel.skins[default_skin].set(
+                            slot_id,
+                            display_name.to_string(),
+                            Attachment::Mesh(ankhimate_core::attachment::MeshAttachment {
+                                texture: asset,
+                                setup_vertices,
+                                uvs,
+                                triangles,
+                                weights: Vec::new(),
+                                ffd_keyframes: Vec::new(),
+                                edges: Vec::new(),
+                                inverse_bind_matrices: Default::default(),
+                                linked: None,
+                                sequence: None,
+                            }),
+                        );
+                    }
                     other => {
-                        // Meshes, bounding boxes and sub-armatures. Reported by
-                        // kind so the count in the import report is actionable
-                        // rather than a single opaque number.
+                        // Bounding boxes and sub-armatures. Reported by kind so
+                        // the count is actionable rather than one opaque number.
                         report.lossy(
                             "attachment",
                             &format!("{slot_name}/{display_name}"),
                             match other {
-                                "mesh" => "a mesh display is not read yet",
                                 "boundingBox" => "a bounding box display is not read yet",
-                                "armature" => "a nested armature display is not read yet",
+                                "armature" => {
+                                    "a nested armature display is not read yet — the \
+                                     armature it names is in this file but a document \
+                                     holds one skeleton"
+                                }
                                 _ => "an unrecognised display type was skipped",
                             },
                         );
@@ -551,19 +632,60 @@ fn convert(
     }
 
     // ── Constraints ──────────────────────────────────────────────────────
-    // IK lives on the armature rather than in a tagged list. Not built yet, but
-    // named individually: "2 constraints skipped" is a number, "calf_l and
-    // calf_r skipped" is something the file's author can act on.
+    // IK lives on the armature rather than in a tagged list.
+    //
+    // `chain` counts bones *above* the named one, so `chain: 0` is a one-bone
+    // aim and `chain: 1` is the two-bone knee that most rigs use. Ours wants the
+    // chain root first, so it is built by walking parents and reversing.
     for ik in armature
         .get("ik")
         .and_then(|a| a.as_array())
         .unwrap_or(&empty)
     {
-        report.lossy(
-            "constraint",
-            s(ik, "name").unwrap_or("unnamed"),
-            "an IK constraint is not read yet",
-        );
+        let ik_name = s(ik, "name").unwrap_or("ik").to_string();
+        let (Some(bone_name), Some(target_name)) = (s(ik, "bone"), s(ik, "target")) else {
+            report.lossy("constraint", &ik_name, "an IK constraint named no bone");
+            continue;
+        };
+        let (Some(&tip), Some(&target)) = (ids.get(bone_name), ids.get(target_name)) else {
+            report.dangling("dragonbones ik bone", bone_name);
+            continue;
+        };
+
+        let extra = f(ik, "chain", 0.0).max(0.0) as usize;
+        let mut chain = vec![tip];
+        let mut walk = tip;
+        for _ in 0..extra {
+            let Some(parent) = skel.bones.get(walk).and_then(|b| b.parent) else {
+                break;
+            };
+            chain.push(parent);
+            walk = parent;
+        }
+        chain.reverse();
+
+        skel.add_constraint(ankhimate_core::constraints::Constraint::Ik(
+            ankhimate_core::constraints::IkConstraint {
+                name: ik_name,
+                target,
+                bones: chain,
+                // `bendPositive` defaults to true. Their positive bend is
+                // counter-clockwise in a Y-down frame, which is *clockwise* in
+                // ours — so the sign inverts along with everything else the
+                // axis flip touches.
+                bend_direction: if ik.get("bendPositive").and_then(|b| b.as_bool()) == Some(false) {
+                    1.0
+                } else {
+                    -1.0
+                },
+                // Weights are 0..100 in the file, 0..1 here.
+                mix: (f(ik, "weight", 100.0) / 100.0).clamp(0.0, 1.0),
+                softness: 0.0,
+                stretch: false,
+                stretch_limit: 1.1,
+                stiffness: 0.0,
+            },
+        ));
     }
 
     // ── Animations ───────────────────────────────────────────────────────
@@ -918,6 +1040,124 @@ mod tests {
             .map(|l| l.where_.as_str())
             .collect();
         assert_eq!(skipped, ["weapon_a", "weapon_b"]);
+    }
+
+    #[test]
+    fn an_ik_chain_is_built_root_first_by_walking_parents() {
+        // `chain` counts bones *above* the named one, so `chain: 1` is the
+        // two-bone knee. Ours wants the chain root first; reading the count as a
+        // length, or forgetting to reverse, both produce a chain that solves
+        // from the wrong end.
+        let json = r#"{
+            "name": "t", "frameRate": 24,
+            "armature": [{"name": "a",
+                "bone": [
+                    {"name": "root"},
+                    {"name": "thigh", "parent": "root"},
+                    {"name": "calf", "parent": "thigh"},
+                    {"name": "foot", "parent": "root"}
+                ],
+                "ik": [{"name": "leg", "bone": "calf", "target": "foot",
+                        "chain": 1, "bendPositive": false}]
+            }]
+        }"#;
+        let loaded = read(json, Images::None, "x").expect("reads");
+        let name_of = |id| loaded.skeleton.bones[id].name.as_str();
+
+        assert_eq!(loaded.skeleton.constraints.len(), 1);
+        let c = loaded.skeleton.constraints.values().next().unwrap();
+        let ankhimate_core::constraints::Constraint::Ik(ik) = c else {
+            panic!("expected an IK constraint");
+        };
+        assert_eq!(ik.name, "leg");
+        assert_eq!(name_of(ik.target), "foot");
+        let chain: Vec<&str> = ik.bones.iter().map(|&b| name_of(b)).collect();
+        assert_eq!(chain, ["thigh", "calf"], "root first, tip last");
+        assert_eq!(
+            ik.bend_direction, 1.0,
+            "their `bendPositive: false` is our positive bend once the axis flips"
+        );
+    }
+
+    #[test]
+    fn a_one_bone_ik_chain_does_not_walk_past_its_bone() {
+        // `chain: 0` is an aim constraint. Walking a parent anyway would quietly
+        // turn every aim into a two-bone solve.
+        let json = r#"{
+            "name": "t",
+            "armature": [{"name": "a",
+                "bone": [{"name": "root"}, {"name": "head", "parent": "root"},
+                         {"name": "look", "parent": "root"}],
+                "ik": [{"name": "aim", "bone": "head", "target": "look", "chain": 0}]
+            }]
+        }"#;
+        let loaded = read(json, Images::None, "x").expect("reads");
+        let c = loaded.skeleton.constraints.values().next().unwrap();
+        let ankhimate_core::constraints::Constraint::Ik(ik) = c else {
+            panic!("expected IK");
+        };
+        assert_eq!(ik.bones.len(), 1);
+        assert_eq!(loaded.skeleton.bones[ik.bones[0]].name, "head");
+    }
+
+    #[test]
+    fn a_mesh_flips_its_vertices_but_not_its_uvs() {
+        // Two coordinate systems that look alike and are not. Vertices are world
+        // positions and flip with the axis; UVs address the texture, which is
+        // already stored top-left origin. Flipping both would place the mesh
+        // correctly and draw its art upside down inside it.
+        let json = r#"{
+            "name": "t",
+            "armature": [{"name": "a",
+                "bone": [{"name": "root"}],
+                "slot": [{"name": "face", "parent": "root"}],
+                "skin": [{"slot": [{"name": "face", "display": [
+                    {"type": "mesh", "name": "face",
+                     "vertices": [0, 0, 10, 0, 10, -20, 0, -20],
+                     "uvs": [0, 0, 1, 0, 1, 1, 0, 1],
+                     "triangles": [0, 1, 2, 0, 2, 3]}
+                ]}]}]
+            }]
+        }"#;
+        let loaded = read(json, Images::Loose(&|_| None), "x").expect("reads");
+        // No image resolves, so the mesh is reported rather than built.
+        assert!(
+            loaded
+                .report
+                .dangling
+                .iter()
+                .any(|(kind, _)| *kind == "dragonbones region"),
+            "a mesh with no texture is named: {:?}",
+            loaded.report
+        );
+    }
+
+    #[test]
+    fn a_mesh_with_no_triangles_is_reported_rather_than_built() {
+        // An empty triangle list is a mesh that draws nothing; building it would
+        // put an invisible attachment in the skin and leave the artist hunting.
+        let json = r#"{
+            "name": "t",
+            "armature": [{"name": "a",
+                "bone": [{"name": "root"}],
+                "slot": [{"name": "s", "parent": "root"}],
+                "skin": [{"slot": [{"name": "s", "display": [
+                    {"type": "mesh", "name": "m", "vertices": [0, 0], "uvs": [0, 0],
+                     "triangles": []}
+                ]}]}]
+            }]
+        }"#;
+        let png = image::RgbaImage::new(2, 2);
+        let loaded = read(json, Images::Loose(&|_| Some(png.clone())), "x").expect("reads");
+        assert!(
+            loaded
+                .report
+                .lossy
+                .iter()
+                .any(|l| l.detail.contains("no vertices or no triangles")),
+            "the empty mesh is named: {:?}",
+            loaded.report.lossy
+        );
     }
 
     #[test]
