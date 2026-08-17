@@ -422,6 +422,11 @@ fn convert(
     // Slot order is draw order, back to front, as in Spine and ours. `add_slot`
     // appends to `draw_order` already; pushing again draws everything twice.
     let mut slots: HashMap<String, SlotId> = HashMap::new();
+    // Which display each slot starts on. DragonBones picks by index into the
+    // slot's display list and defaults to 0; `-1` means *show nothing*, which is
+    // how `effect_l` starts hidden. Resolved to a name once the skin is read,
+    // since the index means nothing without the list it indexes into.
+    let mut display_index: HashMap<String, i64> = HashMap::new();
     for sl in armature
         .get("slot")
         .and_then(|s| s.as_array())
@@ -434,6 +439,10 @@ fn convert(
             report.dangling("dragonbones slot parent", parent);
             continue;
         };
+        display_index.insert(
+            slot_name.to_string(),
+            sl.get("displayIndex").and_then(|d| d.as_i64()).unwrap_or(0),
+        );
         let id = skel.add_slot(Slot::new(slot_name.to_string(), bone_id));
         slots.insert(slot_name.to_string(), id);
     }
@@ -495,14 +504,21 @@ fn convert(
             let Some(&slot_id) = slots.get(slot_name) else {
                 continue;
             };
+            // Names in file order, so `displayIndex` can be resolved below. A
+            // display that produced no attachment still occupies its index —
+            // dropping it would shift every later one.
+            let mut display_names: Vec<Option<String>> = Vec::new();
             for display in entry
                 .get("display")
                 .and_then(|d| d.as_array())
                 .unwrap_or(&empty)
             {
                 let Some(display_name) = s(display, "name") else {
+                    // Still an index, even nameless.
+                    display_names.push(None);
                     continue;
                 };
+                display_names.push(Some(display_name.to_string()));
                 // `path` names the atlas region when it differs from the
                 // display's own name — same convention as Spine's `path`.
                 let region_name = s(display, "path").unwrap_or(display_name);
@@ -649,6 +665,7 @@ fn convert(
                         let host_offset = glam::vec2(f(&host_t, "x", 0.0), -f(&host_t, "y", 0.0));
 
                         let mut folded = 0usize;
+                        let mut first_folded: Option<String> = None;
                         for nested_slot in nested
                             .get("skin")
                             .and_then(|a| a.as_array())
@@ -718,6 +735,7 @@ fn convert(
                                     }),
                                 );
                                 folded += 1;
+                                first_folded.get_or_insert_with(|| nested_name.to_string());
                             }
                         }
 
@@ -729,6 +747,12 @@ fn convert(
                             );
                         } else {
                             folded_armatures.insert(display_name);
+                            // The armature's *own* name is not an attachment, so
+                            // this display index has to point at the first image
+                            // folded in from it instead.
+                            if let Some(slot) = display_names.last_mut() {
+                                *slot = first_folded;
+                            }
                         }
                     }
                     other => {
@@ -751,6 +775,22 @@ fn convert(
                         );
                     }
                 }
+            }
+
+            // Which display the slot starts on. Without this every slot has a
+            // skin full of attachments and none of them showing, so the rig
+            // loads complete and draws nothing — which is what the first import
+            // with working images did.
+            //
+            // `-1` is DragonBones for "show nothing" and stays `None`; that is
+            // how `effect_l` starts hidden rather than flashing its muzzle
+            // effect over the whole animation.
+            let index = display_index.get(slot_name).copied().unwrap_or(0);
+            if index >= 0
+                && let Some(Some(name)) = display_names.get(index as usize)
+                && let Some(slot) = skel.slots.get_mut(slot_id)
+            {
+                slot.attachment = Some(name.clone());
             }
         }
     }
@@ -1158,6 +1198,82 @@ mod tests {
         assert_eq!(bone.local_transform.rotation, 0.0);
         assert_eq!(bone.local_transform.scale, glam::vec2(1.0, 1.0));
         assert_eq!(bone.local_transform.shear, glam::Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_slot_starts_on_the_display_its_index_names() {
+        // A skin full of attachments draws nothing until the slot points at one.
+        // DragonBones selects by index into the display list rather than by name
+        // the way Spine does, and defaulting the slot to `None` is why an import
+        // with correct bones, slots and images was still invisible.
+        let json = r#"{
+            "name": "t",
+            "armature": [{"name": "a",
+                "bone": [{"name": "root"}],
+                "slot": [{"name": "body", "parent": "root", "displayIndex": 1}],
+                "skin": [{"slot": [{"name": "body", "display": [
+                    {"name": "closed"}, {"name": "open"}
+                ]}]}]
+            }]
+        }"#;
+        let png = image::RgbaImage::new(4, 4);
+        let loaded = read(json, Images::Loose(&|_| Some(png.clone())), "x").expect("reads");
+
+        let slot = loaded
+            .skeleton
+            .slots
+            .values()
+            .find(|s_| s_.name == "body")
+            .expect("body slot");
+        assert_eq!(
+            slot.attachment.as_deref(),
+            Some("open"),
+            "index 1 is the second display, not the first"
+        );
+    }
+
+    #[test]
+    fn a_negative_display_index_starts_the_slot_hidden() {
+        // `-1` is DragonBones for "show nothing" — `mecha_1004d` uses it so its
+        // muzzle effects do not sit lit through the whole animation. Reading it
+        // as an index would show the wrong art; ignoring it would show art that
+        // should not be there at all.
+        let json = r#"{
+            "name": "t",
+            "armature": [{"name": "a",
+                "bone": [{"name": "root"}],
+                "slot": [{"name": "effect", "parent": "root", "displayIndex": -1}],
+                "skin": [{"slot": [{"name": "effect", "display": [{"name": "flash"}]}]}]
+            }]
+        }"#;
+        let png = image::RgbaImage::new(4, 4);
+        let loaded = read(json, Images::Loose(&|_| Some(png.clone())), "x").expect("reads");
+
+        let slot = loaded
+            .skeleton
+            .slots
+            .values()
+            .find(|s_| s_.name == "effect")
+            .expect("effect slot");
+        assert_eq!(
+            slot.attachment, None,
+            "hidden, but the flash is still there"
+        );
+        assert_eq!(
+            loaded.skeleton.skins[loaded.skeleton.default_skin]
+                .names_for_slot(
+                    loaded
+                        .skeleton
+                        .slots
+                        .iter()
+                        .find(|(_, s_)| s_.name == "effect")
+                        .map(|(id, _)| id)
+                        .unwrap()
+                )
+                .count(),
+            1,
+            "the attachment exists to be switched on later"
+        );
     }
 
     #[test]
