@@ -104,6 +104,9 @@ a commit.
   and where it does not.
 - `docs/graph-editor.md` — the curve editor's interaction rules and their reasons.
 - `docs/export-plan.md` — why export is a format editor, and the decisions behind it.
+- `docs/plugin-plan.md` — the plugin API's four surfaces, the headless split
+  underneath them, and why an MCP server is a consumer of that API rather than a
+  second road.
 - `docs/export-context.md` — the template context, field by field. A public contract.
 - `docs/adr/` — architecture decision records.
 
