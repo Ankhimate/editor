@@ -714,9 +714,19 @@ fn convert(
                                     .unwrap_or(Value::Null);
                                 let (rotation, _) =
                                     decompose_skew(f(&nt, "skX", 0.0), f(&nt, "skY", 0.0));
+                                // Named for the host display slot it fills, not
+                                // for the image inside it. `weapon_hand_r` lists
+                                // `weapon_replace` three times at different
+                                // offsets — three placements of one weapon — so
+                                // naming these after the image collapsed all
+                                // three onto a single entry and lost two of the
+                                // placements.
+                                let host_index = display_names.len() - 1;
+                                let attachment_name =
+                                    format!("{display_name}#{host_index}/{nested_name}");
                                 skel.skins[default_skin].set(
                                     slot_id,
-                                    nested_name.to_string(),
+                                    attachment_name.clone(),
                                     Attachment::Region(RegionAttachment {
                                         texture: asset,
                                         local_offset: host_offset
@@ -749,7 +759,7 @@ fn convert(
                                     }),
                                 );
                                 folded += 1;
-                                first_folded.get_or_insert_with(|| nested_name.to_string());
+                                first_folded.get_or_insert(attachment_name);
                             }
                         }
 
@@ -1397,8 +1407,10 @@ mod tests {
         names.sort_unstable();
         assert_eq!(
             names,
-            ["axe", "sword"],
-            "both swap options land in the slot"
+            ["weapons#0/axe", "weapons#0/sword"],
+            "both options land in the slot, keyed by the display that brought them — \
+             `weapon_hand_r` names one armature three times at different offsets, and \
+             keying on the image alone collapsed all three onto a single entry"
         );
 
         assert!(
