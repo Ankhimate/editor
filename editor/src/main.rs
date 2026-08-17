@@ -1,5 +1,6 @@
 ﻿pub mod app;
 pub mod app_state;
+pub mod autosave;
 pub mod clipboard;
 pub mod commands;
 pub mod config;

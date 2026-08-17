@@ -78,6 +78,9 @@ pub struct Config {
     /// has a config. `Keymap::merge_new_defaults` is what repairs that.
     #[serde(default)]
     pub keymap: crate::keymap::Keymap,
+    /// Seconds between autosaves; 0 turns it off (T-701).
+    #[serde(default = "default_autosave_secs")]
+    pub autosave_secs: u64,
 }
 
 impl Default for Config {
@@ -92,8 +95,13 @@ impl Default for Config {
             torn_off: Vec::new(),
             hover_labels: default_hover_labels(),
             keymap: crate::keymap::Keymap::builtin(),
+            autosave_secs: default_autosave_secs(),
         }
     }
+}
+
+fn default_autosave_secs() -> u64 {
+    crate::autosave::DEFAULT_INTERVAL_SECS
 }
 
 fn default_ui_scale() -> f32 {

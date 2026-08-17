@@ -24,6 +24,7 @@ pub enum Section {
     Grid,
     Fonts,
     Keys,
+    Saving,
 }
 
 /// Draw the window. Returns `true` when it should close.
@@ -60,6 +61,7 @@ pub fn ui(
                     ("Grid", crate::ui::icons::GRID, Section::Grid),
                     ("Fonts", crate::ui::icons::STRING, Section::Fonts),
                     ("Keys", crate::ui::icons::PROPERTIES, Section::Keys),
+                    ("Saving", crate::ui::icons::TIME, Section::Saving),
                 ] {
                     if ui
                         .selectable_label(section == value, format!("{icon}  {label}"))
@@ -79,6 +81,7 @@ pub fn ui(
                     Section::Grid => grid(ui, config),
                     Section::Fonts => fonts(ui, config),
                     Section::Keys => keys(ui, config, operators),
+                    Section::Saving => saving(ui, config),
                 });
 
             ui.separator();
@@ -115,6 +118,59 @@ pub fn ui(
         config.save();
     }
     close
+}
+
+/// Autosave interval (T-701).
+fn saving(ui: &mut egui::Ui, config: &mut Config) {
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new("Autosave").strong());
+    ui.add_space(4.0);
+
+    let mut on = config.autosave_secs > 0;
+    if ui
+        .checkbox(&mut on, "Keep a recovery copy while working")
+        .on_hover_text(
+            "Writes beside the project as <name>.ankh.autosave. Your own file is never \
+             touched, and the copy is removed when you save.",
+        )
+        .changed()
+    {
+        config.autosave_secs = if on {
+            crate::autosave::DEFAULT_INTERVAL_SECS
+        } else {
+            0
+        };
+        config.save();
+    }
+
+    ui.add_enabled_ui(on, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Every");
+            let mut minutes = (config.autosave_secs as f32 / 60.0).max(0.5);
+            if ui
+                .add(
+                    egui::DragValue::new(&mut minutes)
+                        .speed(0.25)
+                        .range(0.5..=30.0)
+                        .suffix(" min"),
+                )
+                .changed()
+            {
+                config.autosave_secs = (minutes * 60.0).round() as u64;
+                config.save();
+            }
+        });
+    });
+
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(
+            "A copy is only written when something has changed, so an idle project is \
+             not rewritten on a timer.",
+        )
+        .weak()
+        .small(),
+    );
 }
 
 /// The operator currently waiting for a chord, if any.

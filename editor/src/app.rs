@@ -42,6 +42,11 @@ pub struct AnkhimateApp {
     /// `AppState` methods directly, so a rebound key and a plugin-shadowed
     /// operator both take effect without touching this file.
     operators: crate::commands::registry::Registry,
+    /// Timer and dirty-tracking for crash recovery (T-701).
+    autosave: crate::autosave::Autosave,
+    /// An autosave newer than its project, found at startup and not yet
+    /// answered. `Some` means the recovery prompt is up.
+    recovery: Option<crate::autosave::Recovery>,
 }
 
 /// One window control. Returns whether it was clicked.
@@ -145,12 +150,15 @@ impl AnkhimateApp {
             .filter(|t| t.can_tear_off())
             .collect();
 
+        let autosave = crate::autosave::Autosave::new(config.autosave_secs);
+
         let mut app = Self {
             theme: default_theme,
             available_themes,
             config,
             show_startup,
             torn_off,
+            autosave,
             ..Default::default()
         };
 
@@ -168,6 +176,12 @@ impl AnkhimateApp {
                 _ => {}
             }
         }
+
+        // Offer recovery *after* the open, so the check compares against the
+        // project that actually loaded. Offered, not applied — see the module
+        // note: only the user knows whether the last session ended badly.
+        app.recovery = crate::autosave::check(app.current_path.as_deref());
+
         app
     }
 }
@@ -377,6 +391,8 @@ impl Default for AnkhimateApp {
             torn_off: Vec::new(),
             logo: crate::ui::branding::Logo::default(),
             operators: crate::commands::registry::Registry::with_builtins(),
+            autosave: crate::autosave::Autosave::default(),
+            recovery: None,
         }
     }
 }
@@ -507,6 +523,19 @@ impl eframe::App for AnkhimateApp {
             }
             // Clipboard (T-209) moved to the keymap: Ctrl+C/V/D and their
             // Shift variants are ordinary bindings now.
+        }
+
+        // ── Autosave (T-701) ─────────────────────────────────────────────
+        // Driven off the frame clock, and only when the revision has moved. The
+        // write is silent unless it fails: the user did not ask for it, so it
+        // must not take over the status line they are reading.
+        self.autosave.interval_secs = self.config.autosave_secs;
+        let dt = ctx.input(|i| i.stable_dt);
+        if self.autosave.tick(dt, self.state.revision) {
+            let path = self.current_path.clone();
+            if let Some(written) = self.autosave.write(&self.state, path.as_deref()) {
+                log::debug!("autosaved to {}", written.display());
+            }
         }
 
         // ── Keymap (T-701) ───────────────────────────────────────────────
@@ -1340,6 +1369,74 @@ impl eframe::App for AnkhimateApp {
         // ── Settings (T-701) ─────────────────────────────────────────────
         // Applied live, so the theme is re-applied every frame it is open. Doing
         // it unconditionally would fight anything else that touches the style.
+        // ── Crash recovery (T-701) ───────────────────────────────────────
+        // An autosave newer than its project. Offered rather than applied: only
+        // the user knows whether the last session ended badly, and opening a
+        // different file than the one they double-clicked is not a favour.
+        if let Some(recovery) = self.recovery.clone() {
+            let chrome = self.theme.clone();
+            let mut restore = false;
+            let mut dismiss = false;
+            let dialog = crate::ui::dialog::Dialog::new("recovery", "Recover unsaved work?")
+                .width(460.0)
+                .show(ctx, &chrome, |ui| {
+                    ui.label(match &recovery.project {
+                        Some(project) => format!(
+                            "An autosave of {} is newer than the file itself — the last \
+                             session may have ended before saving.",
+                            project
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("this project")
+                        ),
+                        None => "An autosave of an unsaved document was left behind.".to_string(),
+                    });
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(recovery.autosave.display().to_string())
+                            .weak()
+                            .small(),
+                    );
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Recover").clicked() {
+                            restore = true;
+                        }
+                        if ui
+                            .button("Ignore")
+                            .on_hover_text(
+                                "Keeps the autosave file — it is only offered once per launch",
+                            )
+                            .clicked()
+                        {
+                            dismiss = true;
+                        }
+                    });
+                });
+
+            if restore {
+                match crate::fileops::open_path(&mut self.state, &recovery.autosave) {
+                    crate::fileops::FileOutcome::Opened(_) => {
+                        // `current_path` stays on the *project*, not the
+                        // autosave: the next Save must write the real file, not
+                        // a `.ankh.autosave` the user would then have to notice
+                        // and rename.
+                        self.current_path = recovery.project.clone();
+                        self.autosave.reset();
+                        self.status = Some("Recovered from autosave — save to keep it".to_string());
+                        self.show_startup = false;
+                    }
+                    crate::fileops::FileOutcome::Error(e) => {
+                        self.status = Some(format!("Could not recover: {e}"))
+                    }
+                    _ => {}
+                }
+            }
+            if restore || dismiss || dialog.closed {
+                self.recovery = None;
+            }
+        }
+
         if self.show_settings {
             let mut open = true;
             crate::ui::settings::ui(
@@ -1738,6 +1835,7 @@ impl AnkhimateApp {
             FileAction::New => {
                 fileops::new_document(&mut self.state);
                 self.current_path = None;
+                self.autosave.reset();
                 self.status = Some("New document".to_string());
                 return;
             }
@@ -1750,6 +1848,16 @@ impl AnkhimateApp {
         match outcome {
             FileOutcome::Saved(path) => {
                 self.status = Some(format!("Saved {}", path.display()));
+                // The real save supersedes any autosave, so drop it. Keyed on
+                // the path we were editing *before* this, not the new one: a
+                // Save As leaves the old project's autosave behind otherwise,
+                // and it would be offered on the next launch as if the session
+                // had crashed.
+                self.autosave.discard(self.current_path.as_deref());
+                if self.current_path.as_deref() != Some(path.as_path()) {
+                    self.autosave.discard(Some(&path));
+                }
+                self.autosave.reset();
                 // Save-As gives a project a new home; the recents list should
                 // point at where it actually lives now.
                 self.config.touch_recent(&path);
@@ -1759,6 +1867,10 @@ impl AnkhimateApp {
                 self.status = Some(format!("Opened {}", path.display()));
                 self.config.touch_recent(&path);
                 self.current_path = Some(path);
+                // A different document shares nothing with the last one; keeping
+                // its saved revision would make the first tick believe this one
+                // was already written.
+                self.autosave.reset();
             }
             FileOutcome::Imported { path, report } => {
                 let name = path
