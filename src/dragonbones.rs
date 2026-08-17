@@ -27,9 +27,10 @@
 //!
 //! # Rotation is skew
 //!
-//! A bone's transform carries `skX`/`skY` rather than a rotation. When they are
-//! equal it is pure rotation; when they differ, the difference *is* shear. See
-//! [`decompose_skew`], which also applies the negation above.
+//! A bone's transform carries `skX`/`skY` rather than a rotation: the directions
+//! of its X and Y axes, measured from the same zero. When they agree it is pure
+//! rotation; when they differ, the gap is how far Y has swung off perpendicular
+//! — which is shear on **Y**, not X. See [`decompose_skew`].
 //!
 //! # A file holds several armatures
 //!
@@ -152,15 +153,19 @@ pub fn declared_version(json: &str) -> Option<String> {
 ///
 /// Returned in **radians**, matching `core`.
 ///
-/// Shear lands entirely on X because that is where the asymmetry lives:
-/// `skY - skX` is the angle by which the axes stop being perpendicular, and
-/// `Transform::shear.y` measured against the same rotation would double-count
-/// it. A rig with `skX == skY` — every rigid bone, which is nearly all of them —
-/// comes through with zero shear either way.
+/// Shear lands on **Y**, not X. `Affine2::compose` puts the X axis at
+/// `rotation + shear.x` and the Y axis at `rotation + π/2 + shear.y`, so
+/// `shear.x` is indistinguishable from rotation and adding the difference there
+/// would silently do nothing — which is what the first version of this did.
+///
+/// DragonBones' two angles are the X-axis and Y-axis directions measured from
+/// the same zero, so `skX` *is* the rotation and `skY - skX` is how far the Y
+/// axis has swung away from perpendicular. A rig with `skX == skY` — every rigid
+/// bone, which is nearly all of them — comes through with zero shear.
 pub fn decompose_skew(sk_x_deg: f32, sk_y_deg: f32) -> (f32, glam::Vec2) {
-    let rotation = -sk_y_deg.to_radians();
-    let shear_x = -(sk_x_deg - sk_y_deg).to_radians();
-    (rotation, glam::vec2(shear_x, 0.0))
+    let rotation = -sk_x_deg.to_radians();
+    let shear_y = -(sk_y_deg - sk_x_deg).to_radians();
+    (rotation, glam::vec2(0.0, shear_y))
 }
 
 /// A number, or `default` when the key is absent.
@@ -993,13 +998,48 @@ mod tests {
     }
 
     #[test]
-    fn unequal_skew_angles_become_rotation_plus_shear() {
-        // The difference *is* the shear; discarding it would quietly square up
-        // every deliberately skewed part. Both halves negate with the axis.
+    fn unequal_skew_angles_shear_the_y_axis() {
+        // Shear must land on Y. `Affine2::compose` puts the X axis at
+        // `rotation + shear.x`, so anything written to `shear.x` is
+        // indistinguishable from rotation and has no effect on the pose — the
+        // first version of this put the difference there and it did nothing.
         let (rotation, shear) = decompose_skew(50.0, 20.0);
-        assert!((rotation + 20.0_f32.to_radians()).abs() < 1e-6);
-        assert!((shear.x + 30.0_f32.to_radians()).abs() < 1e-6);
-        assert_eq!(shear.y, 0.0);
+        assert!(
+            (rotation + 50.0_f32.to_radians()).abs() < 1e-6,
+            "skX is the X axis, so it is the rotation"
+        );
+        assert_eq!(shear.x, 0.0, "shear.x would only re-rotate the X axis");
+        assert!(
+            (shear.y - 30.0_f32.to_radians()).abs() < 1e-6,
+            "skY - skX is how far Y swung off perpendicular"
+        );
+    }
+
+    #[test]
+    fn shear_actually_changes_the_composed_axes() {
+        // The check the previous test could not make: that the decomposition
+        // survives `compose`. Putting the difference on `shear.x` passed a
+        // field-equality assertion and produced an identical matrix to no shear
+        // at all.
+        use ankhimate_core::math::Transform;
+
+        let (rotation, shear) = decompose_skew(50.0, 20.0);
+        let sheared = Transform {
+            rotation,
+            shear,
+            ..Default::default()
+        }
+        .to_affine();
+        let rigid = Transform {
+            rotation,
+            ..Default::default()
+        }
+        .to_affine();
+
+        assert!(
+            (sheared.c - rigid.c).abs() > 1e-3 || (sheared.d - rigid.d).abs() > 1e-3,
+            "a sheared bone must not compose to the same matrix as a rigid one"
+        );
     }
 
     #[test]
