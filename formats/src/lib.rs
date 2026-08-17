@@ -17,6 +17,7 @@
 
 pub mod container;
 pub mod convert;
+pub mod dragonbones;
 pub mod migrate;
 pub mod psd;
 pub mod schema;
