@@ -441,9 +441,13 @@ fn convert(
     // ── Attachments ──────────────────────────────────────────────────────
     let default_skin = skel.default_skin;
     let mut decoded: HashMap<String, (u32, u32)> = HashMap::new();
-    let mut crop = |region: &str, assets: &mut AssetDb| -> Option<String> {
-        if decoded.contains_key(region) {
-            return Some(region.to_string());
+    // Returns the asset name *and its pixel size*. DragonBones does not put a
+    // width or height on the display the way Spine does — the size lives in the
+    // atlas — and a region attachment built with zero extents draws nothing at
+    // all, which is how the first import came out invisible.
+    let mut crop = |region: &str, assets: &mut AssetDb| -> Option<(String, u32, u32)> {
+        if let Some(&(w, h)) = decoded.get(region) {
+            return Some((region.to_string(), w, h));
         }
         let piece = match &images {
             Images::Atlas { pages, .. } => {
@@ -472,7 +476,7 @@ fn convert(
             .ok()?;
         assets.add(ImageAsset::new(region.to_string(), bytes, w, h));
         decoded.insert(region.to_string(), (w, h));
-        Some(region.to_string())
+        Some((region.to_string(), w, h))
     };
 
     if let Some(skin) = armature
@@ -505,7 +509,7 @@ fn convert(
                 let kind = s(display, "type").unwrap_or("image");
                 match kind {
                     "image" => {
-                        let Some(asset) = crop(region_name, &mut assets) else {
+                        let Some((asset, w, h)) = crop(region_name, &mut assets) else {
                             report.dangling("dragonbones region", region_name);
                             continue;
                         };
@@ -520,8 +524,10 @@ fn convert(
                                 local_offset: glam::vec2(f(&t, "x", 0.0), -f(&t, "y", 0.0)),
                                 local_rotation: rotation,
                                 local_scale: glam::vec2(f(&t, "scX", 1.0), f(&t, "scY", 1.0)),
-                                width: 0.0,
-                                height: 0.0,
+                                // From the atlas region, not the display: a
+                                // DragonBones display carries no size.
+                                width: w as f32,
+                                height: h as f32,
                                 uv_rect: Rect {
                                     x: 0.0,
                                     y: 0.0,
@@ -541,7 +547,9 @@ fn convert(
                         );
                     }
                     "mesh" => {
-                        let Some(asset) = crop(region_name, &mut assets) else {
+                        // A mesh carries its own geometry, so the region's pixel
+                        // size is not needed here — the UVs address the texture.
+                        let Some((asset, _, _)) = crop(region_name, &mut assets) else {
                             report.dangling("dragonbones region", region_name);
                             continue;
                         };
@@ -665,7 +673,7 @@ fn convert(
                                 };
                                 let nested_region =
                                     s(nested_display, "path").unwrap_or(nested_name);
-                                let Some(asset) = crop(nested_region, &mut assets) else {
+                                let Some((asset, nw, nh)) = crop(nested_region, &mut assets) else {
                                     report.dangling("dragonbones region", nested_region);
                                     continue;
                                 };
@@ -686,8 +694,8 @@ fn convert(
                                         local_rotation: rotation,
                                         local_scale: host_scale
                                             * glam::vec2(f(&nt, "scX", 1.0), f(&nt, "scY", 1.0)),
-                                        width: 0.0,
-                                        height: 0.0,
+                                        width: nw as f32,
+                                        height: nh as f32,
                                         uv_rect: Rect {
                                             x: 0.0,
                                             y: 0.0,
@@ -1150,6 +1158,37 @@ mod tests {
         assert_eq!(bone.local_transform.rotation, 0.0);
         assert_eq!(bone.local_transform.scale, glam::vec2(1.0, 1.0));
         assert_eq!(bone.local_transform.shear, glam::Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_region_takes_its_size_from_the_image() {
+        // DragonBones puts no width or height on the display — Spine does, and
+        // the reader was built from that shape, so every region imported with
+        // zero extents and the whole rig drew nothing. A rig that loads with the
+        // right bone count and no visible art is the symptom.
+        let json = r#"{
+            "name": "t",
+            "armature": [{"name": "a",
+                "bone": [{"name": "root"}],
+                "slot": [{"name": "body", "parent": "root"}],
+                "skin": [{"slot": [{"name": "body", "display": [{"name": "torso"}]}]}]
+            }]
+        }"#;
+        let png = image::RgbaImage::new(64, 48);
+        let loaded = read(json, Images::Loose(&|_| Some(png.clone())), "x").expect("reads");
+
+        let skin = &loaded.skeleton.skins[loaded.skeleton.default_skin];
+        let slot = loaded
+            .skeleton
+            .slots
+            .iter()
+            .find(|(_, s_)| s_.name == "body")
+            .map(|(id, _)| id)
+            .expect("body slot");
+        let Some(Attachment::Region(region)) = skin.get(slot, "torso") else {
+            panic!("expected a region attachment");
+        };
+        assert_eq!((region.width, region.height), (64.0, 48.0));
     }
 
     #[test]
