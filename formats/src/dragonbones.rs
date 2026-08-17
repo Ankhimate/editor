@@ -158,13 +158,22 @@ pub fn declared_version(json: &str) -> Option<String> {
 /// `shear.x` is indistinguishable from rotation and adding the difference there
 /// would silently do nothing — which is what the first version of this did.
 ///
-/// DragonBones' two angles are the X-axis and Y-axis directions measured from
-/// the same zero, so `skX` *is* the rotation and `skY - skX` is how far the Y
-/// axis has swung away from perpendicular. A rig with `skX == skY` — every rigid
-/// bone, which is nearly all of them — comes through with zero shear.
+/// **`skY` is the rotation and `skX` describes the Y axis** — the opposite of
+/// what the names suggest, and settled by reading the runtime rather than by
+/// reasoning about it. `ObjectDataParser` maps the fields as
+///
+/// ```text
+/// rotation = skY
+/// skew     = skX - skY
+/// ```
+///
+/// and `Transform::toMatrix` then puts the X axis at `rotation` and the Y axis
+/// at `skew + rotation`, which is `skX`. Taking `skX` for the X axis is wrong in
+/// a way that hides: the two are equal on every rigid bone, which is nearly all
+/// of them, so it only shows on the handful that actually shear.
 pub fn decompose_skew(sk_x_deg: f32, sk_y_deg: f32) -> (f32, glam::Vec2) {
-    let rotation = -sk_x_deg.to_radians();
-    let shear_y = -(sk_y_deg - sk_x_deg).to_radians();
+    let rotation = -sk_y_deg.to_radians();
+    let shear_y = -(sk_x_deg - sk_y_deg).to_radians();
     (rotation, glam::vec2(0.0, shear_y))
 }
 
@@ -1003,15 +1012,16 @@ mod tests {
         // `rotation + shear.x`, so anything written to `shear.x` is
         // indistinguishable from rotation and has no effect on the pose — the
         // first version of this put the difference there and it did nothing.
+        // Settled from `ObjectDataParser`: rotation = skY, skew = skX - skY.
         let (rotation, shear) = decompose_skew(50.0, 20.0);
         assert!(
-            (rotation + 50.0_f32.to_radians()).abs() < 1e-6,
-            "skX is the X axis, so it is the rotation"
+            (rotation + 20.0_f32.to_radians()).abs() < 1e-6,
+            "skY is the rotation, however the field is spelled"
         );
         assert_eq!(shear.x, 0.0, "shear.x would only re-rotate the X axis");
         assert!(
-            (shear.y - 30.0_f32.to_radians()).abs() < 1e-6,
-            "skY - skX is how far Y swung off perpendicular"
+            (shear.y + 30.0_f32.to_radians()).abs() < 1e-6,
+            "skX - skY is how far Y sits off perpendicular, negated with the axis"
         );
     }
 
