@@ -13,11 +13,23 @@
 //! after it — a failure that does not look broken, only slightly off, which is
 //! the worst kind to ship.
 //!
+//! # Y is down
+//!
+//! DragonBones works in screen coordinates; our world is Y-up. Every vertical
+//! quantity negates on the way in — bone and attachment positions, translate
+//! keys — and so does every **angle**, because mirroring one axis reverses which
+//! way is positive. Scale does not: it is a magnitude, not a direction.
+//!
+//! Getting this half-right is worse than getting it wrong, because a rig with
+//! flipped positions and unflipped rotations looks *nearly* correct. The first
+//! import of `mecha_1004d` hung upside down below the origin, which at least had
+//! the courtesy to be obvious.
+//!
 //! # Rotation is skew
 //!
 //! A bone's transform carries `skX`/`skY` rather than a rotation. When they are
 //! equal it is pure rotation; when they differ, the difference *is* shear. See
-//! [`decompose_skew`].
+//! [`decompose_skew`], which also applies the negation above.
 //!
 //! # A file holds several armatures
 //!
@@ -117,11 +129,17 @@ pub fn declared_version(json: &str) -> Option<String> {
     doc.get("version")?.as_str().map(str::to_string)
 }
 
-/// Split DragonBones' `skX`/`skY` skew pair into our rotation and shear.
+/// Split DragonBones' `skX`/`skY` skew pair into our rotation and shear,
+/// flipping handedness on the way.
 ///
 /// DragonBones has no rotation field. It stores two skew angles, and a rigid
 /// rotation is the case where they happen to be equal. The shared part is the
 /// rotation; what is left on X is the shear.
+///
+/// Both come out **negated**, because DragonBones measures angles in a Y-down
+/// frame and ours is Y-up. Mirroring one axis reverses which way is positive, so
+/// an angle carried across unchanged turns the opposite way. The module note
+/// covers the rest of the conversion.
 ///
 /// Returned in **radians**, matching `core`.
 ///
@@ -131,8 +149,8 @@ pub fn declared_version(json: &str) -> Option<String> {
 /// it. A rig with `skX == skY` — every rigid bone, which is nearly all of them —
 /// comes through with zero shear either way.
 pub fn decompose_skew(sk_x_deg: f32, sk_y_deg: f32) -> (f32, glam::Vec2) {
-    let rotation = sk_y_deg.to_radians();
-    let shear_x = (sk_x_deg - sk_y_deg).to_radians();
+    let rotation = -sk_y_deg.to_radians();
+    let shear_x = -(sk_x_deg - sk_y_deg).to_radians();
     (rotation, glam::vec2(shear_x, 0.0))
 }
 
@@ -366,8 +384,10 @@ fn convert(
             // Zero-length bones are legal in DragonBones and unselectable here.
             length: f(b, "length", 0.0).max(1.0),
             local_transform: Transform {
-                position: glam::vec2(f(&t, "x", 0.0), f(&t, "y", 0.0)),
+                // Y negates: DragonBones is Y-down, we are Y-up.
+                position: glam::vec2(f(&t, "x", 0.0), -f(&t, "y", 0.0)),
                 rotation,
+                // Scale is a magnitude and does not flip with the axis.
                 scale: glam::vec2(f(&t, "scX", 1.0), f(&t, "scY", 1.0)),
                 shear,
             },
@@ -486,7 +506,8 @@ fn convert(
                             display_name.to_string(),
                             Attachment::Region(RegionAttachment {
                                 texture: asset,
-                                local_offset: glam::vec2(f(&t, "x", 0.0), f(&t, "y", 0.0)),
+                                // Y-down to Y-up, as for bones.
+                                local_offset: glam::vec2(f(&t, "x", 0.0), -f(&t, "y", 0.0)),
                                 local_rotation: rotation,
                                 local_scale: glam::vec2(f(&t, "scX", 1.0), f(&t, "scY", 1.0)),
                                 width: 0.0,
@@ -497,8 +518,10 @@ fn convert(
                                     w: 1.0,
                                     h: 1.0,
                                 },
-                                // DragonBones' pivot is normalized with Y down;
-                                // ours is Y up, so the vertical half flips.
+                                // A separate flip from the world-space one
+                                // above: this is normalized *within the image*,
+                                // where DragonBones counts down from the top and
+                                // we count up from the bottom.
                                 pivot: glam::vec2(
                                     f(display.get("pivot").unwrap_or(&Value::Null), "x", 0.5),
                                     1.0 - f(display.get("pivot").unwrap_or(&Value::Null), "y", 0.5),
@@ -564,19 +587,27 @@ fn convert(
             let where_ = format!("{anim_name}/{track_name}");
 
             // Translate: one frame list, two axes — split, since each axis owns
-            // its own keys and easing in this model.
+            // its own keys and easing in this model. Y negates with the frame,
+            // exactly as the setup transform does; a pose whose setup flipped
+            // and whose animation did not would drift further from correct the
+            // further it played.
             if let Some(frames) = bone_track.get("translateFrame").and_then(|f| f.as_array()) {
                 for axis in Axis::BOTH {
-                    let key = if axis == Axis::X { "x" } else { "y" };
-                    let keys = frames_to_keys(frames, fps, |f_| f(f_, key, 0.0), report, &where_);
+                    let (key, sign) = match axis {
+                        Axis::X => ("x", 1.0),
+                        Axis::Y => ("y", -1.0),
+                    };
+                    let keys =
+                        frames_to_keys(frames, fps, |f_| sign * f(f_, key, 0.0), report, &where_);
                     if !is_flat(&keys, 0.0) {
                         timelines.push(Timeline::BoneTranslate { bone, axis, keys });
                     }
                 }
             }
             if let Some(frames) = bone_track.get("rotateFrame").and_then(|f| f.as_array()) {
-                // Degrees on disk and in our timelines alike, so no conversion.
-                let keys = frames_to_keys(frames, fps, |f_| f(f_, "rotate", 0.0), report, &where_);
+                // Degrees on disk and in our timelines alike, so no unit
+                // conversion — but the sign still flips with the axis.
+                let keys = frames_to_keys(frames, fps, |f_| -f(f_, "rotate", 0.0), report, &where_);
                 if !is_flat(&keys, 0.0) {
                     timelines.push(Timeline::BoneRotate { bone, keys });
                 }
@@ -650,21 +681,106 @@ mod tests {
     use super::*;
 
     #[test]
-    fn equal_skew_angles_are_pure_rotation() {
+    fn equal_skew_angles_are_pure_rotation_the_other_way() {
         // The ordinary case: nearly every bone in a real rig has skX == skY.
+        // Negated, because DragonBones measures angles in a Y-down frame.
         let (rotation, shear) = decompose_skew(30.0, 30.0);
-        assert!((rotation - 30.0_f32.to_radians()).abs() < 1e-6);
+        assert!((rotation + 30.0_f32.to_radians()).abs() < 1e-6);
         assert_eq!(shear, glam::Vec2::ZERO, "no shear when the axes agree");
     }
 
     #[test]
     fn unequal_skew_angles_become_rotation_plus_shear() {
         // The difference *is* the shear; discarding it would quietly square up
-        // every deliberately skewed part.
+        // every deliberately skewed part. Both halves negate with the axis.
         let (rotation, shear) = decompose_skew(50.0, 20.0);
-        assert!((rotation - 20.0_f32.to_radians()).abs() < 1e-6);
-        assert!((shear.x - 30.0_f32.to_radians()).abs() < 1e-6);
+        assert!((rotation + 20.0_f32.to_radians()).abs() < 1e-6);
+        assert!((shear.x + 30.0_f32.to_radians()).abs() < 1e-6);
         assert_eq!(shear.y, 0.0);
+    }
+
+    #[test]
+    fn a_rig_built_downward_arrives_the_right_way_up() {
+        // The bug the first import shipped with: `mecha_1004d` hung upside down
+        // below the origin, because DragonBones works in screen coordinates and
+        // our world is Y-up. Positions *and* angles flip; scale does not.
+        let json = r#"{
+            "name": "t", "frameRate": 24,
+            "armature": [{"name": "a", "bone": [
+                {"name": "root"},
+                {"name": "head", "parent": "root",
+                 "transform": {"x": 10, "y": -100, "skX": 30, "skY": 30,
+                               "scX": 2.0, "scY": 3.0}}
+            ]}]
+        }"#;
+        let loaded = read(json, Images::None, "x").expect("reads");
+        let head = loaded
+            .skeleton
+            .bones
+            .values()
+            .find(|b| b.name == "head")
+            .expect("head");
+
+        assert_eq!(
+            head.local_transform.position,
+            glam::vec2(10.0, 100.0),
+            "a bone 100 above the origin in a Y-down file is 100 above in ours"
+        );
+        assert!(
+            (head.local_transform.rotation + 30.0_f32.to_radians()).abs() < 1e-6,
+            "the turn reverses with the axis"
+        );
+        assert_eq!(
+            head.local_transform.scale,
+            glam::vec2(2.0, 3.0),
+            "scale is a magnitude and does not flip"
+        );
+    }
+
+    #[test]
+    fn animated_translation_flips_with_the_setup_pose() {
+        // Flipping the setup transform and not the keys would leave a rig that
+        // starts correct and drifts wrong the moment it plays — the failure
+        // that is hardest to attribute later.
+        let json = r#"{
+            "name": "t", "frameRate": 10,
+            "armature": [{"name": "a",
+                "bone": [{"name": "root"}],
+                "animation": [{"name": "hop", "duration": 20, "bone": [
+                    {"name": "root",
+                     "translateFrame": [{"duration": 10, "y": 0},
+                                        {"duration": 10, "y": -50}],
+                     "rotateFrame": [{"duration": 10, "rotate": 0},
+                                     {"duration": 10, "rotate": 90}]}
+                ]}]
+            }]
+        }"#;
+        let loaded = read(json, Images::None, "x").expect("reads");
+        let clip = loaded.animations.values().next().expect("one clip");
+
+        let y_keys = clip
+            .timelines
+            .iter()
+            .find_map(|t| match t {
+                Timeline::BoneTranslate {
+                    axis: Axis::Y,
+                    keys,
+                    ..
+                } => Some(keys),
+                _ => None,
+            })
+            .expect("a Y translate timeline");
+        assert_eq!(y_keys[1].value, 50.0, "-50 down becomes +50 up");
+
+        let rot_keys = clip
+            .timelines
+            .iter()
+            .find_map(|t| match t {
+                Timeline::BoneRotate { keys, .. } => Some(keys),
+                _ => None,
+            })
+            .expect("a rotate timeline");
+        assert_eq!(rot_keys[1].value, -90.0, "the turn reverses too");
     }
 
     #[test]
