@@ -34,9 +34,18 @@
 //! # A file holds several armatures
 //!
 //! Spine is one skeleton per file. DragonBones packs several — `mecha_1004d`
-//! ships four, three of them swappable weapons. Our `Document` holds one
-//! skeleton, so the first is imported and the rest are reported: dropping them
-//! silently would lose most of a file that looked like it loaded.
+//! ships four. Our `Document` holds one skeleton, so the first is imported and
+//! the others are handled by what references them.
+//!
+//! In practice a nested armature is not a sub-rig: every one in the sample files
+//! is a single bone holding a set of images — `we_bl_4` is a five-frame muzzle
+//! flash, `weapon_replace` a swappable weapon. A slot with several attachments
+//! is already what that means here, so a display naming an armature **folds its
+//! images into the host slot** and the artist swaps between them.
+//!
+//! An armature nothing references is genuinely dropped and reported.
+//! `skin_1502b`'s `skin_b`/`skin_c` are that case: alternate skins for one
+//! character, which is a different feature from an attachment.
 //!
 //! # Omission means default, never inheritance
 //!
@@ -346,17 +355,11 @@ fn convert(
     fallback_name: &str,
     report: &mut LoadReport,
 ) -> Loaded {
-    // One skeleton per document. The rest are named in the report rather than
-    // dropped quietly — in `mecha_1004d` three of four armatures are swappable
-    // weapons, and a silent import would look like most of the file vanished.
+    // One skeleton per document. Which of the others survive is decided by the
+    // attachment pass below — an armature a display names gets folded into the
+    // slot that names it, and only what nothing references is really skipped.
     let armature = &armatures[0];
-    for extra in &armatures[1..] {
-        report.lossy(
-            "armature",
-            s(extra, "name").unwrap_or("unnamed"),
-            "only the first armature in a file is imported; this one was skipped",
-        );
-    }
+    let mut folded_armatures: std::collections::HashSet<&str> = Default::default();
 
     let name = s(doc, "name")
         .filter(|n| !n.is_empty())
@@ -609,19 +612,132 @@ fn convert(
                             }),
                         );
                     }
+                    "armature" => {
+                        // A display that names another armature in the same
+                        // file. In practice these are not sub-rigs: every one in
+                        // the sample rigs is a single bone holding a set of
+                        // images — `we_bl_4` is a five-frame muzzle flash,
+                        // `weapon_replace` is a swappable weapon. That is
+                        // already what a slot with several attachments means
+                        // here, so the images are folded into the host slot and
+                        // the artist can swap between them.
+                        //
+                        // The nested armature's own bone transform is folded in
+                        // as an offset rather than becoming a bone: a one-bone
+                        // armature whose bone exists only to place its art is a
+                        // bone nobody wants in their hierarchy.
+                        let Some(nested) = armatures
+                            .iter()
+                            .find(|a| s(a, "name") == Some(display_name))
+                        else {
+                            report.dangling("dragonbones armature", display_name);
+                            continue;
+                        };
+
+                        // The display's own transform, and the nested bone's,
+                        // compose into one offset.
+                        let host_t = display.get("transform").cloned().unwrap_or(Value::Null);
+                        let host_scale = glam::vec2(f(&host_t, "scX", 1.0), f(&host_t, "scY", 1.0));
+                        let host_offset = glam::vec2(f(&host_t, "x", 0.0), -f(&host_t, "y", 0.0));
+
+                        let mut folded = 0usize;
+                        for nested_slot in nested
+                            .get("skin")
+                            .and_then(|a| a.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|sk| sk.get("slot"))
+                            .and_then(|s_| s_.as_array())
+                            .unwrap_or(&empty)
+                        {
+                            for nested_display in nested_slot
+                                .get("display")
+                                .and_then(|d| d.as_array())
+                                .unwrap_or(&empty)
+                            {
+                                // Only images fold. A nested armature holding a
+                                // mesh or another armature is a real sub-rig and
+                                // outside what this flattening claims to do.
+                                if s(nested_display, "type").unwrap_or("image") != "image" {
+                                    continue;
+                                }
+                                let Some(nested_name) = s(nested_display, "name") else {
+                                    continue;
+                                };
+                                let nested_region =
+                                    s(nested_display, "path").unwrap_or(nested_name);
+                                let Some(asset) = crop(nested_region, &mut assets) else {
+                                    report.dangling("dragonbones region", nested_region);
+                                    continue;
+                                };
+                                let nt = nested_display
+                                    .get("transform")
+                                    .cloned()
+                                    .unwrap_or(Value::Null);
+                                let (rotation, _) =
+                                    decompose_skew(f(&nt, "skX", 0.0), f(&nt, "skY", 0.0));
+                                skel.skins[default_skin].set(
+                                    slot_id,
+                                    nested_name.to_string(),
+                                    Attachment::Region(RegionAttachment {
+                                        texture: asset,
+                                        local_offset: host_offset
+                                            + glam::vec2(f(&nt, "x", 0.0), -f(&nt, "y", 0.0))
+                                                * host_scale,
+                                        local_rotation: rotation,
+                                        local_scale: host_scale
+                                            * glam::vec2(f(&nt, "scX", 1.0), f(&nt, "scY", 1.0)),
+                                        width: 0.0,
+                                        height: 0.0,
+                                        uv_rect: Rect {
+                                            x: 0.0,
+                                            y: 0.0,
+                                            w: 1.0,
+                                            h: 1.0,
+                                        },
+                                        pivot: glam::vec2(
+                                            f(
+                                                nested_display.get("pivot").unwrap_or(&Value::Null),
+                                                "x",
+                                                0.5,
+                                            ),
+                                            1.0 - f(
+                                                nested_display.get("pivot").unwrap_or(&Value::Null),
+                                                "y",
+                                                0.5,
+                                            ),
+                                        ),
+                                        sequence: None,
+                                    }),
+                                );
+                                folded += 1;
+                            }
+                        }
+
+                        if folded == 0 {
+                            report.lossy(
+                                "attachment",
+                                &format!("{slot_name}/{display_name}"),
+                                "a nested armature held nothing this reader could fold in",
+                            );
+                        } else {
+                            folded_armatures.insert(display_name);
+                        }
+                    }
                     other => {
-                        // Bounding boxes and sub-armatures. Reported by kind so
+                        // Bounding boxes and anything newer. Reported by kind so
                         // the count is actionable rather than one opaque number.
+                        //
+                        // Bounding boxes are deliberately unread: none of the
+                        // sample rigs contains one — `bounding_box_tester` is
+                        // named for what it tests against, not for what it holds
+                        // — and writing a reader for an encoding nothing can
+                        // check against real data is how the 5.6 timeline gap
+                        // got shipped in the first place.
                         report.lossy(
                             "attachment",
                             &format!("{slot_name}/{display_name}"),
                             match other {
                                 "boundingBox" => "a bounding box display is not read yet",
-                                "armature" => {
-                                    "a nested armature display is not read yet — the \
-                                     armature it names is in this file but a document \
-                                     holds one skeleton"
-                                }
                                 _ => "an unrecognised display type was skipped",
                             },
                         );
@@ -629,6 +745,23 @@ fn convert(
                 }
             }
         }
+    }
+
+    // ── Armatures nothing referenced ─────────────────────────────────────
+    // Reported only now, because until the attachments were read there was no
+    // way to know which of them a display had folded in. An armature no display
+    // names is genuinely dropped, and a document that quietly lost one would
+    // look like most of the file had vanished.
+    for extra in &armatures[1..] {
+        let extra_name = s(extra, "name").unwrap_or("unnamed");
+        if folded_armatures.contains(extra_name) {
+            continue;
+        }
+        report.lossy(
+            "armature",
+            extra_name,
+            "no display referenced this armature, and a document holds one skeleton",
+        );
     }
 
     // ── Constraints ──────────────────────────────────────────────────────
@@ -1017,6 +1150,80 @@ mod tests {
         assert_eq!(bone.local_transform.rotation, 0.0);
         assert_eq!(bone.local_transform.scale, glam::vec2(1.0, 1.0));
         assert_eq!(bone.local_transform.shear, glam::Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_referenced_armature_folds_into_the_slot_that_names_it() {
+        // Every nested armature in the sample rigs is one bone holding a set of
+        // images — `we_bl_4` is a five-frame muzzle flash, `weapon_replace` a
+        // swappable weapon. That is what a slot with several attachments already
+        // means here, so they fold in rather than being reported as lost.
+        let json = r#"{
+            "name": "t",
+            "armature": [
+                {"name": "main",
+                 "bone": [{"name": "root"}],
+                 "slot": [{"name": "hand", "parent": "root"}],
+                 "skin": [{"slot": [{"name": "hand", "display": [
+                     {"type": "armature", "name": "weapons",
+                      "transform": {"x": 10, "y": -4}}
+                 ]}]}]},
+                {"name": "weapons",
+                 "bone": [{"name": "b"}],
+                 "slot": [{"name": "b", "parent": "b"}],
+                 "skin": [{"slot": [{"name": "b", "display": [
+                     {"name": "sword"}, {"name": "axe"}
+                 ]}]}]}
+            ]
+        }"#;
+        let png = image::RgbaImage::new(2, 2);
+        let loaded = read(json, Images::Loose(&|_| Some(png.clone())), "x").expect("reads");
+
+        let slot = loaded
+            .skeleton
+            .slots
+            .iter()
+            .find(|(_, s_)| s_.name == "hand")
+            .map(|(id, _)| id)
+            .expect("hand slot");
+        let mut names: Vec<&str> = loaded.skeleton.skins[loaded.skeleton.default_skin]
+            .names_for_slot(slot)
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["axe", "sword"],
+            "both swap options land in the slot"
+        );
+
+        assert!(
+            !loaded.report.lossy.iter().any(|l| l.what == "armature"),
+            "a folded armature is not a loss: {:?}",
+            loaded.report.lossy
+        );
+    }
+
+    #[test]
+    fn an_armature_nothing_references_is_still_reported() {
+        // Folding must not turn the report off wholesale — a spare armature no
+        // display names really is dropped, and `skin_1502b`'s alternate skins
+        // are exactly that case.
+        let json = r#"{
+            "name": "t",
+            "armature": [
+                {"name": "main", "bone": [{"name": "root"}]},
+                {"name": "unused_alt", "bone": [{"name": "root"}]}
+            ]
+        }"#;
+        let loaded = read(json, Images::None, "x").expect("reads");
+        let skipped: Vec<&str> = loaded
+            .report
+            .lossy
+            .iter()
+            .filter(|l| l.what == "armature")
+            .map(|l| l.where_.as_str())
+            .collect();
+        assert_eq!(skipped, ["unused_alt"]);
     }
 
     #[test]
