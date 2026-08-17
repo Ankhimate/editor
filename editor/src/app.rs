@@ -751,6 +751,17 @@ impl eframe::App for AnkhimateApp {
                                         file_action = Some(FileAction::ImportSpine);
                                         ui.close();
                                     }
+                                    if ui
+                                        .add(egui::Button::new("DragonBones…"))
+                                        .on_hover_text(
+                                            "Read a DragonBones `_ske.json` and its \
+                                             atlas as a new document",
+                                        )
+                                        .clicked()
+                                    {
+                                        file_action = Some(FileAction::ImportDragonBones);
+                                        ui.close();
+                                    }
                                 });
                                 ui.separator();
                                 // Recent files (T-304) — the same list the
@@ -1595,6 +1606,7 @@ enum FileAction {
     SaveAs,
     /// Read a foreign rig, replacing the document (T-6xx).
     ImportSpine,
+    ImportDragonBones,
 }
 
 /// What an import could not carry across, held while the report is shown.
@@ -1844,6 +1856,7 @@ impl AnkhimateApp {
             FileAction::Save => fileops::save(&self.state, &self.current_path),
             FileAction::SaveAs => fileops::save_as(&self.state),
             FileAction::ImportSpine => fileops::import_spine(&mut self.state),
+            FileAction::ImportDragonBones => fileops::import_dragonbones(&mut self.state),
         };
         match outcome {
             FileOutcome::Saved(path) => {

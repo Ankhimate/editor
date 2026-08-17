@@ -173,25 +173,96 @@ pub fn import_spine_path(state: &mut AppState, path: &Path) -> FileOutcome {
         .unwrap_or("imported")
         .to_string();
     match ankhimate_formats::spine::read(&json, images, &name) {
-        Ok(loaded) => {
-            let report = loaded.report;
-            state.replace_document(Document {
-                skeleton: loaded.skeleton,
-                animations: loaded.animations,
-                assets: loaded.assets,
-                meta: DocumentMeta {
-                    name: loaded.name,
-                    fps: loaded.fps,
-                },
-                psd_layer_paths: Default::default(),
-                export_presets: loaded.export_presets,
-            });
-            FileOutcome::Imported {
-                path: path.to_path_buf(),
-                report,
-            }
-        }
+        Ok(loaded) => adopt(state, loaded, path),
         Err(e) => FileOutcome::Error(format!("{}: {e}", path.display())),
+    }
+}
+
+/// File▸Import▸DragonBones — prompt, then hand off to
+/// [`import_dragonbones_path`].
+pub fn import_dragonbones(state: &mut AppState) -> FileOutcome {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("DragonBones skeleton", &["json"])
+        .set_title("Import DragonBones (_ske.json)")
+        .pick_file()
+    else {
+        return FileOutcome::Cancelled;
+    };
+    import_dragonbones_path(state, &path)
+}
+
+/// Read a DragonBones skeleton and swap the document in.
+///
+/// A DragonBones rig is a trio: `<name>_ske.json` beside `<name>_tex.json` and
+/// `<name>_tex.png`. The atlas is found by that naming rather than by scanning
+/// for an extension the way the Spine reader does, because `_tex.json` and
+/// `_ske.json` share one — picking the first `.json` in the directory would
+/// find the atlas about half the time.
+///
+/// The dialog-free seam, so a headless test can drive it.
+pub fn import_dragonbones_path(state: &mut AppState, path: &Path) -> FileOutcome {
+    let json = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) => return FileOutcome::Error(format!("could not read {}: {e}", path.display())),
+    };
+    let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+    // `walk_ske.json` pairs with `walk_tex.json`. A file the user renamed away
+    // from that convention still imports — as geometry, with every texture in
+    // the report — rather than failing.
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let stem = file_name
+        .strip_suffix("_ske.json")
+        .or_else(|| file_name.strip_suffix(".json"))
+        .unwrap_or(file_name);
+    let atlas_text = std::fs::read_to_string(dir.join(format!("{stem}_tex.json"))).ok();
+
+    let open_page = |file: &str| image::open(dir.join(file)).ok().map(|i| i.to_rgba8());
+    let open_loose = |name: &str| {
+        image::open(dir.join(format!("{name}.png")))
+            .ok()
+            .map(|i| i.to_rgba8())
+    };
+    let images = match &atlas_text {
+        Some(text) => ankhimate_formats::dragonbones::Images::Atlas {
+            text,
+            pages: &open_page,
+        },
+        None => ankhimate_formats::dragonbones::Images::Loose(&open_loose),
+    };
+
+    match ankhimate_formats::dragonbones::read(&json, images, stem) {
+        Ok(loaded) => adopt(state, loaded, path),
+        Err(e) => FileOutcome::Error(format!("{}: {e}", path.display())),
+    }
+}
+
+/// Swap an imported rig in and hand back its report.
+///
+/// Shared by every importer: what a foreign format becomes is a `Loaded`, and
+/// from there the editor does not care which reader produced it. Keeping this in
+/// one place is what stops a new importer quietly forgetting to carry the report
+/// across — the part of an import the user most needs to see.
+fn adopt(state: &mut AppState, loaded: ankhimate_formats::Loaded, path: &Path) -> FileOutcome {
+    let report = loaded.report;
+    state.replace_document(Document {
+        skeleton: loaded.skeleton,
+        animations: loaded.animations,
+        assets: loaded.assets,
+        meta: DocumentMeta {
+            name: loaded.name,
+            fps: loaded.fps,
+        },
+        // Layer provenance is per-import, not per-file.
+        psd_layer_paths: Default::default(),
+        export_presets: loaded.export_presets,
+    });
+    FileOutcome::Imported {
+        path: path.to_path_buf(),
+        report,
     }
 }
 
@@ -421,6 +492,108 @@ mod tests {
         assert!(
             !report.dangling.is_empty(),
             "the missing image is named: {report:?}"
+        );
+    }
+
+    /// A minimal DragonBones rig: one armature, two bones, one clip.
+    ///
+    /// `root` is written with no `transform` at all, which is how real files do
+    /// it and the case an importer is most likely to get wrong by reaching for
+    /// a neighbouring value.
+    const DRAGONBONES_RIG: &str = r#"{
+        "name": "golem", "frameRate": 24, "version": "5.5",
+        "armature": [{
+            "name": "golem", "frameRate": 24,
+            "bone": [
+                {"name": "root"},
+                {"name": "arm", "parent": "root", "length": 30,
+                 "transform": {"x": 10, "y": 5, "skX": 20, "skY": 20}}
+            ],
+            "slot": [{"name": "hand", "parent": "arm"}],
+            "skin": [{"slot": []}],
+            "animation": [{
+                "name": "wave", "duration": 24,
+                "bone": [{"name": "arm", "rotateFrame": [
+                    {"duration": 12, "tweenEasing": 0},
+                    {"duration": 12, "tweenEasing": 0, "rotate": 45},
+                    {"duration": 0}
+                ]}]
+            }]
+        }]
+    }"#;
+
+    #[test]
+    fn importing_a_dragonbones_rig_replaces_the_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("golem_ske.json");
+        std::fs::write(&path, DRAGONBONES_RIG).unwrap();
+
+        let mut state = AppState::default();
+        state.dispatch(Box::new(CreateBone::new(bone("leftover"))));
+        let before = state.revision;
+
+        let outcome = import_dragonbones_path(&mut state, &path);
+        assert!(
+            matches!(outcome, FileOutcome::Imported { .. }),
+            "expected an import outcome"
+        );
+        assert!(state.doc.skeleton.bones.values().any(|b| b.name == "arm"));
+        assert!(
+            !state
+                .doc
+                .skeleton
+                .bones
+                .values()
+                .any(|b| b.name == "leftover"),
+            "the previous document is replaced, not merged into"
+        );
+        // The file's own name wins over the file stem — unlike Spine, a
+        // DragonBones document stores one.
+        assert_eq!(state.doc.meta.name, "golem");
+        assert_eq!(state.doc.meta.fps, 24);
+        assert_eq!(state.doc.animations.len(), 1);
+        assert_ne!(state.revision, before, "a new rig is a document change");
+    }
+
+    /// Frame counts become seconds at the armature's own rate.
+    ///
+    /// The format's defining quirk, checked through the editor's seam rather
+    /// than only in `formats`: a clip whose duration survives the reader but is
+    /// mis-scaled here would play at the wrong speed with nothing to point at.
+    #[test]
+    fn a_dragonbones_clip_arrives_in_seconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("golem_ske.json");
+        std::fs::write(&path, DRAGONBONES_RIG).unwrap();
+
+        let mut state = AppState::default();
+        import_dragonbones_path(&mut state, &path);
+
+        let clip = state.doc.animations.values().next().expect("one clip");
+        assert_eq!(clip.name, "wave");
+        assert_eq!(clip.duration, 1.0, "24 frames at 24fps is one second");
+    }
+
+    /// A `.json` that is not a DragonBones skeleton fails without touching the
+    /// document — and in particular does not fall back to the Spine reader.
+    #[test]
+    fn a_bad_dragonbones_import_leaves_the_document_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        std::fs::write(&path, r#"{"hello": "world"}"#).unwrap();
+
+        let mut state = AppState::default();
+        state.dispatch(Box::new(CreateBone::new(bone("keep-me"))));
+
+        let outcome = import_dragonbones_path(&mut state, &path);
+        assert!(matches!(outcome, FileOutcome::Error(_)));
+        assert!(
+            state
+                .doc
+                .skeleton
+                .bones
+                .values()
+                .any(|b| b.name == "keep-me")
         );
     }
 
