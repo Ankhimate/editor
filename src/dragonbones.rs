@@ -725,6 +725,19 @@ fn convert(
                             .and_then(|s_| s_.as_array())
                             .unwrap_or(&empty)
                         {
+                            // A nested slot's displays are **frames of one
+                            // sprite**, not alternatives. `we_bl_4` holds five
+                            // images and its own `fade_in` clip steps through
+                            // them, so folding them as five attachments left the
+                            // host's single display index pointing at frame one
+                            // — a nearly empty sliver of the effect, which is why
+                            // the muzzle flashes looked absent rather than wrong.
+                            //
+                            // They become one attachment carrying a `Sequence`.
+                            // Placement comes from the first frame: they share a
+                            // bone and a transform, being frames of one drawing.
+                            let mut frames: Vec<String> = Vec::new();
+                            let mut first: Option<(Value, u32, u32, Value)> = None;
                             for nested_display in nested_slot
                                 .get("display")
                                 .and_then(|d| d.as_array())
@@ -745,70 +758,83 @@ fn convert(
                                     report.dangling("dragonbones region", nested_region);
                                     continue;
                                 };
-                                let nt = nested_display
-                                    .get("transform")
-                                    .cloned()
-                                    .unwrap_or(Value::Null);
-                                let (rotation, _) =
-                                    decompose_skew(f(&nt, "skX", 0.0), f(&nt, "skY", 0.0));
-                                // Named for the host display slot it fills, not
-                                // for the image inside it. `weapon_hand_r` lists
-                                // `weapon_replace` three times at different
-                                // offsets — three placements of one weapon — so
-                                // naming these after the image collapsed all
-                                // three onto a single entry and lost two of the
-                                // placements.
-                                let host_index = display_names.len() - 1;
-                                let attachment_name =
-                                    format!("{display_name}#{host_index}/{nested_name}");
-                                skel.skins[default_skin].set(
-                                    slot_id,
-                                    attachment_name.clone(),
-                                    Attachment::Region(RegionAttachment {
-                                        texture: asset,
-                                        // Three transforms compose here: the
-                                        // host display's, the nested armature's
-                                        // bone, and the nested display's own.
-                                        // The bone's rotation turns everything
-                                        // below it, so the display offset is
-                                        // rotated before being added rather than
-                                        // summed flat.
-                                        local_offset: host_offset
-                                            + (bone_offset
-                                                + glam::vec2(f(&nt, "x", 0.0), -f(&nt, "y", 0.0))
-                                                    .rotate(glam::Vec2::from_angle(bone_rotation))
-                                                    * bone_scale)
-                                                * host_scale,
-                                        local_rotation: bone_rotation + rotation,
-                                        local_scale: host_scale
-                                            * bone_scale
-                                            * glam::vec2(f(&nt, "scX", 1.0), f(&nt, "scY", 1.0)),
-                                        width: nw as f32,
-                                        height: nh as f32,
-                                        uv_rect: Rect {
-                                            x: 0.0,
-                                            y: 0.0,
-                                            w: 1.0,
-                                            h: 1.0,
-                                        },
-                                        pivot: glam::vec2(
-                                            f(
-                                                nested_display.get("pivot").unwrap_or(&Value::Null),
-                                                "x",
-                                                0.5,
-                                            ),
-                                            1.0 - f(
-                                                nested_display.get("pivot").unwrap_or(&Value::Null),
-                                                "y",
-                                                0.5,
-                                            ),
-                                        ),
-                                        sequence: None,
-                                    }),
-                                );
-                                folded += 1;
-                                first_folded.get_or_insert(attachment_name);
+                                if first.is_none() {
+                                    first = Some((
+                                        nested_display
+                                            .get("transform")
+                                            .cloned()
+                                            .unwrap_or(Value::Null),
+                                        nw,
+                                        nh,
+                                        nested_display.get("pivot").cloned().unwrap_or(Value::Null),
+                                    ));
+                                }
+                                frames.push(asset);
                             }
+
+                            let Some((nt, nw, nh, pivot)) = first else {
+                                continue;
+                            };
+                            let (rotation, _) =
+                                decompose_skew(f(&nt, "skX", 0.0), f(&nt, "skY", 0.0));
+                            // Named for the host display slot it fills, not for
+                            // the image inside it. `weapon_hand_r` lists
+                            // `weapon_replace` three times at different offsets —
+                            // three placements of one weapon — so naming these
+                            // after the image collapsed all three onto a single
+                            // entry and lost two of the placements.
+                            let host_index = display_names.len() - 1;
+                            let attachment_name = format!("{display_name}#{host_index}");
+                            // One frame is a plain region; several are a
+                            // flipbook. `Hold` rather than `Loop`: the nested
+                            // armature's own clip drives it, and a sequence that
+                            // spun on its own would animate an effect that is
+                            // meant to be switched on for a few frames.
+                            let sequence =
+                                (frames.len() > 1).then(|| ankhimate_core::attachment::Sequence {
+                                    frames: frames.clone(),
+                                    fps: fps,
+                                    mode: ankhimate_core::attachment::SequenceMode::Hold,
+                                    setup_index: 0,
+                                });
+                            skel.skins[default_skin].set(
+                                slot_id,
+                                attachment_name.clone(),
+                                Attachment::Region(RegionAttachment {
+                                    texture: frames[0].clone(),
+                                    // Three transforms compose here: the host
+                                    // display's, the nested armature's bone, and
+                                    // the nested display's own. The bone's
+                                    // rotation turns everything below it, so the
+                                    // display offset is rotated before being
+                                    // added rather than summed flat.
+                                    local_offset: host_offset
+                                        + (bone_offset
+                                            + glam::vec2(f(&nt, "x", 0.0), -f(&nt, "y", 0.0))
+                                                .rotate(glam::Vec2::from_angle(bone_rotation))
+                                                * bone_scale)
+                                            * host_scale,
+                                    local_rotation: bone_rotation + rotation,
+                                    local_scale: host_scale
+                                        * bone_scale
+                                        * glam::vec2(f(&nt, "scX", 1.0), f(&nt, "scY", 1.0)),
+                                    width: nw as f32,
+                                    height: nh as f32,
+                                    uv_rect: Rect {
+                                        x: 0.0,
+                                        y: 0.0,
+                                        w: 1.0,
+                                        h: 1.0,
+                                    },
+                                    pivot: glam::vec2(
+                                        f(&pivot, "x", 0.5),
+                                        1.0 - f(&pivot, "y", 0.5),
+                                    ),
+                                    sequence,
+                                }),
+                            );
+                            folded += 1;
+                            first_folded.get_or_insert(attachment_name);
                         }
 
                         if folded == 0 {
@@ -1614,9 +1640,32 @@ mod tests {
             .names_for_slot(slot)
             .collect();
         names.sort_unstable();
+        // One attachment, not one per image: the nested slot's displays are
+        // frames of a sprite. `we_bl_4` is five frames of a muzzle flash, and
+        // folding them separately left the host's single display index pointing
+        // at frame one — a near-empty sliver instead of the effect.
+        let slot_id = loaded
+            .skeleton
+            .slots
+            .iter()
+            .find(|(_, s_)| s_.name == "hand")
+            .map(|(id, _)| id)
+            .unwrap();
+        let Some(Attachment::Region(region)) =
+            loaded.skeleton.skins[loaded.skeleton.default_skin].get(slot_id, "weapons#0")
+        else {
+            panic!("expected one folded attachment");
+        };
+        let seq = region
+            .sequence
+            .as_ref()
+            .expect("two displays are a sequence");
+        assert_eq!(seq.frames, ["sword", "axe"], "in display order");
+        assert_eq!(region.texture, "sword", "the first frame shows at rest");
+
         assert_eq!(
             names,
-            ["weapons#0/axe", "weapons#0/sword"],
+            ["weapons#0"],
             "both options land in the slot, keyed by the display that brought them — \
              `weapon_hand_r` names one armature three times at different offsets, and \
              keying on the image alone collapsed all three onto a single entry"
@@ -1665,7 +1714,7 @@ mod tests {
         // naming note in the fold, which keeps three placements of one weapon
         // from collapsing onto one entry.
         let Some(Attachment::Region(region)) =
-            loaded.skeleton.skins[loaded.skeleton.default_skin].get(slot, "held#0/sword")
+            loaded.skeleton.skins[loaded.skeleton.default_skin].get(slot, "held#0")
         else {
             let have: Vec<&str> = loaded.skeleton.skins[loaded.skeleton.default_skin]
                 .names_for_slot(slot)
