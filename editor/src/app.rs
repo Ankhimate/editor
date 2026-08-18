@@ -740,27 +740,26 @@ impl eframe::App for AnkhimateApp {
                                 // Open rather than with the asset-level imports
                                 // in the library panel.
                                 ui.menu_button("Import", |ui| {
-                                    if ui
-                                        .add(egui::Button::new("Spine JSON…"))
-                                        .on_hover_text(
-                                            "Read a Spine skeleton and its images \
-                                             as a new document",
-                                        )
-                                        .clicked()
-                                    {
-                                        file_action = Some(FileAction::ImportSpine);
-                                        ui.close();
-                                    }
-                                    if ui
-                                        .add(egui::Button::new("DragonBones…"))
-                                        .on_hover_text(
-                                            "Read a DragonBones `_ske.json` and its \
-                                             atlas as a new document",
-                                        )
-                                        .clicked()
-                                    {
-                                        file_action = Some(FileAction::ImportDragonBones);
-                                        ui.close();
+                                    // One entry per registered importer, so a
+                                    // new format is a registration rather than
+                                    // an edit here — which is the whole point
+                                    // of the registry.
+                                    for importer in crate::fileops::importers().iter() {
+                                        if ui
+                                            .add(egui::Button::new(format!(
+                                                "{}…",
+                                                importer.label()
+                                            )))
+                                            .on_hover_text(format!(
+                                                "Read a {} rig and its images as a                                                  new document",
+                                                importer.label()
+                                            ))
+                                            .clicked()
+                                        {
+                                            file_action =
+                                                Some(FileAction::Import(importer.id().to_string()));
+                                            ui.close();
+                                        }
                                     }
                                 });
                                 ui.separator();
@@ -1604,9 +1603,10 @@ enum FileAction {
     OpenPath(std::path::PathBuf),
     Save,
     SaveAs,
-    /// Read a foreign rig, replacing the document (T-6xx).
-    ImportSpine,
-    ImportDragonBones,
+    /// Read a foreign rig, replacing the document (T-6xx). Carries the
+    /// importer's id rather than a variant per format: the set is open, and a
+    /// plugin's importer has to reach this without a new enum arm.
+    Import(String),
 }
 
 /// What an import could not carry across, held while the report is shown.
@@ -1854,8 +1854,7 @@ impl AnkhimateApp {
             FileAction::OpenPath(path) => fileops::open_path(&mut self.state, &path),
             FileAction::Save => fileops::save(&self.state, &self.current_path),
             FileAction::SaveAs => fileops::save_as(&self.state),
-            FileAction::ImportSpine => fileops::import_spine(&mut self.state),
-            FileAction::ImportDragonBones => fileops::import_dragonbones(&mut self.state),
+            FileAction::Import(id) => fileops::import_with(&mut self.state, &id),
         };
         match outcome {
             FileOutcome::Saved(path) => {

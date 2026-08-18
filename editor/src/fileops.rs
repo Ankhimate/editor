@@ -109,132 +109,40 @@ pub fn open_path(state: &mut AppState, path: &Path) -> FileOutcome {
     }
 }
 
-/// File▸Import▸Spine JSON — prompt, then hand off to [`import_spine_path`].
-pub fn import_spine(state: &mut AppState) -> FileOutcome {
+/// Every importer the build knows about.
+///
+/// Built once per call rather than held on the app: registration is cheap, and
+/// a plugin host will want to add to it per session rather than at startup.
+pub fn importers() -> ankhimate_formats::Importers {
+    ankhimate_formats::Importers::builtin()
+}
+
+/// File▸Import▸<format> — prompt with that format's extensions, then read.
+///
+/// The user has already said which format, so the named importer is used rather
+/// than guessed at: obeying beats guessing when the caller knows.
+pub fn import_with(state: &mut AppState, id: &str) -> FileOutcome {
+    let importers = importers();
+    let Some(importer) = importers.get(id) else {
+        return FileOutcome::Error(format!("no importer named `{id}`"));
+    };
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Spine skeleton", &["json"])
-        .set_title("Import Spine JSON")
+        .add_filter(importer.label(), importer.extensions())
+        .set_title(format!("Import {}", importer.label()))
         .pick_file()
     else {
         return FileOutcome::Cancelled;
     };
-    import_spine_path(state, &path)
+    import_path_with(state, id, &path)
 }
 
-/// Read a Spine skeleton and swap the document in.
-///
-/// Images come from whichever layout sits beside the skeleton: an `.atlas` with
-/// its page images, or a loose `images/` directory. Both ship in the wild — a
-/// rig exported for a runtime has an atlas, one exported for re-editing usually
-/// does not — and picking between them is not something to make the user
-/// declare when the files on disk already say which it is.
-///
-/// The dialog-free seam, so a headless test can drive it.
-pub fn import_spine_path(state: &mut AppState, path: &Path) -> FileOutcome {
-    let json = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) => return FileOutcome::Error(format!("could not read {}: {e}", path.display())),
+/// Read `path` with the importer `id` names. The dialog-free seam.
+pub fn import_path_with(state: &mut AppState, id: &str, path: &Path) -> FileOutcome {
+    let importers = importers();
+    let Some(importer) = importers.get(id) else {
+        return FileOutcome::Error(format!("no importer named `{id}`"));
     };
-    let dir = path.parent().unwrap_or(Path::new("."));
-
-    // Read up front so an unreadable atlas fails here, with the file name still
-    // in hand, rather than halfway through the conversion.
-    let atlas_text = std::fs::read_dir(dir)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("atlas"))
-        .and_then(|p| std::fs::read_to_string(p).ok());
-
-    let open_page = |file: &str| image::open(dir.join(file)).ok().map(|i| i.to_rgba8());
-    let images_dir = dir.join("images");
-    let open_loose = |name: &str| {
-        // Spine writes an attachment path with `/` for a subdirectory and no
-        // extension, which is how the files sit on disk.
-        image::open(images_dir.join(format!("{name}.png")))
-            .ok()
-            .map(|i| i.to_rgba8())
-    };
-    let images = match &atlas_text {
-        Some(text) => ankhimate_formats::spine::Images::Atlas {
-            text,
-            pages: &open_page,
-        },
-        None if images_dir.is_dir() => ankhimate_formats::spine::Images::Loose(&open_loose),
-        // Geometry still imports; every attachment lands in the report.
-        None => ankhimate_formats::spine::Images::None,
-    };
-
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("imported")
-        .to_string();
-    match ankhimate_formats::spine::read(&json, images, &name) {
-        Ok(loaded) => adopt(state, loaded, path),
-        Err(e) => FileOutcome::Error(format!("{}: {e}", path.display())),
-    }
-}
-
-/// File▸Import▸DragonBones — prompt, then hand off to
-/// [`import_dragonbones_path`].
-pub fn import_dragonbones(state: &mut AppState) -> FileOutcome {
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("DragonBones skeleton", &["json"])
-        .set_title("Import DragonBones (_ske.json)")
-        .pick_file()
-    else {
-        return FileOutcome::Cancelled;
-    };
-    import_dragonbones_path(state, &path)
-}
-
-/// Read a DragonBones skeleton and swap the document in.
-///
-/// A DragonBones rig is a trio: `<name>_ske.json` beside `<name>_tex.json` and
-/// `<name>_tex.png`. The atlas is found by that naming rather than by scanning
-/// for an extension the way the Spine reader does, because `_tex.json` and
-/// `_ske.json` share one — picking the first `.json` in the directory would
-/// find the atlas about half the time.
-///
-/// The dialog-free seam, so a headless test can drive it.
-pub fn import_dragonbones_path(state: &mut AppState, path: &Path) -> FileOutcome {
-    let json = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) => return FileOutcome::Error(format!("could not read {}: {e}", path.display())),
-    };
-    let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-
-    // `walk_ske.json` pairs with `walk_tex.json`. A file the user renamed away
-    // from that convention still imports — as geometry, with every texture in
-    // the report — rather than failing.
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
-    let stem = file_name
-        .strip_suffix("_ske.json")
-        .or_else(|| file_name.strip_suffix(".json"))
-        .unwrap_or(file_name);
-    let atlas_text = std::fs::read_to_string(dir.join(format!("{stem}_tex.json"))).ok();
-
-    let open_page = |file: &str| image::open(dir.join(file)).ok().map(|i| i.to_rgba8());
-    let open_loose = |name: &str| {
-        image::open(dir.join(format!("{name}.png")))
-            .ok()
-            .map(|i| i.to_rgba8())
-    };
-    let images = match &atlas_text {
-        Some(text) => ankhimate_formats::dragonbones::Images::Atlas {
-            text,
-            pages: &open_page,
-        },
-        None => ankhimate_formats::dragonbones::Images::Loose(&open_loose),
-    };
-
-    match ankhimate_formats::dragonbones::read(&json, images, stem) {
+    match importer.read(path) {
         Ok(loaded) => adopt(state, loaded, path),
         Err(e) => FileOutcome::Error(format!("{}: {e}", path.display())),
     }
@@ -446,7 +354,7 @@ mod tests {
         state.dispatch(Box::new(CreateBone::new(bone("leftover"))));
         let before = state.revision;
 
-        let outcome = import_spine_path(&mut state, &path);
+        let outcome = import_path_with(&mut state, "import.spine", &path);
         assert!(
             matches!(outcome, FileOutcome::Imported { .. }),
             "expected an import outcome"
@@ -485,7 +393,9 @@ mod tests {
         std::fs::write(&path, rig).unwrap();
 
         let mut state = AppState::default();
-        let FileOutcome::Imported { report, .. } = import_spine_path(&mut state, &path) else {
+        let FileOutcome::Imported { report, .. } =
+            import_path_with(&mut state, "import.spine", &path)
+        else {
             panic!("a rig without images still imports");
         };
         assert!(state.doc.skeleton.bones.values().any(|b| b.name == "arm"));
@@ -532,7 +442,7 @@ mod tests {
         state.dispatch(Box::new(CreateBone::new(bone("leftover"))));
         let before = state.revision;
 
-        let outcome = import_dragonbones_path(&mut state, &path);
+        let outcome = import_path_with(&mut state, "import.dragonbones", &path);
         assert!(
             matches!(outcome, FileOutcome::Imported { .. }),
             "expected an import outcome"
@@ -567,7 +477,7 @@ mod tests {
         std::fs::write(&path, DRAGONBONES_RIG).unwrap();
 
         let mut state = AppState::default();
-        import_dragonbones_path(&mut state, &path);
+        import_path_with(&mut state, "import.dragonbones", &path);
 
         let clip = state.doc.animations.values().next().expect("one clip");
         assert_eq!(clip.name, "wave");
@@ -585,7 +495,7 @@ mod tests {
         let mut state = AppState::default();
         state.dispatch(Box::new(CreateBone::new(bone("keep-me"))));
 
-        let outcome = import_dragonbones_path(&mut state, &path);
+        let outcome = import_path_with(&mut state, "import.dragonbones", &path);
         assert!(matches!(outcome, FileOutcome::Error(_)));
         assert!(
             state
@@ -608,7 +518,7 @@ mod tests {
         state.dispatch(Box::new(CreateBone::new(bone("keep-me"))));
         let before = state.revision;
 
-        let outcome = import_spine_path(&mut state, &path);
+        let outcome = import_path_with(&mut state, "import.spine", &path);
         assert!(matches!(outcome, FileOutcome::Error(_)));
         assert!(
             state

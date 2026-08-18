@@ -18,6 +18,7 @@
 pub mod container;
 pub mod convert;
 pub mod dragonbones;
+pub mod importer;
 pub mod migrate;
 pub mod psd;
 pub mod schema;
@@ -27,6 +28,7 @@ use std::path::Path;
 
 pub use container::ImageBlob;
 pub use convert::{LoadReport, Loaded, ProjectRef};
+pub use importer::{ImportError, Importer, Importers};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
