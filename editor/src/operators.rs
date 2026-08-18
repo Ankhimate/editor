@@ -56,8 +56,12 @@ macro_rules! operator {
                 }
             )?
 
-            fn invoke(&self, $state: &mut AppState) -> OpResult {
-                $body
+            fn invoke(
+                &self,
+                $state: &mut AppState,
+                _args: &crate::args::Args,
+            ) -> Result<OpResult, crate::args::ArgError> {
+                Ok($body)
             }
         }
     };
@@ -129,11 +133,15 @@ impl Operator for AddMarkerAtPlayhead {
         state.session.active_animation.is_some()
     }
 
-    fn invoke(&self, state: &mut AppState) -> OpResult {
+    fn invoke(
+        &self,
+        state: &mut AppState,
+        _args: &crate::args::Args,
+    ) -> Result<OpResult, crate::args::ArgError> {
         // `enabled` is advisory — a caller may invoke directly — so the target
         // is re-checked here rather than unwrapped.
         let Some(anim) = state.session.active_animation else {
-            return OpResult::done();
+            return Ok(OpResult::done());
         };
         // Named after the frame it lands on: an animator marking a pose knows
         // which pose it is, and a dialog mid-scrub would break the rhythm.
@@ -147,7 +155,88 @@ impl Operator for AddMarkerAtPlayhead {
                 playhead,
             ),
         ));
-        OpResult::done()
+        Ok(OpResult::done())
+    }
+}
+
+// ── Document verbs ───────────────────────────────────────────────────────────
+// The first operators that take arguments. A keybinding acts on the selection;
+// these are named by a caller who has none — see `crate::args` for why the
+// targets are names rather than ids.
+
+/// Create a bone (`bone.create`).
+pub struct CreateBoneOp;
+
+impl Operator for CreateBoneOp {
+    fn id(&self) -> &'static str {
+        "bone.create"
+    }
+
+    fn label(&self) -> &str {
+        "Create Bone"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn enabled(&self, state: &AppState) -> bool {
+        state.session.can_edit_structure()
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+                "name": { "type": "string", "description": "Name for the new bone" },
+                "parent": {
+                    "type": "string",
+                    "description": "Name of the parent bone; omit for a root"
+                },
+                "x": { "type": "number", "default": 0 },
+                "y": { "type": "number", "default": 0 },
+                "rotation": { "type": "number", "description": "Degrees", "default": 0 },
+                "length": { "type": "number", "default": 30 }
+            }
+        })
+    }
+
+    fn invoke(
+        &self,
+        state: &mut AppState,
+        args: &crate::args::Args,
+    ) -> Result<OpResult, crate::args::ArgError> {
+        use ankhimate_core::math::Transform;
+        use ankhimate_core::skeleton::Bone;
+
+        // Read every argument before touching the document: a half-built bone
+        // left behind by a bad `parent` would be an edit the caller never asked
+        // for and cannot see to undo.
+        let resolver = crate::args::Resolver::new(&state.doc);
+        let name = args.str("name")?.to_string();
+        let parent = resolver.opt_bone(args, "parent")?;
+        let x = args.f32_or("x", 0.0)?;
+        let y = args.f32_or("y", 0.0)?;
+        let rotation = args.f32_or("rotation", 0.0)?;
+        let length = args.f32_or("length", 30.0)?;
+
+        state.dispatch(Box::new(
+            ankhimate_document::commands::bone_cmds::CreateBone::new(Bone {
+                name,
+                parent,
+                length: length.max(1.0),
+                local_transform: Transform {
+                    position: glam::vec2(x, y),
+                    // Degrees at the boundary, radians inside `core`.
+                    rotation: rotation.to_radians(),
+                    ..Default::default()
+                },
+                inherit: Default::default(),
+                color: Bone::default_color(),
+            }),
+        ));
+        Ok(OpResult::done())
     }
 }
 
@@ -226,6 +315,8 @@ pub fn register_builtins(registry: &mut Registry) {
     registry.register(Box::new(ToggleWorkMode));
     registry.register(Box::new(KeyPendingPose));
     registry.register(Box::new(AddMarkerAtPlayhead));
+
+    registry.register(Box::new(CreateBoneOp));
 
     registry.register(Box::new(SelectTool));
     registry.register(Box::new(CreateBoneTool));
@@ -353,11 +444,128 @@ mod tests {
     }
 
     #[test]
+    fn a_bone_is_created_by_name_and_is_undoable() {
+        // What a plugin or an MCP client does: name the verb, name the target,
+        // never hold an id. The edit still goes through `dispatch`, so undo
+        // works exactly as it does for a menu.
+        use crate::args::Args;
+
+        let registry = registry();
+        let mut state = AppState::default();
+        state.session.work_mode = WorkMode::Setup;
+
+        registry
+            .try_invoke(
+                "bone.create",
+                &mut state,
+                &Args::from_json(serde_json::json!({ "name": "root" })),
+            )
+            .expect("arguments read")
+            .expect("not declined");
+
+        let root = state
+            .doc
+            .skeleton
+            .bones
+            .values()
+            .find(|b| b.name == "root")
+            .expect("root exists");
+        assert_eq!(root.parent, None);
+
+        // A second bone under the first, placed and turned.
+        registry
+            .try_invoke(
+                "bone.create",
+                &mut state,
+                &Args::from_json(serde_json::json!({
+                    "name": "spine", "parent": "root", "y": 40.0, "rotation": 90.0
+                })),
+            )
+            .expect("arguments read")
+            .expect("not declined");
+
+        let (spine_id, spine) = state
+            .doc
+            .skeleton
+            .bones
+            .iter()
+            .find(|(_, b)| b.name == "spine")
+            .expect("spine exists");
+        assert!(spine.parent.is_some(), "parented by name");
+        assert_eq!(spine.local_transform.position.y, 40.0);
+        assert!(
+            (spine.local_transform.rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-5,
+            "degrees at the boundary, radians inside core"
+        );
+
+        state.undo();
+        assert!(
+            state.doc.skeleton.bones.get(spine_id).is_none(),
+            "a plugin's edit undoes like any other"
+        );
+    }
+
+    #[test]
+    fn a_bad_argument_is_reported_and_changes_nothing() {
+        // The failure a keybinding may swallow and a script may not. Naming a
+        // parent the rig does not have is a bug in the caller, and the document
+        // must not be half-edited by the time it is found.
+        use crate::args::{ArgError, Args};
+
+        let registry = registry();
+        let mut state = AppState::default();
+        state.session.work_mode = WorkMode::Setup;
+        let before = state.doc.skeleton.bones.len();
+
+        let err = registry
+            .try_invoke(
+                "bone.create",
+                &mut state,
+                &Args::from_json(serde_json::json!({ "name": "arm", "parent": "nope" })),
+            )
+            .expect_err("an unresolvable parent is an error");
+
+        assert!(matches!(err, ArgError::Unresolved { kind: "bone", .. }));
+        assert_eq!(
+            state.doc.skeleton.bones.len(),
+            before,
+            "nothing was created"
+        );
+    }
+
+    #[test]
+    fn a_keybinding_still_invokes_without_arguments() {
+        // The quiet path stays quiet: `invoke` swallows the same failure that
+        // `try_invoke` reports, because a key bound to something inapplicable
+        // should do nothing rather than interrupt.
+        let registry = registry();
+        let mut state = AppState::default();
+        state.session.work_mode = WorkMode::Setup;
+
+        assert!(
+            registry.invoke("bone.create", &mut state).is_none(),
+            "no name given, so nothing happens"
+        );
+        assert_eq!(state.doc.skeleton.bones.len(), 0);
+    }
+
+    #[test]
+    fn an_operator_that_takes_arguments_describes_them() {
+        // What an MCP client lists tools from, and what a plugin author reads
+        // instead of the source.
+        let schema = CreateBoneOp.schema();
+        assert_eq!(schema["required"][0], "name");
+        assert!(schema["properties"]["parent"].is_object());
+    }
+
+    #[test]
     fn settings_asks_the_app_rather_than_opening_anything() {
         // Operators reach AppState only; chrome above it is a request the app
         // honours. This is what keeps a future plugin out of the frame loop.
         let mut state = AppState::default();
-        let result = OpenSettings.invoke(&mut state);
+        let result = OpenSettings
+            .invoke(&mut state, &crate::args::Args::none())
+            .expect("takes no arguments");
         assert_eq!(result.ui, Some(UiRequest::Settings));
     }
 }

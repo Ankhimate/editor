@@ -32,6 +32,7 @@
 //! before the first plugin exists rather than after.
 
 use crate::app_state::AppState;
+use crate::args::{ArgError, Args};
 use crate::session::WorkMode;
 use std::collections::BTreeMap;
 
@@ -102,10 +103,29 @@ pub trait Operator {
         true
     }
 
-    /// Do the thing. Reads live selection and playhead from `state`, and
-    /// dispatches any document edit through
-    /// [`AppState::dispatch`](crate::app_state::AppState::dispatch).
-    fn invoke(&self, state: &mut AppState) -> OpResult;
+    /// What arguments this takes, as JSON Schema, or `Value::Null` for none.
+    ///
+    /// Not for validation — [`invoke`](Self::invoke) reads what it needs and
+    /// reports what is missing, which produces a better message than a schema
+    /// walk can. This is for *description*: an MCP client lists tools by their
+    /// schema, and a plugin author wants to know what a verb accepts without
+    /// reading its source.
+    fn schema(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
+    /// Do the thing.
+    ///
+    /// `args` is empty for a keybinding or a menu click — those act on the live
+    /// selection, which `state` already carries. A plugin or an MCP client has
+    /// no selection to act on and names its target instead; see
+    /// [`crate::args`] for why those are names rather than ids.
+    ///
+    /// Document edits go through
+    /// [`AppState::dispatch`](crate::app_state::AppState::dispatch), which is
+    /// what keeps undo and the T-207 mode rule honest for a plugin exactly as
+    /// for a menu.
+    fn invoke(&self, state: &mut AppState, args: &Args) -> Result<OpResult, ArgError>;
 }
 
 /// Operators by id, with shadowing.
@@ -149,18 +169,41 @@ impl Registry {
             .map(|stack| &*stack[stack.len() - 2])
     }
 
-    /// Invoke `id` if it exists and is enabled.
+    /// Invoke `id` with no arguments, quietly.
     ///
-    /// Returns `None` when the id is unknown or the operator is disabled — the
-    /// caller cannot distinguish, and does not need to: a keybinding for a
-    /// misspelled id and one for an inapplicable operator should both do
-    /// nothing quietly.
+    /// What a keybinding or a menu click wants. Returns `None` when the id is
+    /// unknown, the operator is disabled, or it needed an argument it did not
+    /// get — the caller cannot distinguish and does not need to: a key bound to
+    /// a misspelled id and one bound to an inapplicable verb should both do
+    /// nothing rather than interrupt.
+    ///
+    /// A caller that *does* need to know why uses [`try_invoke`](Self::try_invoke).
     pub fn invoke(&self, id: &str, state: &mut AppState) -> Option<OpResult> {
-        let op = self.get(id)?;
+        self.try_invoke(id, state, &Args::none()).ok().flatten()
+    }
+
+    /// Invoke `id` with arguments, reporting what went wrong.
+    ///
+    /// What a plugin or an MCP client wants. The two failures stay separate:
+    ///
+    /// * `Ok(None)` — unknown id, or the operator declined as inapplicable.
+    ///   Nothing was attempted and nothing is wrong.
+    /// * `Err(_)` — the operator was asked to run and could not read its
+    ///   arguments. A script naming a bone this rig does not have has a bug in
+    ///   it, and silence is the wrong answer.
+    pub fn try_invoke(
+        &self,
+        id: &str,
+        state: &mut AppState,
+        args: &Args,
+    ) -> Result<Option<OpResult>, ArgError> {
+        let Some(op) = self.get(id) else {
+            return Ok(None);
+        };
         if !op.enabled(state) {
-            return None;
+            return Ok(None);
         }
-        Some(op.invoke(state))
+        op.invoke(state, args).map(Some)
     }
 
     /// Every registered id, sorted. For the keymap editor and diagnostics.
@@ -204,9 +247,9 @@ mod tests {
         fn enabled(&self, _state: &AppState) -> bool {
             self.enabled
         }
-        fn invoke(&self, state: &mut AppState) -> OpResult {
+        fn invoke(&self, state: &mut AppState, _args: &Args) -> Result<OpResult, ArgError> {
             state.session.set_status(self.label);
-            OpResult::done()
+            Ok(OpResult::done())
         }
     }
 
