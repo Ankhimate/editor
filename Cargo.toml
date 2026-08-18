@@ -3,6 +3,7 @@ members = [
     "core",
     "document",
     "formats",
+    "plugins",
     "editor",
     "export",
     "runtime",

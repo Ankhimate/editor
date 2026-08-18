@@ -110,13 +110,49 @@ The Setup/Animate rule (T-207) reaches a script too. It is a property of the
 command, not of the editor, so `Edit::mode` decides and a structural edit in
 Animate is refused with the mode it wanted.
 
+## 5. In JavaScript
+
+`ankhimate-plugins` binds the same API to QuickJS. A plugin is a `.js` file:
+
+```js
+ops.invoke("bone.create", { name: "root" });
+ops.invoke("bone.create", { name: "spine", parent: "root", y: 40 });
+
+for (const bone of rig().skeleton.bones) {
+  console.log(bone.name + " at " + bone.rotation + " degrees");
+}
+```
+
+| Global | Is |
+|---|---|
+| `ops.list()` | Every verb id, so a plugin discovers rather than hardcodes |
+| `ops.schema(id)` | What that verb takes |
+| `ops.invoke(id, args)` | Run it. Throws on a bad argument or a refused mode |
+| `rig()` | The read surface, as the template context |
+| `names()` | Bones, slots, skins and animations by name |
+| `console.log(msg)` | Comes back to the host as a line |
+
+A failed verb **throws** rather than returning nothing, so a plugin can `try`
+around it and a mistake does not continue silently over an edit that never
+happened.
+
+### The sandbox is what is absent
+
+There is no `require`, no `process`, no filesystem, no network and no clock. A
+QuickJS context starts with none of them and this crate binds none — so a plugin
+can reach the rig and nothing else.
+
+### Never in the hot loop
+
+A plugin runs on a gesture or an import, never inside `evaluate()`. That is the
+boundary the whole design protects: script in the pose loop would take
+determinism (PLAN §2.6) with it.
+
 ## Still to come
 
 - **A UI surface** — panels and menu entries a plugin can add
   (`docs/plugin-plan.md` step 7).
-- **A host** — QuickJS, so plugins are written in JavaScript rather than Rust
-  (step 6).
 - **An MCP server** — the same verbs and the same read surface over a transport
   (step 8).
 
-None of those add a fifth vocabulary. They are consumers of this one.
+Neither adds a vocabulary. They are consumers of this one.
