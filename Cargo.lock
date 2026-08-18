@@ -290,6 +290,7 @@ dependencies = [
  "log",
  "rquickjs",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

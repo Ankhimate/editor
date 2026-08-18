@@ -26,6 +26,8 @@
 //! change goes through a command and stays undoable. That is `CLAUDE.md`'s rule
 //! for panels, extended to script.
 
+pub mod importer;
+
 use ankhimate_document::{Args, DocOps, Edit};
 use rquickjs::{Context, Function, Object, Runtime};
 
@@ -60,6 +62,12 @@ impl std::error::Error for PluginError {}
 /// work, and hands it back.
 pub struct Host {
     ops: DocOps,
+    /// Files a script may open: those beside the one being imported, or none.
+    ///
+    /// Absent for an ordinary plugin run. An importer is the only thing that
+    /// needs to read at all, and it needs its own directory rather than a
+    /// filesystem — see [`importer::Sidecars`].
+    sidecars: Option<importer::Sidecars>,
 }
 
 impl Default for Host {
@@ -72,7 +80,34 @@ impl Host {
     pub fn new() -> Self {
         Self {
             ops: DocOps::builtin(),
+            sidecars: None,
         }
+    }
+
+    /// Let this run open the files beside an imported one.
+    pub fn with_sidecars(mut self, sidecars: importer::Sidecars) -> Self {
+        self.sidecars = Some(sidecars);
+        self
+    }
+
+    /// Read the importers a script registers, without running an import.
+    ///
+    /// What a host does at load time: run the file, collect what it declared,
+    /// and put those in the File▸Import menu.
+    pub fn importers(&self, script: &str) -> Result<Vec<importer::JsImporter>, PluginError> {
+        let mut edit = Edit::default();
+        let declared = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        self.run_inner(script, &mut edit, Some(declared.clone()))?;
+        let found = declared.borrow().clone();
+        Ok(found
+            .into_iter()
+            .map(|(id, label, extensions)| importer::JsImporter {
+                id,
+                label,
+                extensions,
+                source: script.to_string(),
+            })
+            .collect())
     }
 
     /// Run `script` against `edit`.
@@ -80,6 +115,15 @@ impl Host {
     /// Anything the script printed comes back as lines, since a plugin author
     /// debugging without `console.log` is a plugin author writing blind.
     pub fn run(&self, script: &str, edit: &mut Edit) -> Result<Vec<String>, PluginError> {
+        self.run_inner(script, edit, None)
+    }
+
+    fn run_inner(
+        &self,
+        script: &str,
+        edit: &mut Edit,
+        declared: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String, Vec<String>)>>>>,
+    ) -> Result<Vec<String>, PluginError> {
         let runtime = Runtime::new().map_err(|e| PluginError::Engine(e.to_string()))?;
         let context = Context::full(&runtime).map_err(|e| PluginError::Engine(e.to_string()))?;
 
@@ -208,6 +252,51 @@ impl Host {
 
             global.set("__ops", ops_obj)?;
 
+            // ── ankhimate.registerImporter / sidecars ────────────────────
+            let ank = Object::new(ctx.clone())?;
+
+            // What a script declares is collected rather than acted on: the
+            // host decides whether this run is a load (collect) or an import
+            // (run the body), so one plugin file serves both.
+            let sink = declared.clone();
+            ank.set(
+                "declareImporter",
+                Function::new(
+                    ctx.clone(),
+                    move |id: String, label: String, extensions: Vec<String>| {
+                        if let Some(sink) = &sink {
+                            sink.borrow_mut().push((id, label, extensions));
+                        }
+                    },
+                )?,
+            )?;
+
+            // Files beside the imported one, and nothing else. Absent for an
+            // ordinary run, so a plugin that is not an importer cannot read at
+            // all.
+            let sidecar_read = self.sidecars.as_ref().map(|s| s.clone_dir());
+            ank.set(
+                "sidecar",
+                Function::new(ctx.clone(), move |name: String| {
+                    sidecar_read
+                        .as_ref()
+                        .and_then(|dir| importer::Sidecars::new(dir.clone()).read(&name))
+                })?,
+            )?;
+
+            let sidecar_list = self.sidecars.as_ref().map(|s| s.clone_dir());
+            ank.set(
+                "sidecars",
+                Function::new(ctx.clone(), move || {
+                    sidecar_list
+                        .as_ref()
+                        .map(|dir| importer::Sidecars::new(dir.clone()).list())
+                        .unwrap_or_default()
+                })?,
+            )?;
+
+            global.set("__ankhimate", ank)?;
+
             // A thin JS shim so a plugin writes objects rather than JSON text.
             // In script rather than Rust because that is where it belongs: it
             // is sugar over the binding, not part of it.
@@ -220,6 +309,26 @@ impl Host {
                 };
                 globalThis.rig = () => JSON.parse(__ops.describeJson());
                 globalThis.names = () => JSON.parse(__ops.namesJson());
+
+                // An importer registers itself; the host decides whether this
+                // run collects declarations or performs a read. Keeping the
+                // body here means one plugin file rather than a registration
+                // and a separate reader to keep in step.
+                let __importers = {};
+                globalThis.ankhimate = {
+                  registerImporter(spec) {
+                    __importers[spec.id] = spec;
+                    __ankhimate.declareImporter(
+                      spec.id, spec.label ?? spec.id, spec.extensions ?? []);
+                  },
+                  sidecar: (name) => __ankhimate.sidecar(name),
+                  sidecars: () => __ankhimate.sidecars(),
+                };
+                globalThis.__ankhimate_run_import = (text, fileName) => {
+                  const ids = Object.keys(__importers);
+                  if (!ids.length) throw new Error("this plugin registered no importer");
+                  __importers[ids[0]].read(text, fileName);
+                };
                 "#,
             )?;
 
