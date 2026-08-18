@@ -27,6 +27,12 @@ as many frames as the sequence is long — see the `Loop`-not-`Once` note in
 `dragonbones.rs`. A rig where those two differ imports wrong, and nothing in the
 model can express the fix.
 
+**Observed, not hypothetical.** `mecha_1004d`'s `skill_05` plays its flash close
+to the original but not identically: the sequence is driven from the host clip's
+playhead, so it is somewhere mid-cycle when the slot track switches it on rather
+than at its first frame. `StartOnShow` is what makes that exact, and it cannot be
+expressed without the child owning a playhead.
+
 ## The shape
 
 A nested armature is not a new field on an attachment. It is **another
