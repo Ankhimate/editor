@@ -678,6 +678,32 @@ fn convert(
                         let host_scale = glam::vec2(f(&host_t, "scX", 1.0), f(&host_t, "scY", 1.0));
                         let host_offset = glam::vec2(f(&host_t, "x", 0.0), -f(&host_t, "y", 0.0));
 
+                        // The nested armature's own bone is where the art is
+                        // actually placed: `weapon_replace` is a single bone at
+                        // x=100.5 holding one image with no transform of its
+                        // own, so folding without it drops the whole arm's-length
+                        // offset and every weapon sits back at the wrist.
+                        //
+                        // Only the first bone is read. These armatures are
+                        // one-bone sprite holders by construction, and a real
+                        // multi-bone sub-rig is not something flattening can
+                        // claim to represent — `folded == 0` reports that case.
+                        let nested_bone = nested
+                            .get("bone")
+                            .and_then(|b| b.as_array())
+                            .and_then(|b| b.first())
+                            .and_then(|b| b.get("transform"))
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        let (bone_rotation, _) = decompose_skew(
+                            f(&nested_bone, "skX", 0.0),
+                            f(&nested_bone, "skY", 0.0),
+                        );
+                        let bone_offset =
+                            glam::vec2(f(&nested_bone, "x", 0.0), -f(&nested_bone, "y", 0.0));
+                        let bone_scale =
+                            glam::vec2(f(&nested_bone, "scX", 1.0), f(&nested_bone, "scY", 1.0));
+
                         let mut folded = 0usize;
                         let mut first_folded: Option<String> = None;
                         for nested_slot in nested
@@ -729,11 +755,22 @@ fn convert(
                                     attachment_name.clone(),
                                     Attachment::Region(RegionAttachment {
                                         texture: asset,
+                                        // Three transforms compose here: the
+                                        // host display's, the nested armature's
+                                        // bone, and the nested display's own.
+                                        // The bone's rotation turns everything
+                                        // below it, so the display offset is
+                                        // rotated before being added rather than
+                                        // summed flat.
                                         local_offset: host_offset
-                                            + glam::vec2(f(&nt, "x", 0.0), -f(&nt, "y", 0.0))
+                                            + (bone_offset
+                                                + glam::vec2(f(&nt, "x", 0.0), -f(&nt, "y", 0.0))
+                                                    .rotate(glam::Vec2::from_angle(bone_rotation))
+                                                    * bone_scale)
                                                 * host_scale,
-                                        local_rotation: rotation,
+                                        local_rotation: bone_rotation + rotation,
                                         local_scale: host_scale
+                                            * bone_scale
                                             * glam::vec2(f(&nt, "scX", 1.0), f(&nt, "scY", 1.0)),
                                         width: nw as f32,
                                         height: nh as f32,
@@ -1417,6 +1454,56 @@ mod tests {
             !loaded.report.lossy.iter().any(|l| l.what == "armature"),
             "a folded armature is not a loss: {:?}",
             loaded.report.lossy
+        );
+    }
+
+    #[test]
+    fn folding_carries_the_nested_armatures_own_bone() {
+        // `weapon_replace` is one bone at x=100.5 holding one image that has no
+        // transform of its own. Folding only the displays drops the whole
+        // arm's-length offset, so both weapons sat back at the wrist — visible
+        // in the editor and invisible to every earlier test, because a nested
+        // bone at the origin composes to the same answer either way.
+        let json = r#"{
+            "name": "t",
+            "armature": [
+                {"name": "main",
+                 "bone": [{"name": "root"}],
+                 "slot": [{"name": "hand", "parent": "root"}],
+                 "skin": [{"slot": [{"name": "hand", "display": [
+                     {"type": "armature", "name": "held"}
+                 ]}]}]},
+                {"name": "held",
+                 "bone": [{"name": "b", "transform": {"x": 100.5, "y": 7}}],
+                 "slot": [{"name": "b", "parent": "b"}],
+                 "skin": [{"slot": [{"name": "b", "display": [{"name": "sword"}]}]}]}
+            ]
+        }"#;
+        let png = image::RgbaImage::new(4, 4);
+        let loaded = read(json, Images::Loose(&|_| Some(png.clone())), "x").expect("reads");
+
+        let slot = loaded
+            .skeleton
+            .slots
+            .iter()
+            .find(|(_, s_)| s_.name == "hand")
+            .map(|(id, _)| id)
+            .expect("hand slot");
+        // Named for the host display and its index, not the image — see the
+        // naming note in the fold, which keeps three placements of one weapon
+        // from collapsing onto one entry.
+        let Some(Attachment::Region(region)) =
+            loaded.skeleton.skins[loaded.skeleton.default_skin].get(slot, "held#0/sword")
+        else {
+            let have: Vec<&str> = loaded.skeleton.skins[loaded.skeleton.default_skin]
+                .names_for_slot(slot)
+                .collect();
+            panic!("expected the folded sword, have {have:?}");
+        };
+        assert_eq!(
+            region.local_offset,
+            glam::vec2(100.5, -7.0),
+            "the nested bone places the art, and its Y flips like any other"
         );
     }
 
