@@ -95,7 +95,7 @@ fn main() {
         .values()
         .map(|a| (a.timelines.len(), a.name.as_str(), a.duration))
         .collect();
-    by_length.sort_by(|a, b| b.0.cmp(&a.0));
+    by_length.sort_by_key(|(timelines, ..)| std::cmp::Reverse(*timelines));
     for (tl, name, duration) in by_length.iter().take(5) {
         println!("    {name:24} {duration:6.2}s  {tl} timelines");
     }

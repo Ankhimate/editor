@@ -603,7 +603,7 @@ fn convert(
                         if display.get("weights").is_some() {
                             report.lossy(
                                 "attachment",
-                                &format!("{slot_name}/{display_name}"),
+                                format!("{slot_name}/{display_name}"),
                                 "a weighted mesh imported without its weights, so it \
                                  follows its slot's bone rigidly",
                             );
@@ -638,7 +638,7 @@ fn convert(
                         if setup_vertices.is_empty() || triangles.is_empty() {
                             report.lossy(
                                 "attachment",
-                                &format!("{slot_name}/{display_name}"),
+                                format!("{slot_name}/{display_name}"),
                                 "a mesh with no vertices or no triangles was skipped",
                             );
                             continue;
@@ -854,7 +854,7 @@ fn convert(
                         if folded == 0 {
                             report.lossy(
                                 "attachment",
-                                &format!("{slot_name}/{display_name}"),
+                                format!("{slot_name}/{display_name}"),
                                 "a nested armature held nothing this reader could fold in",
                             );
                         } else {
@@ -879,7 +879,7 @@ fn convert(
                         // got shipped in the first place.
                         report.lossy(
                             "attachment",
-                            &format!("{slot_name}/{display_name}"),
+                            format!("{slot_name}/{display_name}"),
                             match other {
                                 "boundingBox" => "a bounding box display is not read yet",
                                 _ => "an unrecognised display type was skipped",
