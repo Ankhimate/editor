@@ -6,8 +6,8 @@
 //! through the key commands like any other animated value.
 
 use super::EditCommand;
+use crate::WorkMode;
 use crate::doc::Document;
-use crate::session::WorkMode;
 use ankhimate_core::constraints::{
     Constraint, IkConstraint, PhysicsConstraint, TransformConstraint,
 };

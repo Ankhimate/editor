@@ -4,8 +4,8 @@
 //! command here is Setup-mode only (T-207).
 
 use super::EditCommand;
+use crate::WorkMode;
 use crate::doc::Document;
-use crate::session::WorkMode;
 use ankhimate_core::assets::ImageAsset;
 use ankhimate_core::attachment::{Attachment, Rect, RegionAttachment};
 use ankhimate_core::ids::{AssetId, BoneId, SlotId};

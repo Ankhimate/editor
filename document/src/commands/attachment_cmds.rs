@@ -1,4 +1,4 @@
-﻿//! Attachment mutations as undoable commands (T-307).
+//! Attachment mutations as undoable commands (T-307).
 //!
 //! An attachment's transform is **rig data**, not animation: it is where the art
 //! sits inside its slot, which is a Setup-mode decision (T-207). Animating the
@@ -10,8 +10,8 @@
 //! guessed inside the command.
 
 use super::EditCommand;
+use crate::WorkMode;
 use crate::doc::Document;
-use crate::session::WorkMode;
 use ankhimate_core::animation::Timeline;
 use ankhimate_core::attachment::{Attachment, RegionAttachment};
 use ankhimate_core::ids::{SkinId, SlotId};

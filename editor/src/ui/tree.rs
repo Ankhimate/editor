@@ -691,7 +691,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
             // Reparent the *right-clicked* bone under the active selection,
             // keeping it fixed on screen.
             state.dispatch(Box::new(
-                crate::commands::bone_cmds::SetBoneParent::keeping_world(
+                ankhimate_document::commands::bone_cmds::SetBoneParent::keeping_world(
                     &state.doc.skeleton,
                     bone_id,
                     Some(target),
@@ -701,7 +701,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
         }
         if ui.button("Unparent (to root)").clicked() {
             state.dispatch(Box::new(
-                crate::commands::bone_cmds::SetBoneParent::keeping_world(
+                ankhimate_document::commands::bone_cmds::SetBoneParent::keeping_world(
                     &state.doc.skeleton,
                     bone_id,
                     None,
@@ -739,9 +739,9 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
             ui.close();
         }
         if ui.button("Delete").clicked() {
-            state.dispatch(Box::new(crate::commands::bone_cmds::DeleteBone::new(
-                bone_id,
-            )));
+            state.dispatch(Box::new(
+                ankhimate_document::commands::bone_cmds::DeleteBone::new(bone_id),
+            ));
             ui.close();
         }
     });
@@ -850,9 +850,9 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
         let commit = resp.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter));
         if commit {
             if !buf.trim().is_empty() && buf != bone_name {
-                state.dispatch(Box::new(crate::commands::bone_cmds::RenameBone::new(
-                    bone_id, buf,
-                )));
+                state.dispatch(Box::new(
+                    ankhimate_document::commands::bone_cmds::RenameBone::new(bone_id, buf),
+                ));
             }
             ui.data_mut(|d| {
                 d.remove::<bool>(id.with("renaming"));

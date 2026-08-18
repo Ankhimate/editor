@@ -24,10 +24,10 @@
 //! re-checked here.
 
 use super::ToolContext;
-use crate::commands::attachment_cmds::owning_skin;
-use crate::commands::mesh_cmds::{EditMesh, MeshEdit};
 use ankhimate_core::attachment::{Attachment, MeshAttachment};
 use ankhimate_core::ids::{SkinId, SlotId};
+use ankhimate_document::commands::attachment_cmds::owning_skin;
+use ankhimate_document::commands::mesh_cmds::{EditMesh, MeshEdit};
 use eframe::egui;
 
 /// Screen-space grab radius for a vertex.
@@ -311,7 +311,9 @@ pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
         return;
     };
     let local = inverse.transform_point(world);
-    if let Some((i, j, closest_local, _)) = crate::meshgen::nearest_edge(&target.mesh, local) {
+    if let Some((i, j, closest_local, _)) =
+        ankhimate_document::meshgen::nearest_edge(&target.mesh, local)
+    {
         let a = positions.get(i).copied().unwrap_or_default();
         let b = positions.get(j).copied().unwrap_or_default();
         let screen_distance = distance_to_segment(mouse, a, b);
@@ -341,7 +343,7 @@ pub fn update(ctx: &mut ToolContext, mouse_screen: Option<glam::Vec2>) {
 /// interpolates whole shapes, so a key that listed one vertex would snap the
 /// rest back to setup the moment it took effect.
 fn key_deform(ctx: &mut ToolContext, target: &MeshTarget, indices: &[usize], delta: glam::Vec2) {
-    use crate::commands::key_cmds::AddDeformKey;
+    use ankhimate_document::commands::key_cmds::AddDeformKey;
 
     let Some(anim) = ctx.state.session.active_animation else {
         return;

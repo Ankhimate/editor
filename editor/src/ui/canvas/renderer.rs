@@ -1203,7 +1203,7 @@ pub fn render_bones(
             // quietly exceeds it exports fine and deforms differently in the
             // game than in the editor. A ring is the only warning there is.
             if mesh.weights.get(index).is_some_and(|w| {
-                crate::commands::weight_cmds::over_influenced(w, settings.max_bones)
+                ankhimate_document::commands::weight_cmds::over_influenced(w, settings.max_bones)
             }) {
                 painter.circle_stroke(*p, 7.0, egui::Stroke::new(1.5, ui.visuals().warn_fg_color));
             }

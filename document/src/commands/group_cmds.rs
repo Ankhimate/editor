@@ -12,8 +12,8 @@
 //! pointing at the wrong folder the moment one is removed above it.
 
 use super::EditCommand;
+use crate::WorkMode;
 use crate::doc::Document;
-use crate::session::WorkMode;
 use ankhimate_core::ids::GroupId;
 use ankhimate_core::skeleton::{Group, GroupMember};
 

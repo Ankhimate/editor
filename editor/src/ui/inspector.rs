@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
-use crate::commands::key_cmds::{BoneProperty, TimelineAddr};
 use crate::session::TransformTool;
+use ankhimate_document::commands::key_cmds::{BoneProperty, TimelineAddr};
 use eframe::egui;
 
 // Axis accent colors — same palette as Blender/Unity
@@ -98,9 +98,11 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                 )
                 .changed();
             if changed {
-                state.dispatch(Box::new(crate::commands::bone_cmds::SetBoneLength::new(
-                    bone_id, length, carry,
-                )));
+                state.dispatch(Box::new(
+                    ankhimate_document::commands::bone_cmds::SetBoneLength::new(
+                        bone_id, length, carry,
+                    ),
+                ));
             }
         });
     }
@@ -134,15 +136,17 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                 .inner
                 .changed();
             if changed {
-                state.dispatch(Box::new(crate::commands::bone_cmds::SetBoneColor::new(
-                    bone_id,
-                    [
-                        rgba.r() as f32 / 255.0,
-                        rgba.g() as f32 / 255.0,
-                        rgba.b() as f32 / 255.0,
-                        current[3],
-                    ],
-                )));
+                state.dispatch(Box::new(
+                    ankhimate_document::commands::bone_cmds::SetBoneColor::new(
+                        bone_id,
+                        [
+                            rgba.r() as f32 / 255.0,
+                            rgba.g() as f32 / 255.0,
+                            rgba.b() as f32 / 255.0,
+                            current[3],
+                        ],
+                    ),
+                ));
             }
             if !own {
                 ui.label(
@@ -155,10 +159,12 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                 .on_hover_text("Fall back to the nearest coloured ancestor")
                 .clicked()
             {
-                state.dispatch(Box::new(crate::commands::bone_cmds::SetBoneColor::new(
-                    bone_id,
-                    ankhimate_core::skeleton::Bone::default_color(),
-                )));
+                state.dispatch(Box::new(
+                    ankhimate_document::commands::bone_cmds::SetBoneColor::new(
+                        bone_id,
+                        ankhimate_core::skeleton::Bone::default_color(),
+                    ),
+                ));
             }
         });
     }
@@ -515,10 +521,10 @@ fn constraint_inspector(
     state: &mut AppState,
     bone_id: ankhimate_core::ids::BoneId,
 ) {
-    use crate::commands::constraint_cmds::{
+    use ankhimate_core::constraints::Constraint;
+    use ankhimate_document::commands::constraint_cmds::{
         AddTransformConstraint, RemoveConstraint, SetTransformProps, TransformProps,
     };
-    use ankhimate_core::constraints::Constraint;
 
     let setup = state.session.can_edit_structure();
 
@@ -727,8 +733,10 @@ fn constraint_inspector(
 /// Sits under the transform-constraint list and reads the same way: the
 /// constraints that explain why this bone moves on its own.
 fn ik_inspector(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_core::ids::BoneId) {
-    use crate::commands::constraint_cmds::{CreateIkTarget, IkProps, RemoveConstraint, SetIkProps};
     use ankhimate_core::constraints::Constraint;
+    use ankhimate_document::commands::constraint_cmds::{
+        CreateIkTarget, IkProps, RemoveConstraint, SetIkProps,
+    };
 
     let setup = state.session.can_edit_structure();
 
@@ -960,10 +968,10 @@ fn physics_inspector(
     state: &mut AppState,
     bone_id: ankhimate_core::ids::BoneId,
 ) {
-    use crate::commands::constraint_cmds::{
+    use ankhimate_core::constraints::Constraint;
+    use ankhimate_document::commands::constraint_cmds::{
         AddPhysics, PhysicsProps, RemoveConstraint, SetPhysicsProps,
     };
-    use ankhimate_core::constraints::Constraint;
 
     let setup = state.session.can_edit_structure();
     let existing: Vec<(ankhimate_core::ids::ConstraintId, String, PhysicsProps)> = state
@@ -1154,11 +1162,11 @@ fn path_constraint_inspector(
     state: &mut AppState,
     bone_id: ankhimate_core::ids::BoneId,
 ) {
-    use crate::commands::constraint_cmds::{
-        AddPathConstraint, PathProps, RemoveConstraint, SetPathProps,
-    };
     use ankhimate_core::attachment::Attachment;
     use ankhimate_core::constraints::Constraint;
+    use ankhimate_document::commands::constraint_cmds::{
+        AddPathConstraint, PathProps, RemoveConstraint, SetPathProps,
+    };
 
     let setup = state.session.can_edit_structure();
     let existing: Vec<(ankhimate_core::ids::ConstraintId, String, usize, PathProps)> = state
@@ -1328,7 +1336,7 @@ fn path_constraint_inspector(
 /// holding what was typed. Absolute values would have to answer "the box is at
 /// 40 — where is each bone?", and there is no one answer.
 fn selection_inspector(ui: &mut egui::Ui, state: &mut AppState) {
-    use crate::commands::group_cmds::{GroupDelta, TransformGroup};
+    use ankhimate_document::commands::group_cmds::{GroupDelta, TransformGroup};
 
     let bones = state.session.selected_bones.clone();
     let Some((min, max)) =
@@ -1560,21 +1568,25 @@ fn polygon_coordinates(
     axis_row(ui, "Y", common(|v| v.y), false);
 
     if let Some(moves) = edit {
-        let edit = crate::commands::clip_cmds::ClipEdit::MoveVertices(moves);
+        let edit = ankhimate_document::commands::clip_cmds::ClipEdit::MoveVertices(moves);
         if is_bounding_box {
-            state.dispatch(Box::new(crate::commands::clip_cmds::EditBoundingBox::new(
-                skin,
-                slot_id,
-                name.to_string(),
-                edit,
-            )));
+            state.dispatch(Box::new(
+                ankhimate_document::commands::clip_cmds::EditBoundingBox::new(
+                    skin,
+                    slot_id,
+                    name.to_string(),
+                    edit,
+                ),
+            ));
         } else {
-            state.dispatch(Box::new(crate::commands::clip_cmds::EditClip::new(
-                skin,
-                slot_id,
-                name.to_string(),
-                edit,
-            )));
+            state.dispatch(Box::new(
+                ankhimate_document::commands::clip_cmds::EditClip::new(
+                    skin,
+                    slot_id,
+                    name.to_string(),
+                    edit,
+                ),
+            ));
         }
     }
 }
@@ -1746,22 +1758,26 @@ fn vertex_coordinates(
         uv_row(ui, "U", common_uv(|v| v.x), true);
         uv_row(ui, "V", common_uv(|v| v.y), false);
         if let Some(moves) = uv_edit {
-            state.dispatch(Box::new(crate::commands::mesh_cmds::EditMesh::new(
-                skin,
-                slot_id,
-                name.to_string(),
-                crate::commands::mesh_cmds::MeshEdit::MoveUvs(moves),
-            )));
+            state.dispatch(Box::new(
+                ankhimate_document::commands::mesh_cmds::EditMesh::new(
+                    skin,
+                    slot_id,
+                    name.to_string(),
+                    ankhimate_document::commands::mesh_cmds::MeshEdit::MoveUvs(moves),
+                ),
+            ));
         }
     }
 
     if let Some(moves) = edit {
-        state.dispatch(Box::new(crate::commands::mesh_cmds::EditMesh::new(
-            skin,
-            slot_id,
-            name.to_string(),
-            crate::commands::mesh_cmds::MeshEdit::MoveVertices(moves),
-        )));
+        state.dispatch(Box::new(
+            ankhimate_document::commands::mesh_cmds::EditMesh::new(
+                skin,
+                slot_id,
+                name.to_string(),
+                ankhimate_document::commands::mesh_cmds::MeshEdit::MoveVertices(moves),
+            ),
+        ));
     }
 }
 
@@ -1885,19 +1901,21 @@ fn influence_list(
         {
             let mut next = all_weights.clone();
             if let Some(v) = next.get_mut(index) {
-                crate::commands::weight_cmds::normalize(v);
+                ankhimate_document::commands::weight_cmds::normalize(v);
             }
             edit = Some(next);
         }
     });
 
     if let Some(weights) = edit {
-        state.dispatch(Box::new(crate::commands::weight_cmds::PaintWeights::new(
-            skin,
-            slot_id,
-            name.to_string(),
-            weights,
-        )));
+        state.dispatch(Box::new(
+            ankhimate_document::commands::weight_cmds::PaintWeights::new(
+                skin,
+                slot_id,
+                name.to_string(),
+                weights,
+            ),
+        ));
     }
 }
 
@@ -2111,8 +2129,8 @@ fn apply_dot_action(
     property: BoneProperty,
     action: DotAction,
 ) {
-    use crate::commands::key_cmds::{AddKey, DeleteKeys, KeyRef};
     use ankhimate_core::animation::Interp;
+    use ankhimate_document::commands::key_cmds::{AddKey, DeleteKeys, KeyRef};
 
     let Some(anim) = ui_state.session.active_animation else {
         return;
@@ -2189,11 +2207,11 @@ fn attachment_inspector(
     state: &mut AppState,
     slot_id: ankhimate_core::ids::SlotId,
 ) {
-    use crate::commands::attachment_cmds::{
+    use ankhimate_core::attachment::Attachment;
+    use ankhimate_document::commands::attachment_cmds::{
         DuplicateAttachment, RegionProps, RemoveAttachment, RenameAttachment, SetRegionProps,
         owning_skin,
     };
-    use ankhimate_core::attachment::Attachment;
 
     let Some(name) = state
         .doc
@@ -2227,12 +2245,14 @@ fn attachment_inspector(
                 .get(slot_id)
                 .map(|s| s.name.clone())
                 .unwrap_or_else(|| "slot".to_string());
-            if state.dispatch(Box::new(crate::commands::clip_cmds::AddClipping::new(
-                skin,
-                slot_id,
-                format!("{slot_name}_clip"),
-                200.0,
-            ))) {
+            if state.dispatch(Box::new(
+                ankhimate_document::commands::clip_cmds::AddClipping::new(
+                    skin,
+                    slot_id,
+                    format!("{slot_name}_clip"),
+                    200.0,
+                ),
+            )) {
                 state.session.mesh_edit = true;
                 state.session.selected_vertices.clear();
             }
@@ -2255,7 +2275,7 @@ fn attachment_inspector(
                 .get(slot_id)
                 .map(|s| s.name.clone())
                 .unwrap_or_else(|| "slot".to_string());
-            if state.dispatch(Box::new(crate::commands::clip_cmds::AddPath::new(
+            if state.dispatch(Box::new(ankhimate_document::commands::clip_cmds::AddPath::new(
                 skin,
                 slot_id,
                 format!("{slot_name}_path"),
@@ -2284,12 +2304,14 @@ fn attachment_inspector(
                 .get(slot_id)
                 .map(|s| s.name.clone())
                 .unwrap_or_else(|| "slot".to_string());
-            if state.dispatch(Box::new(crate::commands::clip_cmds::AddBoundingBox::new(
-                skin,
-                slot_id,
-                format!("{slot_name}_box"),
-                120.0,
-            ))) {
+            if state.dispatch(Box::new(
+                ankhimate_document::commands::clip_cmds::AddBoundingBox::new(
+                    skin,
+                    slot_id,
+                    format!("{slot_name}_box"),
+                    120.0,
+                ),
+            )) {
                 state.session.mesh_edit = true;
                 state.session.selected_vertices.clear();
             }
@@ -2313,11 +2335,13 @@ fn attachment_inspector(
                 .get(slot_id)
                 .map(|s| s.name.clone())
                 .unwrap_or_else(|| "slot".to_string());
-            state.dispatch(Box::new(crate::commands::clip_cmds::AddPoint::new(
-                skin,
-                slot_id,
-                format!("{slot_name}_point"),
-            )));
+            state.dispatch(Box::new(
+                ankhimate_document::commands::clip_cmds::AddPoint::new(
+                    skin,
+                    slot_id,
+                    format!("{slot_name}_point"),
+                ),
+            ));
         }
         return;
     };
@@ -2370,12 +2394,14 @@ fn attachment_inspector(
                 .on_hover_text("Rebuild triangles from the current vertices")
                 .clicked()
             {
-                state.dispatch(Box::new(crate::commands::mesh_cmds::EditMesh::new(
-                    skin,
-                    slot_id,
-                    name.clone(),
-                    crate::commands::mesh_cmds::MeshEdit::Retriangulate,
-                )));
+                state.dispatch(Box::new(
+                    ankhimate_document::commands::mesh_cmds::EditMesh::new(
+                        skin,
+                        slot_id,
+                        name.clone(),
+                        ankhimate_document::commands::mesh_cmds::MeshEdit::Retriangulate,
+                    ),
+                ));
             }
             if ui
                 .add_enabled(setup, egui::Button::new("Trace from image…").small())
@@ -2429,11 +2455,11 @@ fn attachment_inspector(
                     )
                 };
                 let edit = if pinned {
-                    crate::commands::mesh_cmds::MeshEdit::RemoveEdge(a, b)
+                    ankhimate_document::commands::mesh_cmds::MeshEdit::RemoveEdge(a, b)
                 } else {
-                    crate::commands::mesh_cmds::MeshEdit::AddEdge(a, b)
+                    ankhimate_document::commands::mesh_cmds::MeshEdit::AddEdge(a, b)
                 };
-                state.dispatch(Box::new(crate::commands::mesh_cmds::EditMesh::new(
+                state.dispatch(Box::new(ankhimate_document::commands::mesh_cmds::EditMesh::new(
                     skin, slot_id, name.clone(), edit,
                 )));
             }
@@ -2519,15 +2545,17 @@ fn attachment_inspector(
                 .changed();
         });
         if changed {
-            state.dispatch(Box::new(crate::commands::clip_cmds::SetPoint::new(
-                skin,
-                slot_id,
-                name.clone(),
-                ankhimate_core::attachment::PointAttachment {
-                    position,
-                    rotation: degrees.to_radians(),
-                },
-            )));
+            state.dispatch(Box::new(
+                ankhimate_document::commands::clip_cmds::SetPoint::new(
+                    skin,
+                    slot_id,
+                    name.clone(),
+                    ankhimate_core::attachment::PointAttachment {
+                        position,
+                        rotation: degrees.to_radians(),
+                    },
+                ),
+            ));
         }
         ui.add_space(4.0);
         ui.label(
@@ -2598,12 +2626,14 @@ fn attachment_inspector(
                 }
             });
         if let Some(end) = chosen {
-            state.dispatch(Box::new(crate::commands::clip_cmds::EditClip::new(
-                skin,
-                slot_id,
-                name.clone(),
-                crate::commands::clip_cmds::ClipEdit::SetEndSlot(end),
-            )));
+            state.dispatch(Box::new(
+                ankhimate_document::commands::clip_cmds::EditClip::new(
+                    skin,
+                    slot_id,
+                    name.clone(),
+                    ankhimate_document::commands::clip_cmds::ClipEdit::SetEndSlot(end),
+                ),
+            ));
         }
         polygon_coordinates(ui, state, skin, slot_id, &name, &points, false);
         return;
@@ -2802,11 +2832,13 @@ fn attachment_inspector(
         )));
     }
     if to_mesh
-        && state.dispatch(Box::new(crate::commands::mesh_cmds::ConvertToMesh::new(
-            skin,
-            slot_id,
-            name.clone(),
-        )))
+        && state.dispatch(Box::new(
+            ankhimate_document::commands::mesh_cmds::ConvertToMesh::new(
+                skin,
+                slot_id,
+                name.clone(),
+            ),
+        ))
     {
         // Straight into vertex editing: converting is only ever a prelude to
         // moving a vertex.
@@ -2872,26 +2904,30 @@ fn slot_inspector(ui: &mut egui::Ui, state: &mut AppState, slot_id: ankhimate_co
             if let Some(anim) = state.session.active_animation {
                 // Keys the colour the viewport is showing, so the dot means the
                 // same thing here as it does on a transform row.
-                state.dispatch(Box::new(crate::commands::key_cmds::AddKey::new(
-                    anim,
-                    color_addr.clone(),
-                    state.session.playhead,
-                    crate::commands::key_cmds::KeyValue::Color(current),
-                    ankhimate_core::animation::Interp::Linear,
-                )));
+                state.dispatch(Box::new(
+                    ankhimate_document::commands::key_cmds::AddKey::new(
+                        anim,
+                        color_addr.clone(),
+                        state.session.playhead,
+                        ankhimate_document::commands::key_cmds::KeyValue::Color(current),
+                        ankhimate_core::animation::Interp::Linear,
+                    ),
+                ));
             }
         }
         DotAction::Unkey => {
             if let (Some(anim), crate::edit_router::KeyState::Keyed(index)) =
                 (state.session.active_animation, color_keyed)
             {
-                state.dispatch(Box::new(crate::commands::key_cmds::DeleteKeys::new(
-                    anim,
-                    vec![crate::commands::key_cmds::KeyRef {
-                        addr: color_addr,
-                        index,
-                    }],
-                )));
+                state.dispatch(Box::new(
+                    ankhimate_document::commands::key_cmds::DeleteKeys::new(
+                        anim,
+                        vec![ankhimate_document::commands::key_cmds::KeyRef {
+                            addr: color_addr,
+                            index,
+                        }],
+                    ),
+                ));
             }
         }
         DotAction::None => {}
@@ -2900,8 +2936,8 @@ fn slot_inspector(ui: &mut egui::Ui, state: &mut AppState, slot_id: ankhimate_co
     // ── Presentation (T-505) ──────────────────────────────────────────────
     // How the slot composites, and whether it draws at all.
     {
-        use crate::commands::slot_cmds::{SetSlotPresentation, SlotPresentation};
         use ankhimate_core::slot::BlendMode;
+        use ankhimate_document::commands::slot_cmds::{SetSlotPresentation, SlotPresentation};
 
         let setup = state.session.can_edit_structure();
         let Some(slot) = state.doc.skeleton.slots.get(slot_id) else {
@@ -3033,21 +3069,25 @@ fn slot_inspector(ui: &mut egui::Ui, state: &mut AppState, slot_id: ankhimate_co
             }),
             state.session.active_animation,
         ) {
-            state.dispatch(Box::new(crate::commands::key_cmds::AddKey::new(
-                anim,
-                addr.clone(),
-                state.session.playhead,
-                crate::commands::key_cmds::KeyValue::Visible(shown),
-                ankhimate_core::animation::Interp::Stepped,
-            )));
+            state.dispatch(Box::new(
+                ankhimate_document::commands::key_cmds::AddKey::new(
+                    anim,
+                    addr.clone(),
+                    state.session.playhead,
+                    ankhimate_document::commands::key_cmds::KeyValue::Visible(shown),
+                    ankhimate_core::animation::Interp::Stepped,
+                ),
+            ));
         }
         if let (DotAction::Unkey, Some(anim), crate::edit_router::KeyState::Keyed(index)) =
             (dot, state.session.active_animation, keyed)
         {
-            state.dispatch(Box::new(crate::commands::key_cmds::DeleteKeys::new(
-                anim,
-                vec![crate::commands::key_cmds::KeyRef { addr, index }],
-            )));
+            state.dispatch(Box::new(
+                ankhimate_document::commands::key_cmds::DeleteKeys::new(
+                    anim,
+                    vec![ankhimate_document::commands::key_cmds::KeyRef { addr, index }],
+                ),
+            ));
         }
     }
 

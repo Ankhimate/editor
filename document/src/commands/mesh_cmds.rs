@@ -9,8 +9,8 @@
 //! rewrites it implies — is where the bugs would live.
 
 use super::EditCommand;
+use crate::WorkMode;
 use crate::doc::Document;
-use crate::session::WorkMode;
 use ankhimate_core::attachment::{Attachment, MeshAttachment};
 use ankhimate_core::ids::{SkinId, SlotId};
 

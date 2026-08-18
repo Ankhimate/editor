@@ -7,8 +7,8 @@
 //! cannot drift out of sync with normalization the way a delta would.
 
 use super::EditCommand;
+use crate::WorkMode;
 use crate::doc::Document;
-use crate::session::WorkMode;
 use ankhimate_core::attachment::{Attachment, MeshAttachment, VertexWeight};
 use ankhimate_core::ids::{BoneId, SkinId, SlotId};
 

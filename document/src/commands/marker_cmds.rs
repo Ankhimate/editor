@@ -17,8 +17,8 @@
 //! inverses that survive a re-sort — is where the bugs would be.
 
 use super::EditCommand;
+use crate::WorkMode;
 use crate::doc::Document;
-use crate::session::WorkMode;
 use ankhimate_core::animation::Marker;
 use ankhimate_core::ids::AnimationId;
 

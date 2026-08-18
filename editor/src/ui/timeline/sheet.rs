@@ -9,9 +9,9 @@ use super::model::{TimelineModel, VisibleRow};
 use super::tree::{band_color, is_folded};
 use super::{Layout, ROW_H, ViewState};
 use crate::app_state::AppState;
-use crate::commands::key_cmds::{DeleteKeys, KeyRef, MoveKeys, SetInterp};
 use ankhimate_core::animation::Interp;
 use ankhimate_core::ids::AnimationId;
+use ankhimate_document::commands::key_cmds::{DeleteKeys, KeyRef, MoveKeys, SetInterp};
 use eframe::egui;
 
 const DIAMOND_R: f32 = 5.0;
@@ -445,7 +445,7 @@ fn key_context_menu(
         ui.close();
     }
     ui.menu_button("Interpolation", |ui| {
-        for (label, interp) in crate::commands::key_cmds::presets::all() {
+        for (label, interp) in ankhimate_document::commands::key_cmds::presets::all() {
             if ui.button(label).clicked() {
                 state.dispatch(Box::new(SetInterp::new(
                     anim,

@@ -8,7 +8,7 @@
 //! moves the whole `Document` across.
 
 use crate::app_state::AppState;
-use crate::doc::{Document, DocumentMeta};
+use ankhimate_document::doc::{Document, DocumentMeta};
 use std::path::{Path, PathBuf};
 
 const EXT: &str = "ankh";
@@ -278,9 +278,9 @@ pub fn write_to(state: &AppState, path: &Path) -> FileOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::bone_cmds::{CreateBone, SetBoneTransform};
     use ankhimate_core::math::Transform;
     use ankhimate_core::skeleton::Bone;
+    use ankhimate_document::commands::bone_cmds::{CreateBone, SetBoneTransform};
 
     fn bone(name: &str) -> Bone {
         Bone {
@@ -341,8 +341,8 @@ mod tests {
     /// not a set of paths that go stale.
     #[test]
     fn imported_images_round_trip_with_their_pixels() {
-        use crate::commands::asset_cmds::ImportImage;
         use ankhimate_core::assets::ImageAsset;
+        use ankhimate_document::commands::asset_cmds::ImportImage;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("art.ankh");

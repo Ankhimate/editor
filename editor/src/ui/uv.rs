@@ -13,10 +13,10 @@
 //! from its own tab like any other.
 
 use crate::app_state::AppState;
-use crate::commands::mesh_cmds::{EditMesh, MeshEdit};
 use crate::theme::Theme;
 use ankhimate_core::attachment::{Attachment, MeshAttachment};
 use ankhimate_core::ids::{SkinId, SlotId};
+use ankhimate_document::commands::mesh_cmds::{EditMesh, MeshEdit};
 use eframe::egui;
 
 /// Which mesh the pane is editing. Session state — closing it leaves nothing.

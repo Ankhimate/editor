@@ -11,7 +11,7 @@
 
 use super::Layout;
 use crate::app_state::AppState;
-use crate::commands::event_cmds::{AddEvent, EditEvent, EventEdit};
+use ankhimate_document::commands::event_cmds::{AddEvent, EditEvent, EventEdit};
 use eframe::egui;
 
 /// Height of the lane, in points.

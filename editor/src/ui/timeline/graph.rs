@@ -20,9 +20,11 @@
 use super::model::{TimelineModel, VisibleRow};
 use super::{Layout, ViewState};
 use crate::app_state::AppState;
-use crate::commands::key_cmds::{AddKey, BoneProperty, KeyRef, KeyValue, MoveKeys, TimelineAddr};
 use ankhimate_core::animation::{Animation, Axis, Interp, Timeline};
 use ankhimate_core::ids::AnimationId;
+use ankhimate_document::commands::key_cmds::{
+    AddKey, BoneProperty, KeyRef, KeyValue, MoveKeys, TimelineAddr,
+};
 use eframe::egui;
 
 const KEY_R: f32 = 4.0;
@@ -311,14 +313,16 @@ pub fn ui(
         apply_edit(state, anim, &animation, edit);
     }
     if let Some(edit) = interp_edit {
-        state.dispatch(Box::new(crate::commands::key_cmds::SetInterp::new(
-            anim,
-            vec![KeyRef {
-                addr: edit.addr,
-                index: edit.index,
-            }],
-            edit.interp,
-        )));
+        state.dispatch(Box::new(
+            ankhimate_document::commands::key_cmds::SetInterp::new(
+                anim,
+                vec![KeyRef {
+                    addr: edit.addr,
+                    index: edit.index,
+                }],
+                edit.interp,
+            ),
+        ));
     }
 }
 

@@ -37,9 +37,7 @@ pub mod group_cmds;
 pub mod key_cmds;
 pub mod marker_cmds;
 pub mod mesh_cmds;
-pub mod operators;
 pub mod psd_cmds;
-pub mod registry;
 pub mod skin_cmds;
 pub mod slot_cmds;
 pub mod weight_cmds;
@@ -98,7 +96,7 @@ pub trait EditCommand {
     /// [`History::push_in_mode`] refuses them elsewhere. Making the rule a
     /// property of the command rather than a UI convention is what makes it
     /// testable: a panel cannot forget to check.
-    fn requires_mode(&self) -> Option<crate::session::WorkMode> {
+    fn requires_mode(&self) -> Option<crate::WorkMode> {
         None
     }
 
@@ -170,7 +168,7 @@ impl History {
         &mut self,
         cmd: Box<dyn EditCommand>,
         doc: &mut Document,
-        mode: crate::session::WorkMode,
+        mode: crate::WorkMode,
     ) -> bool {
         if let Some(required) = cmd.requires_mode()
             && required != mode

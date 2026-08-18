@@ -8,8 +8,8 @@
 //! snapshot is a `clone`; hand-written inverses would buy nothing but bugs.
 
 use super::EditCommand;
+use crate::WorkMode;
 use crate::doc::Document;
-use crate::session::WorkMode;
 use ankhimate_core::attachment::{
     Attachment, BoundingBoxAttachment, ClippingAttachment, PointAttachment,
 };

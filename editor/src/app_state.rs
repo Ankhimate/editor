@@ -13,12 +13,12 @@
 //! which run the edit through [`crate::edit_router`] so Setup and Animate mode
 //! stay honest (T-207).
 
-use crate::commands::{EditCommand, History};
-use crate::doc::Document;
 use crate::edit_router::{self, EditIntent, Routed};
 use crate::session::{Session, Tool, WorkMode};
 use ankhimate_core::ids::{BoneId, SlotId};
 use ankhimate_core::math::Transform;
+use ankhimate_document::commands::{EditCommand, History};
+use ankhimate_document::doc::Document;
 
 /// Every key time on a timeline, for prev/next-key navigation.
 fn key_times(timeline: &ankhimate_core::animation::Timeline) -> Vec<f32> {
@@ -215,7 +215,10 @@ impl AppState {
     /// Create a clip named `animation_N`, select it, and rewind the playhead.
     pub fn create_animation(&mut self) {
         let n = self.doc.animations.len() + 1;
-        let cmd = crate::commands::key_cmds::CreateAnimation::new(format!("animation_{n}"), 1.0);
+        let cmd = ankhimate_document::commands::key_cmds::CreateAnimation::new(
+            format!("animation_{n}"),
+            1.0,
+        );
         self.dispatch(Box::new(cmd));
         if let Some((id, _)) = self.doc.animations.iter().last() {
             self.session.active_animation = Some(id);
@@ -323,7 +326,7 @@ impl AppState {
     /// loses half the limb, so the subtree is the unit whether or not the user
     /// selected every part of it.
     pub fn copy_selection(&mut self) {
-        use crate::clipboard::{BoneClip, ClipBone, ClipSlot, Clipboard};
+        use ankhimate_document::clipboard::{BoneClip, ClipBone, ClipSlot, Clipboard};
 
         let roots = self.selection_roots();
         if roots.is_empty() {
@@ -395,12 +398,13 @@ impl AppState {
                 clip.dropped_constraints.push(constraint.name().to_string());
                 continue;
             }
-            clip.constraints.push(crate::clipboard::ClipConstraint {
-                name: constraint.name().to_string(),
-                constraint: constraint.clone(),
-                bones: affected.iter().map(|b| index_of[b]).collect(),
-                target: target.map(|t| index_of[&t]),
-            });
+            clip.constraints
+                .push(ankhimate_document::clipboard::ClipConstraint {
+                    name: constraint.name().to_string(),
+                    constraint: constraint.clone(),
+                    bones: affected.iter().map(|b| index_of[b]).collect(),
+                    target: target.map(|t| index_of[&t]),
+                });
         }
 
         // ── Animation keys (T-909) ───────────────────────────────────────
@@ -419,11 +423,12 @@ impl AppState {
             if timelines.is_empty() {
                 continue;
             }
-            clip.animations.push(crate::clipboard::ClipAnimation {
-                name: animation.name.clone(),
-                duration: animation.duration,
-                timelines,
-            });
+            clip.animations
+                .push(ankhimate_document::clipboard::ClipAnimation {
+                    name: animation.name.clone(),
+                    duration: animation.duration,
+                    timelines,
+                });
         }
 
         let mut summary = format!("Copied {} bone(s)", clip.bones.len());
@@ -443,7 +448,7 @@ impl AppState {
     /// Copy the current pose of the selected bones (or the whole rig when
     /// nothing is selected) — the walk-cycle workhorse.
     pub fn copy_pose(&mut self) {
-        use crate::clipboard::{Clipboard, PoseClip};
+        use ankhimate_document::clipboard::{Clipboard, PoseClip};
 
         let bones: Vec<BoneId> = if self.session.selected_bones.is_empty() {
             self.doc.skeleton.update_order.clone()
@@ -471,7 +476,7 @@ impl AppState {
 
     /// Paste whatever is on the clipboard. `mirrored` only affects a pose.
     pub fn paste(&mut self, mirrored: bool) {
-        use crate::clipboard::Clipboard;
+        use ankhimate_document::clipboard::Clipboard;
 
         match self.session.clipboard.clone() {
             Clipboard::Empty => self.session.set_status("Clipboard is empty"),
@@ -479,7 +484,7 @@ impl AppState {
                 // Paste under the active bone so the gesture reads as "another
                 // one of these, here"; with nothing selected they become roots.
                 let parent = self.session.active_bone();
-                let cmd = crate::commands::bone_cmds::PasteBones::new(clip, parent);
+                let cmd = ankhimate_document::commands::bone_cmds::PasteBones::new(clip, parent);
                 if self.dispatch(Box::new(cmd)) {
                     // Select what was just pasted: it is what the user will edit.
                     if let Some(id) = self.doc.skeleton.update_order.last().copied() {
@@ -523,8 +528,10 @@ impl AppState {
                 .active_bone()
                 .and_then(|id| self.doc.skeleton.bones.get(id))
                 .and_then(|b| b.parent);
-            if let crate::clipboard::Clipboard::Bones(clip) = self.session.clipboard.clone() {
-                let cmd = crate::commands::bone_cmds::PasteBones::new(clip, parent);
+            if let ankhimate_document::clipboard::Clipboard::Bones(clip) =
+                self.session.clipboard.clone()
+            {
+                let cmd = ankhimate_document::commands::bone_cmds::PasteBones::new(clip, parent);
                 if self.dispatch(Box::new(cmd))
                     && let Some(id) = self.doc.skeleton.update_order.last().copied()
                 {
@@ -576,9 +583,9 @@ impl AppState {
             return;
         }
         let count = targets.len();
-        if self.dispatch(Box::new(crate::commands::bone_cmds::SetPoseAsSetup::new(
-            targets,
-        ))) {
+        if self.dispatch(Box::new(
+            ankhimate_document::commands::bone_cmds::SetPoseAsSetup::new(targets),
+        )) {
             self.session
                 .set_status(format!("Set the pose of {count} bone(s) as setup"));
         }
@@ -593,7 +600,9 @@ impl AppState {
             return;
         }
         let count = bones.len();
-        if self.dispatch(Box::new(crate::commands::bone_cmds::ResetBones::new(bones))) {
+        if self.dispatch(Box::new(
+            ankhimate_document::commands::bone_cmds::ResetBones::new(bones),
+        )) {
             self.session.set_status(format!("Reset {count} bone(s)"));
         }
     }
@@ -611,7 +620,7 @@ impl AppState {
         }
         let count = bones.len();
         if self.dispatch(Box::new(
-            crate::commands::key_cmds::ClearBoneAnimation::new(anim, bones),
+            ankhimate_document::commands::key_cmds::ClearBoneAnimation::new(anim, bones),
         )) {
             self.session
                 .set_status(format!("Cleared animation on {count} bone(s)"));
@@ -624,7 +633,7 @@ impl AppState {
             return;
         };
         if self.dispatch(Box::new(
-            crate::commands::key_cmds::RetimeAnimation::scaled(anim, factor),
+            ankhimate_document::commands::key_cmds::RetimeAnimation::scaled(anim, factor),
         )) {
             self.session
                 .set_status(format!("Scaled timing by {factor:.2}×"));
@@ -638,7 +647,7 @@ impl AppState {
         };
         let seconds = frames as f32 / self.doc.meta.fps.max(1) as f32;
         if self.dispatch(Box::new(
-            crate::commands::key_cmds::RetimeAnimation::offset(anim, seconds),
+            ankhimate_document::commands::key_cmds::RetimeAnimation::offset(anim, seconds),
         )) {
             self.session
                 .set_status(format!("Offset keys by {frames} frame(s)"));
@@ -905,13 +914,13 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::bone_cmds::{CreateBone, DeleteBone, SetBoneTransform};
-    use crate::commands::key_cmds::{
-        AddKey, BoneProperty, CreateAnimation, KeyValue, TimelineAddr,
-    };
     use ankhimate_core::animation::Interp;
     use ankhimate_core::math::Transform;
     use ankhimate_core::skeleton::Bone;
+    use ankhimate_document::commands::bone_cmds::{CreateBone, DeleteBone, SetBoneTransform};
+    use ankhimate_document::commands::key_cmds::{
+        AddKey, BoneProperty, CreateAnimation, KeyValue, TimelineAddr,
+    };
 
     fn bone(name: &str) -> Bone {
         Bone {
@@ -1064,8 +1073,8 @@ mod tests {
     /// T-210: the dot state tracks what the clip actually holds at the playhead.
     #[test]
     fn key_state_reports_timeline_and_key_presence() {
-        use crate::commands::key_cmds::{BoneProperty, TimelineAddr};
         use crate::edit_router::{KeyState, key_state};
+        use ankhimate_document::commands::key_cmds::{BoneProperty, TimelineAddr};
 
         let (mut state, root) = animating_state();
         let anim = state.session.active_animation.unwrap();
@@ -1126,8 +1135,8 @@ mod tests {
     /// the same thing the timeline's "set key" captures.
     #[test]
     fn bone_key_value_is_the_offset_from_setup() {
-        use crate::commands::key_cmds::BoneProperty;
         use crate::edit_router::bone_key_value;
+        use ankhimate_document::commands::key_cmds::BoneProperty;
 
         let (mut state, root) = animating_state();
         let setup = state.doc.skeleton.bones[root].local_transform;
@@ -1155,10 +1164,10 @@ mod tests {
     /// and survives a save/load round trip.
     #[test]
     fn deform_keys_animate_the_mesh_and_round_trip() {
-        use crate::commands::key_cmds::AddDeformKey;
-        use crate::commands::mesh_cmds::ConvertToMesh;
-        use crate::commands::slot_cmds::CreateSlot;
         use ankhimate_core::attachment::{Attachment, Rect, RegionAttachment};
+        use ankhimate_document::commands::key_cmds::AddDeformKey;
+        use ankhimate_document::commands::mesh_cmds::ConvertToMesh;
+        use ankhimate_document::commands::slot_cmds::CreateSlot;
 
         let mut state = AppState::default();
         state.dispatch(Box::new(CreateBone::new(bone("root"))));
@@ -1252,7 +1261,7 @@ mod tests {
             skeleton: loaded.skeleton,
             animations: loaded.animations,
             assets: loaded.assets,
-            meta: crate::doc::DocumentMeta {
+            meta: ankhimate_document::doc::DocumentMeta {
                 name: loaded.name,
                 fps: loaded.fps,
             },
@@ -1279,10 +1288,10 @@ mod tests {
     /// instead is the classic way to make a mesh lurch the moment it is painted.
     #[test]
     fn painting_weights_does_not_move_the_mesh() {
-        use crate::commands::mesh_cmds::ConvertToMesh;
-        use crate::commands::slot_cmds::CreateSlot;
-        use crate::commands::weight_cmds::{PaintWeights, brush};
         use ankhimate_core::attachment::{Attachment, Rect, RegionAttachment};
+        use ankhimate_document::commands::mesh_cmds::ConvertToMesh;
+        use ankhimate_document::commands::slot_cmds::CreateSlot;
+        use ankhimate_document::commands::weight_cmds::{PaintWeights, brush};
 
         let mut state = AppState::default();
         state.dispatch(Box::new(CreateBone::new(bone("root"))));
@@ -1725,7 +1734,7 @@ mod tests {
     /// the auto-key flag (T-204 amendment).
     #[test]
     fn draw_order_routes_by_mode() {
-        use crate::commands::slot_cmds::CreateSlot;
+        use ankhimate_document::commands::slot_cmds::CreateSlot;
 
         let mut state = AppState::default();
         state.dispatch(Box::new(CreateBone::new(bone("root"))));
@@ -1828,7 +1837,7 @@ mod tests {
     /// visibly changes the motion, and undo restores the linear timing.
     #[test]
     fn ease_in_out_changes_motion_and_undo_reverts() {
-        use crate::commands::key_cmds::{SetInterp, presets};
+        use ankhimate_document::commands::key_cmds::{SetInterp, presets};
         let (mut state, root) = animating_state();
         let anim = state.session.active_animation.unwrap();
         let setup_rot = state.doc.skeleton.bones[root].local_transform.rotation;
@@ -1861,7 +1870,7 @@ mod tests {
             .find(|(l, _)| *l == "Ease In-Out")
             .map(|(_, i)| i)
             .unwrap();
-        let refs = vec![crate::commands::key_cmds::KeyRef { addr, index: 1 }];
+        let refs = vec![ankhimate_document::commands::key_cmds::KeyRef { addr, index: 1 }];
         state.dispatch(Box::new(SetInterp::new(anim, refs, ease)));
         state.refresh_pose();
         let eased = (state.pose.locals[root].rotation - setup_rot).to_degrees();
@@ -1883,8 +1892,8 @@ mod tests {
     /// keys) both replay correctly after a save/load round-trip.
     #[test]
     fn slot_color_and_attachment_animate_and_survive_round_trip() {
-        use crate::commands::key_cmds::{AddAttachmentKey, AddKey};
-        use crate::commands::slot_cmds::CreateSlot;
+        use ankhimate_document::commands::key_cmds::{AddAttachmentKey, AddKey};
+        use ankhimate_document::commands::slot_cmds::CreateSlot;
 
         let mut state = AppState::default();
         state.dispatch(Box::new(CreateBone::new(bone("root"))));
@@ -1931,7 +1940,7 @@ mod tests {
             skeleton: loaded.skeleton,
             animations: loaded.animations,
             assets: loaded.assets,
-            meta: crate::doc::DocumentMeta {
+            meta: ankhimate_document::doc::DocumentMeta {
                 name: loaded.name,
                 fps: loaded.fps,
             },
@@ -1985,7 +1994,7 @@ mod tests {
     /// rendered (world) pose identical.
     #[test]
     fn reparent_keeps_world_pose_identical() {
-        use crate::commands::bone_cmds::SetBoneParent;
+        use ankhimate_document::commands::bone_cmds::SetBoneParent;
 
         let mut state = AppState::default();
         state.dispatch(Box::new(CreateBone::new(bone("a"))));
@@ -2326,12 +2335,12 @@ mod tests {
 #[cfg(test)]
 mod weight_paint_regression {
     use super::*;
-    use crate::commands::bone_cmds::CreateBone;
-    use crate::commands::weight_cmds::{BrushMode, PaintWeights, brush};
     use ankhimate_core::attachment::{Attachment, MeshAttachment, Rect, RegionAttachment};
     use ankhimate_core::math::Transform;
     use ankhimate_core::skeleton::Bone;
     use ankhimate_core::slot::Slot;
+    use ankhimate_document::commands::bone_cmds::CreateBone;
+    use ankhimate_document::commands::weight_cmds::{BrushMode, PaintWeights, brush};
 
     fn bone_at(name: &str, x: f32, y: f32) -> Bone {
         posed_bone(name, x, y, 0.0, glam::Vec2::ONE)

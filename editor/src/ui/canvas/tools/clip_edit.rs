@@ -12,11 +12,11 @@
 //! One function serving both would be a pile of branches on which kind it is.
 
 use super::ToolContext;
-use crate::commands::EditCommand;
-use crate::commands::attachment_cmds::owning_skin;
-use crate::commands::clip_cmds::{ClipEdit, EditBoundingBox, EditClip, EditPath};
 use ankhimate_core::attachment::{Attachment, ClippingAttachment};
 use ankhimate_core::ids::{SkinId, SlotId};
+use ankhimate_document::commands::EditCommand;
+use ankhimate_document::commands::attachment_cmds::owning_skin;
+use ankhimate_document::commands::clip_cmds::{ClipEdit, EditBoundingBox, EditClip, EditPath};
 use eframe::egui;
 
 const VERTEX_HIT: f32 = 9.0;

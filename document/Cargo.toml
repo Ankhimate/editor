@@ -1,0 +1,18 @@
+[package]
+name = "ankhimate-document"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The undoable document, its commands, and the named operators over them — no UI."
+
+[dependencies]
+ankhimate-core = { version = "0.1.0", path = "../core" }
+ankhimate-formats = { version = "0.1.0", path = "../formats" }
+ankhimate-export = { version = "0.1.0", path = "../export" }
+glam = "0.33.1"
+serde_json = "1.0.150"
+log = "0.4.32"
+spade = "2.15.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }

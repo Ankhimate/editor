@@ -14,12 +14,12 @@
 //! that vertex give way proportionally.
 
 use crate::app_state::AppState;
-use crate::commands::attachment_cmds::owning_skin;
-use crate::commands::weight_cmds::{
-    self, BrushMode, SetWeights, auto_weight, prune, remove_bone, set_weight, swap_bones,
-};
 use ankhimate_core::attachment::{Attachment, MeshAttachment, VertexWeight};
 use ankhimate_core::ids::{BoneId, SkinId, SlotId};
+use ankhimate_document::commands::attachment_cmds::owning_skin;
+use ankhimate_document::commands::weight_cmds::{
+    self, BrushMode, SetWeights, auto_weight, prune, remove_bone, set_weight, swap_bones,
+};
 use eframe::egui;
 
 /// Where the panel's target mesh lives, resolved once per frame.

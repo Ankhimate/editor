@@ -290,9 +290,9 @@ pub fn ui(
         if let Some(seconds) = set
             && let Some(anim) = state.session.active_animation
         {
-            state.dispatch(Box::new(crate::commands::marker_cmds::SetBoneOffset::new(
-                anim, bone, seconds,
-            )));
+            state.dispatch(Box::new(
+                ankhimate_document::commands::marker_cmds::SetBoneOffset::new(anim, bone, seconds),
+            ));
         }
         if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             ui.ctx().data_mut(|d| {

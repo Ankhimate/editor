@@ -16,8 +16,8 @@
 //! a plugin's `shadow` call refer to, neither of which the compiler checks.
 //! Treat a rename here the way `docs/export-context.md` treats a field rename.
 
-use super::registry::{OpResult, Operator, Registry, UiRequest};
 use crate::app_state::AppState;
+use crate::registry::{OpResult, Operator, Registry, UiRequest};
 use crate::session::{Tool, TransformTool, WorkMode};
 
 /// Declare an operator that calls one method and needs no arguments.
@@ -140,11 +140,13 @@ impl Operator for AddMarkerAtPlayhead {
         let fps = state.doc.meta.fps.max(1) as f32;
         let playhead = state.session.playhead;
         let frame = (playhead * fps).round() as i64;
-        state.dispatch(Box::new(super::marker_cmds::AddMarker::new(
-            anim,
-            format!("f{frame}"),
-            playhead,
-        )));
+        state.dispatch(Box::new(
+            ankhimate_document::commands::marker_cmds::AddMarker::new(
+                anim,
+                format!("f{frame}"),
+                playhead,
+            ),
+        ));
         OpResult::done()
     }
 }
@@ -242,7 +244,7 @@ pub fn register_builtins(registry: &mut Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::registry::Registry;
+    use crate::registry::Registry;
 
     fn registry() -> Registry {
         Registry::with_builtins()

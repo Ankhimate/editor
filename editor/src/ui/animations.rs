@@ -9,10 +9,10 @@
 //! and editing its length are the same gesture.
 
 use crate::app_state::AppState;
-use crate::commands::key_cmds::{
+use ankhimate_core::ids::AnimationId;
+use ankhimate_document::commands::key_cmds::{
     CreateAnimation, DeleteAnimation, DuplicateAnimation, RenameAnimation, SetAnimationMeta,
 };
-use ankhimate_core::ids::AnimationId;
 use eframe::egui;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::Theme) {

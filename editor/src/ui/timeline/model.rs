@@ -6,9 +6,9 @@
 //! child property rows, and a group can be folded.
 
 use crate::app_state::AppState;
-use crate::commands::key_cmds::{BoneProperty, TimelineAddr};
 use ankhimate_core::animation::{Axis, Interp, Timeline};
 use ankhimate_core::ids::{AnimationId, BoneId, SlotId};
+use ankhimate_document::commands::key_cmds::{BoneProperty, TimelineAddr};
 
 /// A single key as the timeline UI needs it: where it is and how it eases.
 #[derive(Clone, Copy)]

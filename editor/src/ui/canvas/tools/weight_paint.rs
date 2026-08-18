@@ -10,9 +10,9 @@
 //! bone starts influencing a vertex.
 
 use super::{CanvasTool, ToolContext};
-use crate::commands::attachment_cmds::owning_skin;
-use crate::commands::weight_cmds::{PaintWeights, brush};
 use ankhimate_core::attachment::Attachment;
+use ankhimate_document::commands::attachment_cmds::owning_skin;
+use ankhimate_document::commands::weight_cmds::{PaintWeights, brush};
 
 pub struct WeightPaintTool;
 

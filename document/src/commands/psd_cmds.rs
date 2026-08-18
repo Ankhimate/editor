@@ -5,8 +5,8 @@
 //! mistake this has to make cheap.
 
 use super::EditCommand;
+use crate::WorkMode;
 use crate::doc::Document;
-use crate::session::WorkMode;
 use ankhimate_core::attachment::Attachment;
 use ankhimate_core::ids::BoneId;
 use ankhimate_formats::psd::PsdImport;

@@ -7,8 +7,8 @@
 //! a packed sheet anyway.
 
 use crate::app_state::AppState;
-use crate::commands::asset_cmds::AddAssets;
 use ankhimate_core::assets::ImageAsset;
+use ankhimate_document::commands::asset_cmds::AddAssets;
 use eframe::egui;
 
 /// How the sheet is cut up.

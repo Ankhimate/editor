@@ -212,10 +212,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ankhimate-document"
+version = "0.1.0"
+dependencies = [
+ "ankhimate-core",
+ "ankhimate-export",
+ "ankhimate-formats",
+ "glam",
+ "image",
+ "log",
+ "serde_json",
+ "spade",
+]
+
+[[package]]
 name = "ankhimate-editor"
 version = "0.1.0"
 dependencies = [
  "ankhimate-core",
+ "ankhimate-document",
  "ankhimate-export",
  "ankhimate-formats",
  "bytemuck",

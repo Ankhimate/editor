@@ -13,8 +13,8 @@ pub struct SelectTool;
 /// a preview: `SetRegionProps` merges, so the whole drag is still one undo step,
 /// and it matches what the inspector's spinboxes already do.
 fn drag_attachment(ctx: &mut ToolContext, cursor_world: glam::Vec2) -> bool {
-    use crate::commands::attachment_cmds::{RegionProps, SetRegionProps, owning_skin};
     use ankhimate_core::attachment::Attachment;
+    use ankhimate_document::commands::attachment_cmds::{RegionProps, SetRegionProps, owning_skin};
 
     let Some(slot_id) = ctx.state.session.active_slot() else {
         return false;

@@ -1,8 +1,8 @@
 use super::{CanvasTool, ToolContext, update_hover_state};
-use crate::commands::EditCommand;
-use crate::commands::bone_cmds::CreateBone;
 use crate::ui::canvas::camera::screen_to_world;
 use crate::ui::canvas::overlays::zoom_bar_rect;
+use ankhimate_document::commands::EditCommand;
+use ankhimate_document::commands::bone_cmds::CreateBone;
 use eframe::egui;
 
 pub struct CreateBoneTool;

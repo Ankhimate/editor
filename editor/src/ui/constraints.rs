@@ -10,10 +10,10 @@
 //! with no visible cause unless the order is something you can see and change.
 
 use crate::app_state::AppState;
-use crate::commands::constraint_cmds::RemoveConstraint;
 use crate::session::Selection;
 use ankhimate_core::constraints::Constraint;
 use ankhimate_core::ids::ConstraintId;
+use ankhimate_document::commands::constraint_cmds::RemoveConstraint;
 use eframe::egui;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
@@ -164,7 +164,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         let mut next = order.clone();
         next.swap(a, b);
         state.dispatch(Box::new(
-            crate::commands::constraint_cmds::SetConstraintOrder::new(next),
+            ankhimate_document::commands::constraint_cmds::SetConstraintOrder::new(next),
         ));
     }
     if let Some(id) = remove {

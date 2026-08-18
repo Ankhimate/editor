@@ -18,17 +18,17 @@
 //! Key values are **offsets from the setup pose** for bone timelines (PLAN §2.7)
 //! and absolute values for slot timelines.
 
-use crate::commands::EditCommand;
-use crate::commands::bone_cmds::SetBoneTransform;
-use crate::commands::key_cmds::{
-    AddAttachmentKey, AddDrawOrderKey, AddKey, BoneProperty, KeyValue, TimelineAddr,
-};
-use crate::commands::slot_cmds::{SetDrawOrder, SetSlotAttachment, SetSlotColor};
-use crate::doc::Document;
 use crate::session::Session;
 use ankhimate_core::animation::{Axis, Interp, Timeline};
 use ankhimate_core::ids::{AnimationId, BoneId, SlotId};
 use ankhimate_core::math::Transform;
+use ankhimate_document::commands::EditCommand;
+use ankhimate_document::commands::bone_cmds::SetBoneTransform;
+use ankhimate_document::commands::key_cmds::{
+    AddAttachmentKey, AddDrawOrderKey, AddKey, BoneProperty, KeyValue, TimelineAddr,
+};
+use ankhimate_document::commands::slot_cmds::{SetDrawOrder, SetSlotAttachment, SetSlotColor};
+use ankhimate_document::doc::Document;
 
 /// A user edit, stated in terms of the value they produced — not the command it
 /// should become.

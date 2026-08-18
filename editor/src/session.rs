@@ -12,32 +12,10 @@ use std::collections::HashSet;
 
 /// What the user is authoring right now (T-207, ADR 0006).
 ///
-/// The same gesture means different things in each mode, and this is the single
-/// switch that decides which:
-///
-/// * **Setup** — define the rig. Edits mutate the [`Skeleton`] setup data, the
-///   viewport always shows the setup pose (no animation applied, whatever the
-///   playhead says), and structural edits are allowed.
-/// * **Animate** — animate the rig. The same edits become keys on
-///   [`Session::active_animation`] at [`Session::playhead`]; the setup data is
-///   read-only and structural commands are refused.
-///
-/// [`Skeleton`]: ankhimate_core::skeleton::Skeleton
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WorkMode {
-    #[default]
-    Setup,
-    Animate,
-}
-
-impl WorkMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            WorkMode::Setup => "SETUP",
-            WorkMode::Animate => "ANIMATE",
-        }
-    }
-}
+/// Re-exported so panels keep saying `session::WorkMode`. The type lives in the
+/// document crate because every command declares `requires_mode` with it and
+/// those have to compile without a session; the editor holds the current value.
+pub use ankhimate_document::WorkMode;
 
 /// The active canvas tool. Orthogonal to [`WorkMode`] — a tool says *how* you
 /// point, the mode says *what the pointing writes to*.
@@ -111,7 +89,7 @@ pub struct WeightPaintSettings {
     pub strength: f32,
     /// Fraction of the radius spent on the gradient. 0 is a hard stamp.
     pub feather: f32,
-    pub mode: crate::commands::weight_cmds::BrushMode,
+    pub mode: ankhimate_document::commands::weight_cmds::BrushMode,
     /// Set weights from the slider instead of by painting.
     ///
     /// An alternative to the brush modes rather than a separate feature: either
@@ -155,11 +133,11 @@ impl Default for WeightPaintSettings {
             // the joint bends, and that crease is the most common weighting
             // complaint there is.
             feather: 0.7,
-            mode: crate::commands::weight_cmds::BrushMode::Add,
+            mode: ankhimate_document::commands::weight_cmds::BrushMode::Add,
             direct: false,
             locked: Vec::new(),
-            max_bones: crate::commands::weight_cmds::DEFAULT_MAX_BONES,
-            prune_threshold: crate::commands::weight_cmds::DEFAULT_PRUNE_THRESHOLD,
+            max_bones: ankhimate_document::commands::weight_cmds::DEFAULT_MAX_BONES,
+            prune_threshold: ankhimate_document::commands::weight_cmds::DEFAULT_PRUNE_THRESHOLD,
             show_overlay: true,
             // Off by default: a pie at every vertex on a dense mesh is more ink
             // than art, and the overlay answers the common question already.
@@ -196,7 +174,7 @@ pub struct Session {
     pub export: crate::ui::export::ExportUiState,
     /// Tracing knobs, kept across traces so tuning one mesh carries to the
     /// next (T-402).
-    pub trace_options: crate::meshgen::TraceOptions,
+    pub trace_options: ankhimate_document::meshgen::TraceOptions,
 
     /// Mesh vertex editing is on for the selected slot's attachment (T-401).
     pub mesh_edit: bool,
@@ -413,7 +391,7 @@ pub struct Session {
 
     /// Copy buffer (T-209). Session state: copying is not an edit, so it never
     /// touches undo or a save file.
-    pub clipboard: crate::clipboard::Clipboard,
+    pub clipboard: ankhimate_document::clipboard::Clipboard,
 }
 
 impl Session {
@@ -440,7 +418,7 @@ impl Session {
             work_mode: WorkMode::Setup,
             tool: Tool::Select,
             export: Default::default(),
-            trace_options: crate::meshgen::TraceOptions::default(),
+            trace_options: ankhimate_document::meshgen::TraceOptions::default(),
             mesh_edit: false,
             selected_vertices: Vec::new(),
             dragging_vertex: None,
@@ -499,7 +477,7 @@ impl Session {
             dragging_event: None,
             dragging_marker: None,
             uv_pane: None,
-            clipboard: crate::clipboard::Clipboard::Empty,
+            clipboard: ankhimate_document::clipboard::Clipboard::Empty,
         }
     }
 

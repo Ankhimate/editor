@@ -95,7 +95,9 @@ pub fn warm_cache(state: &mut AppState) {
             .by_name(&texture)
             .and_then(|id| state.doc.assets.get(id))
             .and_then(|asset| image::load_from_memory(&asset.bytes).ok())
-            .map(|image| crate::meshgen::silhouette(&image.to_rgba8(), ALPHA_THRESHOLD))
+            .map(|image| {
+                ankhimate_document::meshgen::silhouette(&image.to_rgba8(), ALPHA_THRESHOLD)
+            })
             // An asset that will not decode gets an empty outline rather than a
             // retry every frame for the rest of the session.
             .unwrap_or_default();

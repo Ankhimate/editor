@@ -41,7 +41,7 @@ pub struct AnkhimateApp {
     /// plugin will; key handling below resolves through it rather than calling
     /// `AppState` methods directly, so a rebound key and a plugin-shadowed
     /// operator both take effect without touching this file.
-    operators: crate::commands::registry::Registry,
+    operators: crate::registry::Registry,
     /// Timer and dirty-tracking for crash recovery (T-701).
     autosave: crate::autosave::Autosave,
     /// An autosave newer than its project, found at startup and not yet
@@ -390,7 +390,7 @@ impl Default for AnkhimateApp {
             naming_group: None,
             torn_off: Vec::new(),
             logo: crate::ui::branding::Logo::default(),
-            operators: crate::commands::registry::Registry::with_builtins(),
+            operators: crate::registry::Registry::with_builtins(),
             autosave: crate::autosave::Autosave::default(),
             recovery: None,
         }
@@ -413,7 +413,7 @@ impl Default for AnkhimateApp {
 /// "Undo Move Bone", where "Move Bone" is the command on top of the stack.
 fn operator_button(
     ui: &mut egui::Ui,
-    operators: &crate::commands::registry::Registry,
+    operators: &crate::registry::Registry,
     keymap: &crate::keymap::Keymap,
     state: &AppState,
     id: &str,
@@ -447,9 +447,9 @@ impl AnkhimateApp {
     /// Operators cannot reach these flags themselves — that boundary is what
     /// keeps a future plugin out of the frame loop and the egui context.
     ///
-    /// [`UiRequest`]: crate::commands::registry::UiRequest
+    /// [`UiRequest`]: crate::registry::UiRequest
     fn run_operator(&mut self, id: &str) -> bool {
-        use crate::commands::registry::UiRequest;
+        use crate::registry::UiRequest;
 
         let Some(result) = self.operators.invoke(id, &mut self.state) else {
             // Unknown id, or the operator declined as inapplicable. Both are
@@ -1479,8 +1479,8 @@ impl eframe::App for AnkhimateApp {
         // Row-level actions arrive as requests because the tree cannot reach the
         // dialogs, which live here.
         if let Some(request) = self.state.session.group_request.take() {
-            use crate::commands::group_cmds::{EditGroup, GroupEdit};
             use crate::ui::tree::GroupRequest;
+            use ankhimate_document::commands::group_cmds::{EditGroup, GroupEdit};
             match request {
                 GroupRequest::Rename(id, current) => {
                     self.naming_group = Some((Some(id), current));
@@ -1551,7 +1551,7 @@ impl eframe::App for AnkhimateApp {
                 }
             });
             if let Some(name) = commit {
-                use crate::commands::group_cmds::{CreateGroup, EditGroup, GroupEdit};
+                use ankhimate_document::commands::group_cmds::{CreateGroup, EditGroup, GroupEdit};
                 match target {
                     Some(id) => self
                         .state
@@ -1773,7 +1773,7 @@ impl AnkhimateApp {
         let y = (up as i32 - down as i32) as f32;
         let step = if shift { 10.0 } else { 1.0 };
 
-        let mut delta = crate::commands::group_cmds::GroupDelta::default();
+        let mut delta = ankhimate_document::commands::group_cmds::GroupDelta::default();
         match self.state.session.active_transform_tool {
             TransformTool::Translate => delta.translate = glam::vec2(x, y) * step,
             TransformTool::Rotate => {
@@ -1808,10 +1808,9 @@ impl AnkhimateApp {
                 &bones,
             )
             .map(|(min, max)| (min + max) * 0.5);
-            self.state
-                .dispatch(Box::new(crate::commands::group_cmds::TransformGroup::new(
-                    bones, pivot, delta,
-                )));
+            self.state.dispatch(Box::new(
+                ankhimate_document::commands::group_cmds::TransformGroup::new(bones, pivot, delta),
+            ));
         } else {
             for bone in bones {
                 let Some(b) = self.state.doc.skeleton.bones.get(bone) else {

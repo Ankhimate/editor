@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "core",
+    "document",
     "formats",
     "editor",
     "export",

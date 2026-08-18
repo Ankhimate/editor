@@ -7,7 +7,7 @@
 
 use super::{Layout, sheet};
 use crate::app_state::AppState;
-use crate::commands::marker_cmds::{AddMarker, EditMarker, MarkerEdit};
+use ankhimate_document::commands::marker_cmds::{AddMarker, EditMarker, MarkerEdit};
 use eframe::egui;
 
 /// How close to a marker's stem a click must land to grab it.

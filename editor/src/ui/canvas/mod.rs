@@ -215,7 +215,7 @@ fn import_image_bytes(
     let mut asset = ankhimate_core::assets::ImageAsset::new(name, bytes, width, height);
     asset.source_path = Some(path.to_string_lossy().into_owned());
 
-    let cmd = crate::commands::asset_cmds::ImportImage::new(asset, bone, offset);
+    let cmd = ankhimate_document::commands::asset_cmds::ImportImage::new(asset, bone, offset);
     // The import appends its slot, so the new artwork is the last draw-order
     // entry. Select it: the user just placed it, so it is what the inspector
     // should be talking about.

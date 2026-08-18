@@ -13,9 +13,9 @@
 //! combination into the document would mean re-authoring to preview another.
 
 use crate::app_state::AppState;
-use crate::commands::skin_cmds::{AddSkin, CopyAttachments, RemoveSkin, RenameSkin};
 use ankhimate_core::ids::SkinId;
 use ankhimate_core::slotmap::Key as _;
+use ankhimate_document::commands::skin_cmds::{AddSkin, CopyAttachments, RemoveSkin, RenameSkin};
 use eframe::egui;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {

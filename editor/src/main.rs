@@ -1,14 +1,13 @@
-﻿pub mod app;
+pub mod app;
 pub mod app_state;
 pub mod autosave;
-pub mod clipboard;
-pub mod commands;
 pub mod config;
-pub mod doc;
 pub mod edit_router;
 pub mod fileops;
 pub mod keymap;
-pub mod meshgen;
+pub mod operators;
+mod paste_tests;
+pub mod registry;
 pub mod renderer;
 pub mod session;
 pub mod theme;

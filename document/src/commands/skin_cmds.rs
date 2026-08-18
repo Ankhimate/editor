@@ -6,8 +6,8 @@
 //! mean re-authoring the rig to preview a different outfit.
 
 use super::EditCommand;
+use crate::WorkMode;
 use crate::doc::Document;
-use crate::session::WorkMode;
 use ankhimate_core::ids::SkinId;
 use ankhimate_core::skin::Skin;
 

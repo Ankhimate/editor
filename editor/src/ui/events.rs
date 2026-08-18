@@ -15,9 +15,9 @@
 //! undo stack in the same shape.
 
 use crate::app_state::AppState;
-use crate::commands::event_cmds::{AddEvent, DuplicateEvent, EditEvent, EventEdit};
 use ankhimate_core::animation::EventKey;
 use ankhimate_core::ids::AnimationId;
+use ankhimate_document::commands::event_cmds::{AddEvent, DuplicateEvent, EditEvent, EventEdit};
 use eframe::egui;
 
 /// Width of the icon-and-label column, so every value field starts at the same x.

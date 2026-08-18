@@ -9,8 +9,10 @@
 //! change it.
 
 use crate::app_state::AppState;
-use crate::commands::asset_cmds::{DeleteAsset, ImportImage, RenameAsset, ReplaceAssetPixels};
 use ankhimate_core::ids::AssetId;
+use ankhimate_document::commands::asset_cmds::{
+    DeleteAsset, ImportImage, RenameAsset, ReplaceAssetPixels,
+};
 use eframe::egui;
 
 const THUMB: f32 = 64.0;

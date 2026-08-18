@@ -6,8 +6,8 @@
 //! so the settings are chosen by looking rather than by guessing and undoing.
 
 use crate::app_state::AppState;
-use crate::meshgen;
 use ankhimate_core::ids::{SkinId, SlotId};
+use ankhimate_document::meshgen;
 use eframe::egui;
 
 /// A trace being set up. Session state — cancelling leaves nothing behind.
@@ -341,14 +341,16 @@ fn apply_trace(state: &mut AppState, pending: &PendingTrace, traced: &meshgen::T
     }
     let (vertex_count, triangle_count) = (vertices.len(), triangles.len());
 
-    if state.dispatch(Box::new(crate::commands::mesh_cmds::TraceMesh::new(
-        pending.skin,
-        pending.slot,
-        pending.name.clone(),
-        vertices,
-        uvs,
-        triangles,
-    ))) {
+    if state.dispatch(Box::new(
+        ankhimate_document::commands::mesh_cmds::TraceMesh::new(
+            pending.skin,
+            pending.slot,
+            pending.name.clone(),
+            vertices,
+            uvs,
+            triangles,
+        ),
+    )) {
         state.session.selected_vertices.clear();
         state.session.set_status(if had_weights {
             format!(

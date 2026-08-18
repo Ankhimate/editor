@@ -8,6 +8,7 @@ authors.workspace = true
 
 [dependencies]
 ankhimate-core = { version = "0.1.0", path = "../core" }
+ankhimate-document = { version = "0.1.0", path = "../document" }
 ankhimate-formats = { version = "0.1.0", path = "../formats" }
 ankhimate-export = { version = "0.1.0", path = "../export" }
 rfd = "0.15"

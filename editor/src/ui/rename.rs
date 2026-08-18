@@ -26,8 +26,8 @@
 //! and the apply button says how many rows it is about to write.
 
 use crate::app_state::AppState;
-use crate::commands::bone_cmds::RenameBones;
 use ankhimate_core::ids::BoneId;
+use ankhimate_document::commands::bone_cmds::RenameBones;
 use eframe::egui;
 
 /// Which transformation the dialog is applying.

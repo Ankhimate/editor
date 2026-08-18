@@ -14,9 +14,9 @@
 //! only, same as the inspector's fields.
 
 use crate::app_state::AppState;
-use crate::commands::attachment_cmds::{RegionProps, SetRegionProps, owning_skin};
 use ankhimate_core::attachment::Attachment;
 use ankhimate_core::ids::SlotId;
+use ankhimate_document::commands::attachment_cmds::{RegionProps, SetRegionProps, owning_skin};
 use eframe::egui;
 
 /// Screen radius of a draggable handle.

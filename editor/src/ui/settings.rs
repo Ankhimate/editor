@@ -34,7 +34,7 @@ pub fn ui(
     config: &mut Config,
     theme: &mut Theme,
     available: &mut Vec<Theme>,
-    operators: &crate::commands::registry::Registry,
+    operators: &crate::registry::Registry,
     open: &mut bool,
 ) -> bool {
     if !*open {
@@ -192,7 +192,7 @@ pub fn capturing(ctx: &egui::Context) -> bool {
 ///
 /// Rows come from the operator registry, so a plugin's operators appear here
 /// with no work — which is the point of the registry over an enum.
-fn keys(ui: &mut egui::Ui, config: &mut Config, operators: &crate::commands::registry::Registry) {
+fn keys(ui: &mut egui::Ui, config: &mut Config, operators: &crate::registry::Registry) {
     let mut capturing: Option<String> = ui
         .ctx()
         .memory(|m| m.data.get_temp::<String>(egui::Id::new(CAPTURING)));

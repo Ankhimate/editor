@@ -5,7 +5,7 @@
 //! rebound, and could not be discovered by a plugin. This is the same table,
 //! addressable.
 //!
-//! A binding names an [`Operator`](crate::commands::registry::Operator) by id
+//! A binding names an [`Operator`](crate::registry::Operator) by id
 //! rather than pointing at a function, so a plugin that shadows `edit.undo`
 //! inherits every key bound to it without touching the keymap, and a keymap
 //! written by a user survives a plugin being installed or removed.
@@ -352,7 +352,7 @@ impl Keymap {
     /// it returns.
     pub fn unresolved<'a>(
         &'a self,
-        registry: &'a crate::commands::registry::Registry,
+        registry: &'a crate::registry::Registry,
     ) -> impl Iterator<Item = &'a Binding> + 'a {
         self.bindings
             .iter()
@@ -363,7 +363,7 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::registry::Registry;
+    use crate::registry::Registry;
 
     #[test]
     fn a_plain_chord_does_not_fire_under_a_modifier() {

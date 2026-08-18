@@ -269,8 +269,11 @@ fn run_import(state: &mut AppState, pending: &PendingPsd) {
     };
 
     let summary = imported.summary.clone();
-    let command =
-        crate::commands::psd_cmds::ImportPsd::new(imported, pending.replace, pending.name.clone());
+    let command = ankhimate_document::commands::psd_cmds::ImportPsd::new(
+        imported,
+        pending.replace,
+        pending.name.clone(),
+    );
     if state.dispatch(Box::new(command)) {
         let skipped = summary.skipped.len();
         state.session.set_status(match skipped {
