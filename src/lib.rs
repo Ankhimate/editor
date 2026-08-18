@@ -36,6 +36,7 @@ pub mod edit;
 /// call it rather than with the viewport that displays the result.
 pub mod meshgen;
 pub mod ops;
+pub mod read;
 pub mod rebind;
 mod work_mode;
 
@@ -44,6 +45,7 @@ pub use commands::{EditCommand, History, IdRemap};
 pub use doc::{Document, DocumentMeta};
 pub use edit::{Edit, Refused};
 pub use ops::{DocOperator, DocOps, OpError};
+pub use read::{Names, describe, names};
 pub use work_mode::WorkMode;
 
 #[cfg(test)]
