@@ -448,6 +448,10 @@ fn convert(
     // how `effect_l` starts hidden. Resolved to a name once the skin is read,
     // since the index means nothing without the list it indexes into.
     let mut display_index: HashMap<String, i64> = HashMap::new();
+    // Attachment names per slot, in display order. Kept past the skin loop
+    // because an animation's `displayFrame` selects by the same index and has
+    // no other way to say which attachment it means.
+    let mut display_lists: HashMap<String, Vec<Option<String>>> = HashMap::new();
     for sl in armature
         .get("slot")
         .and_then(|s| s.as_array())
@@ -854,6 +858,7 @@ fn convert(
             // how `effect_l` starts hidden rather than flashing its muzzle
             // effect over the whole animation.
             let index = display_index.get(slot_name).copied().unwrap_or(0);
+            display_lists.insert(slot_name.to_string(), display_names.clone());
             if index >= 0
                 && let Some(Some(name)) = display_names.get(index as usize)
                 && let Some(slot) = skel.slots.get_mut(slot_id)
@@ -991,6 +996,56 @@ fn convert(
                         timelines.push(Timeline::BoneScale { bone, axis, keys });
                     }
                 }
+            }
+        }
+
+        // ── Slot tracks ──────────────────────────────────────────────
+        // `displayFrame` switches which display a slot shows, by the same index
+        // `displayIndex` uses — so `-1` hides and an omitted `value` is 0. This
+        // is what turns the muzzle effects on partway through a skill and off
+        // again; without it they keep whatever the setup pose gave them, which
+        // for `effect_l`/`effect_r` is hidden, so they never appear at all.
+        //
+        // Stepped by construction on our side: `SlotAttachment` holds names, and
+        // names do not blend.
+        for slot_track in a.get("slot").and_then(|s_| s_.as_array()).unwrap_or(&empty) {
+            let Some(track_name) = s(slot_track, "name") else {
+                continue;
+            };
+            let Some(&slot) = slots.get(track_name) else {
+                report.dangling("dragonbones animated slot", track_name);
+                continue;
+            };
+            let Some(frames) = slot_track.get("displayFrame").and_then(|d| d.as_array()) else {
+                continue;
+            };
+            let names = display_lists.get(track_name);
+
+            let mut keys: Vec<Key<Option<String>>> = Vec::new();
+            let mut elapsed = 0.0_f32;
+            for frame in frames {
+                let index = frame.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
+                // Out of range resolves to hidden rather than to the nearest
+                // display: showing the wrong art is worse than showing none, and
+                // a rig whose skin the reader could not fully build should not
+                // invent a substitute.
+                let value = if index < 0 {
+                    None
+                } else {
+                    names.and_then(|n| n.get(index as usize)).cloned().flatten()
+                };
+                keys.push(Key {
+                    time: elapsed / fps,
+                    value,
+                    interp: Interp::Stepped,
+                });
+                elapsed += f(frame, "duration", 1.0);
+            }
+
+            // A track that never changes is what the setup pose already says.
+            let changes = keys.windows(2).any(|w| w[0].value != w[1].value);
+            if changes {
+                timelines.push(Timeline::SlotAttachment { slot, keys });
             }
         }
 
@@ -1206,6 +1261,80 @@ mod tests {
         assert_eq!(times, vec![0.0, 1.0, 3.0], "0, then 10/10, then 30/10");
         let values: Vec<f32> = keys.iter().map(|k| k.value).collect();
         assert_eq!(values, vec![0.0, 5.0, 9.0]);
+    }
+
+    #[test]
+    fn a_display_frame_switches_the_slots_attachment() {
+        // How a muzzle effect appears at all: `effect_r` starts hidden by
+        // `displayIndex: -1` and the clip switches it on partway through. With
+        // no slot timeline the setup pose stands for the whole animation, so
+        // the effects never showed.
+        let json = r#"{
+            "name": "t", "frameRate": 10,
+            "armature": [{"name": "a",
+                "bone": [{"name": "root"}],
+                "slot": [{"name": "fx", "parent": "root", "displayIndex": -1}],
+                "skin": [{"slot": [{"name": "fx", "display": [{"name": "flash"}]}]}],
+                "animation": [{"name": "fire", "duration": 10, "slot": [
+                    {"name": "fx", "displayFrame": [
+                        {"duration": 3, "value": -1},
+                        {"duration": 4, "value": 0},
+                        {"duration": 3, "value": -1}
+                    ]}
+                ]}]
+            }]
+        }"#;
+        let png = image::RgbaImage::new(4, 4);
+        let loaded = read(json, Images::Loose(&|_| Some(png.clone())), "x").expect("reads");
+
+        let clip = loaded.animations.values().next().expect("one clip");
+        let keys = clip
+            .timelines
+            .iter()
+            .find_map(|t| match t {
+                Timeline::SlotAttachment { keys, .. } => Some(keys),
+                _ => None,
+            })
+            .expect("an attachment timeline");
+
+        let shown: Vec<(f32, Option<&str>)> =
+            keys.iter().map(|k| (k.time, k.value.as_deref())).collect();
+        assert_eq!(
+            shown,
+            vec![(0.0, None), (0.3, Some("flash")), (0.7, None)],
+            "hidden, then the flash, then hidden"
+        );
+        assert!(
+            keys.iter().all(|k| k.interp == Interp::Stepped),
+            "attachment names do not blend"
+        );
+    }
+
+    #[test]
+    fn a_slot_track_that_never_changes_is_not_imported() {
+        // Most of `skill_05`'s slot tracks hold one value for the whole clip,
+        // which is what the setup pose already says.
+        let json = r#"{
+            "name": "t", "frameRate": 10,
+            "armature": [{"name": "a",
+                "bone": [{"name": "root"}],
+                "slot": [{"name": "s", "parent": "root"}],
+                "skin": [{"slot": [{"name": "s", "display": [{"name": "img"}]}]}],
+                "animation": [{"name": "idle", "duration": 10, "slot": [
+                    {"name": "s", "displayFrame": [{"duration": 10, "value": 0}]}
+                ]}]
+            }]
+        }"#;
+        let png = image::RgbaImage::new(4, 4);
+        let loaded = read(json, Images::Loose(&|_| Some(png.clone())), "x").expect("reads");
+        let clip = loaded.animations.values().next().expect("one clip");
+        assert!(
+            !clip
+                .timelines
+                .iter()
+                .any(|t| matches!(t, Timeline::SlotAttachment { .. })),
+            "a constant track earns no timeline"
+        );
     }
 
     #[test]
