@@ -32,8 +32,8 @@
 //! before the first plugin exists rather than after.
 
 use crate::app_state::AppState;
-use crate::args::{ArgError, Args};
 use crate::session::WorkMode;
+use ankhimate_document::{ArgError, Args};
 use std::collections::BTreeMap;
 
 /// A window the operator wants opened. Operators reach [`AppState`], but three

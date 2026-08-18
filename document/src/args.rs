@@ -16,6 +16,7 @@
 //! contract `formats/src/schema.rs` uses on disk: names in the file, ids in
 //! memory. Resolution failure is an error the caller sees, not a silent no-op.
 
+use crate::doc::Document;
 use ankhimate_core::ids::{AnimationId, BoneId, SlotId};
 use serde_json::Value;
 
@@ -167,11 +168,11 @@ impl Args {
 /// Separate from `Args` so the argument type stays free of the document, and so
 /// a caller can validate a script's shape before a rig is even open.
 pub struct Resolver<'a> {
-    doc: &'a ankhimate_document::Document,
+    doc: &'a Document,
 }
 
 impl<'a> Resolver<'a> {
-    pub fn new(doc: &'a ankhimate_document::Document) -> Self {
+    pub fn new(doc: &'a Document) -> Self {
         Self { doc }
     }
 
@@ -234,7 +235,6 @@ mod tests {
     use super::*;
     use ankhimate_core::math::Transform;
     use ankhimate_core::skeleton::Bone;
-    use ankhimate_document::Document;
     use serde_json::json;
 
     fn rig() -> Document {

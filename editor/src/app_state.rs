@@ -782,7 +782,7 @@ impl AppState {
 
     /// Post-mutation housekeeping: drop selections pointing at deleted entities,
     /// then recompute the pose.
-    fn after_document_change(&mut self) {
+    pub(crate) fn after_document_change(&mut self) {
         self.revision = self.revision.wrapping_add(1);
         self.session.prune_selection(&self.doc.skeleton);
         // Cheap when nothing needs it: the scan short-circuits unless a weighted

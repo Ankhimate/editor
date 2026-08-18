@@ -1,6 +1,5 @@
 pub mod app;
 pub mod app_state;
-pub mod args;
 pub mod autosave;
 pub mod config;
 pub mod edit_router;

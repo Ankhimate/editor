@@ -59,8 +59,8 @@ macro_rules! operator {
             fn invoke(
                 &self,
                 $state: &mut AppState,
-                _args: &crate::args::Args,
-            ) -> Result<OpResult, crate::args::ArgError> {
+                _args: &ankhimate_document::Args,
+            ) -> Result<OpResult, ankhimate_document::ArgError> {
                 Ok($body)
             }
         }
@@ -136,8 +136,8 @@ impl Operator for AddMarkerAtPlayhead {
     fn invoke(
         &self,
         state: &mut AppState,
-        _args: &crate::args::Args,
-    ) -> Result<OpResult, crate::args::ArgError> {
+        _args: &ankhimate_document::Args,
+    ) -> Result<OpResult, ankhimate_document::ArgError> {
         // `enabled` is advisory — a caller may invoke directly — so the target
         // is re-checked here rather than unwrapped.
         let Some(anim) = state.session.active_animation else {
@@ -154,87 +154,6 @@ impl Operator for AddMarkerAtPlayhead {
                 format!("f{frame}"),
                 playhead,
             ),
-        ));
-        Ok(OpResult::done())
-    }
-}
-
-// ── Document verbs ───────────────────────────────────────────────────────────
-// The first operators that take arguments. A keybinding acts on the selection;
-// these are named by a caller who has none — see `crate::args` for why the
-// targets are names rather than ids.
-
-/// Create a bone (`bone.create`).
-pub struct CreateBoneOp;
-
-impl Operator for CreateBoneOp {
-    fn id(&self) -> &'static str {
-        "bone.create"
-    }
-
-    fn label(&self) -> &str {
-        "Create Bone"
-    }
-
-    fn requires_mode(&self) -> Option<WorkMode> {
-        Some(WorkMode::Setup)
-    }
-
-    fn enabled(&self, state: &AppState) -> bool {
-        state.session.can_edit_structure()
-    }
-
-    fn schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["name"],
-            "properties": {
-                "name": { "type": "string", "description": "Name for the new bone" },
-                "parent": {
-                    "type": "string",
-                    "description": "Name of the parent bone; omit for a root"
-                },
-                "x": { "type": "number", "default": 0 },
-                "y": { "type": "number", "default": 0 },
-                "rotation": { "type": "number", "description": "Degrees", "default": 0 },
-                "length": { "type": "number", "default": 30 }
-            }
-        })
-    }
-
-    fn invoke(
-        &self,
-        state: &mut AppState,
-        args: &crate::args::Args,
-    ) -> Result<OpResult, crate::args::ArgError> {
-        use ankhimate_core::math::Transform;
-        use ankhimate_core::skeleton::Bone;
-
-        // Read every argument before touching the document: a half-built bone
-        // left behind by a bad `parent` would be an edit the caller never asked
-        // for and cannot see to undo.
-        let resolver = crate::args::Resolver::new(&state.doc);
-        let name = args.str("name")?.to_string();
-        let parent = resolver.opt_bone(args, "parent")?;
-        let x = args.f32_or("x", 0.0)?;
-        let y = args.f32_or("y", 0.0)?;
-        let rotation = args.f32_or("rotation", 0.0)?;
-        let length = args.f32_or("length", 30.0)?;
-
-        state.dispatch(Box::new(
-            ankhimate_document::commands::bone_cmds::CreateBone::new(Bone {
-                name,
-                parent,
-                length: length.max(1.0),
-                local_transform: Transform {
-                    position: glam::vec2(x, y),
-                    // Degrees at the boundary, radians inside `core`.
-                    rotation: rotation.to_radians(),
-                    ..Default::default()
-                },
-                inherit: Default::default(),
-                color: Bone::default_color(),
-            }),
         ));
         Ok(OpResult::done())
     }
@@ -302,7 +221,83 @@ operator!(OpenSettings, "app.settings", "Settings",
 ///
 /// Order is irrelevant to lookup — ids are unique, and `builtin_ids_are_unique`
 /// in `registry.rs` fails the build if that ever stops being true.
+/// Wraps a document verb so the editor's registry can hold it.
+///
+/// The two traits differ only in what they are handed — `AppState` versus
+/// `Edit` — so this is a shim rather than a reimplementation. It exists so one
+/// id resolves to one verb from a menu, a keybinding, a plugin and a script
+/// alike; two registries with overlapping ids would drift exactly as the Edit
+/// menu drifted from the keymap before the registry existed.
+struct Adopted(Box<dyn ankhimate_document::DocOperator>);
+
+impl Operator for Adopted {
+    fn id(&self) -> &'static str {
+        self.0.id()
+    }
+
+    fn label(&self) -> &str {
+        self.0.label()
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        self.0.requires_mode()
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        self.0.schema()
+    }
+
+    fn enabled(&self, state: &AppState) -> bool {
+        // The mode check a document verb cannot make for itself: it declares
+        // which mode it needs, and only the editor knows which one is current.
+        match self.0.requires_mode() {
+            Some(required) => state.session.work_mode == required,
+            None => true,
+        }
+    }
+
+    fn invoke(
+        &self,
+        state: &mut AppState,
+        args: &ankhimate_document::Args,
+    ) -> Result<OpResult, ankhimate_document::ArgError> {
+        // `Edit` owns its document and history, and `AppState` owns the editor's
+        // — so the two are swapped in for the call and swapped back. Cheaper
+        // than it looks: both are moves, and the alternative is a second
+        // dispatch path that can drift from `AppState::dispatch`.
+        let mut edit = ankhimate_document::Edit {
+            doc: std::mem::take(&mut state.doc),
+            history: std::mem::take(&mut state.history),
+            mode: state.session.work_mode,
+        };
+        let outcome = self.0.invoke(&mut edit, args);
+        state.doc = edit.doc;
+        state.history = edit.history;
+
+        match outcome {
+            Ok(()) => {
+                // The editor's own bookkeeping, which `Edit` does not do:
+                // selection pruning, the pose, the revision counter.
+                state.after_document_change();
+                Ok(OpResult::done())
+            }
+            // A refusal is not an argument error — the caller asked correctly
+            // and the mode said no. `enabled` should have caught it, so this is
+            // the direct-invoke path.
+            Err(ankhimate_document::OpError::Refused(_)) => Ok(OpResult::done()),
+            Err(ankhimate_document::OpError::Unknown(_)) => Ok(OpResult::done()),
+            Err(ankhimate_document::OpError::Args(e)) => Err(e),
+        }
+    }
+}
+
 pub fn register_builtins(registry: &mut Registry) {
+    // Document verbs first, so a session verb registered later shadows one
+    // deliberately rather than by accident of ordering.
+    for op in ankhimate_document::DocOps::builtin().into_ops() {
+        registry.register(Box::new(Adopted(op)));
+    }
+
     registry.register(Box::new(Undo));
     registry.register(Box::new(Redo));
     registry.register(Box::new(CopySelection));
@@ -315,8 +310,6 @@ pub fn register_builtins(registry: &mut Registry) {
     registry.register(Box::new(ToggleWorkMode));
     registry.register(Box::new(KeyPendingPose));
     registry.register(Box::new(AddMarkerAtPlayhead));
-
-    registry.register(Box::new(CreateBoneOp));
 
     registry.register(Box::new(SelectTool));
     registry.register(Box::new(CreateBoneTool));
@@ -448,7 +441,7 @@ mod tests {
         // What a plugin or an MCP client does: name the verb, name the target,
         // never hold an id. The edit still goes through `dispatch`, so undo
         // works exactly as it does for a menu.
-        use crate::args::Args;
+        use ankhimate_document::Args;
 
         let registry = registry();
         let mut state = AppState::default();
@@ -510,7 +503,7 @@ mod tests {
         // The failure a keybinding may swallow and a script may not. Naming a
         // parent the rig does not have is a bug in the caller, and the document
         // must not be half-edited by the time it is found.
-        use crate::args::{ArgError, Args};
+        use ankhimate_document::{ArgError, Args};
 
         let registry = registry();
         let mut state = AppState::default();
@@ -553,7 +546,11 @@ mod tests {
     fn an_operator_that_takes_arguments_describes_them() {
         // What an MCP client lists tools from, and what a plugin author reads
         // instead of the source.
-        let schema = CreateBoneOp.schema();
+        // Through the registry, because the verb itself now lives in the
+        // document crate — what matters here is that adoption carries the
+        // schema across rather than flattening it to null.
+        let registry = registry();
+        let schema = registry.get("bone.create").expect("adopted").schema();
         assert_eq!(schema["required"][0], "name");
         assert!(schema["properties"]["parent"].is_object());
     }
@@ -564,7 +561,7 @@ mod tests {
         // honours. This is what keeps a future plugin out of the frame loop.
         let mut state = AppState::default();
         let result = OpenSettings
-            .invoke(&mut state, &crate::args::Args::none())
+            .invoke(&mut state, &ankhimate_document::Args::none())
             .expect("takes no arguments");
         assert_eq!(result.ui, Some(UiRequest::Settings));
     }
