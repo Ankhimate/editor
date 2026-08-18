@@ -89,6 +89,22 @@ Unblocks everything below. Nothing else can be built correctly first.
 **Check:** a document operator runs against a bare `Document` with no `Session`
 and no `History` in scope.
 
+**Measured before starting, and cheaper than this plan first assumed.** The
+command layer's only dependency on session state is `WorkMode` — a bare enum
+with a `label()` and nothing else. Every other mention of `session` in
+`commands/` is test code or the word in prose. `doc.rs` imports `ankhimate_core`
+alone, and `commands/mod.rs` imports `Document` and `BoneId`.
+
+So `EditCommand`, its 82 impls, `Document` and `WorkMode` move down together and
+compile framework-free without rewriting. What stays behind is the ~16 of 21
+built-in operators that touch tools, gizmo modes and selection, plus the three
+`AppState` fields (`session`, `physics`, `pose`) that are derived or
+interaction state by construction.
+
+The invasive part is not the split; it is that `AppState::dispatch` is the only
+sanctioned mutation path and headless callers need an equivalent that keeps
+undo, `requires_mode` and `rebind_meshes` without owning a `Session`.
+
 ### 2. Arguments and schema
 
 ```rust
