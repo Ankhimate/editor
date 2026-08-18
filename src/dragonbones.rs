@@ -302,7 +302,14 @@ fn frames_to_keys(
             value: value(frame),
             interp,
         });
-        elapsed += f(frame, "duration", 0.0);
+        // An omitted `duration` is **one frame**, not zero. `skill_05` writes
+        // three consecutive frames with no duration at all, and defaulting them
+        // to zero stacked all three on the same time and pulled every later key
+        // forward — a fourteen-frame clip playing its whole second half early.
+        //
+        // A written `0` is still zero: that is the closing frame DragonBones
+        // appends to carry a clip's final value.
+        elapsed += f(frame, "duration", 1.0);
     }
     keys
 }
@@ -1199,6 +1206,42 @@ mod tests {
         assert_eq!(times, vec![0.0, 1.0, 3.0], "0, then 10/10, then 30/10");
         let values: Vec<f32> = keys.iter().map(|k| k.value).collect();
         assert_eq!(values, vec![0.0, 5.0, 9.0]);
+    }
+
+    #[test]
+    fn a_frame_without_a_duration_lasts_one_frame() {
+        // `skill_05` writes three consecutive frames carrying only a value, and
+        // reading the missing `duration` as zero stacked all three on one time
+        // and pulled the rest of the clip forward. Every earlier timing test
+        // wrote its durations out, so none of them could see this.
+        let frames: Vec<Value> = vec![
+            serde_json::json!({"duration": 4, "rotate": -3.75}),
+            serde_json::json!({"rotate": -6.5}),
+            serde_json::json!({"rotate": -7.51}),
+            serde_json::json!({"duration": 3, "rotate": 5.75}),
+        ];
+        let mut report = LoadReport::default();
+        let keys = frames_to_keys(&frames, 10.0, |f_| f(f_, "rotate", 0.0), &mut report, "t");
+
+        let times: Vec<f32> = keys.iter().map(|k| k.time).collect();
+        assert_eq!(
+            times,
+            vec![0.0, 0.4, 0.5, 0.6],
+            "4, then one apiece — not three keys sharing 0.4"
+        );
+    }
+
+    #[test]
+    fn a_written_zero_duration_still_closes_the_clip() {
+        // The trailing frame DragonBones appends to carry a final value really
+        // is zero-length, so the default must not swallow an explicit 0.
+        let frames: Vec<Value> = vec![
+            serde_json::json!({"duration": 5, "rotate": 1.0}),
+            serde_json::json!({"duration": 0, "rotate": 2.0}),
+        ];
+        let mut report = LoadReport::default();
+        let keys = frames_to_keys(&frames, 10.0, |f_| f(f_, "rotate", 0.0), &mut report, "t");
+        assert_eq!(keys[1].time, 0.5);
     }
 
     #[test]
