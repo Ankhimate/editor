@@ -1266,3 +1266,77 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
         report: std::mem::take(report),
     }
 }
+
+/// Spine JSON, as a registered importer.
+///
+/// The sidecar rule lives here rather than in the caller: a Spine rig keeps its
+/// atlas in whichever `*.atlas` sits beside the skeleton, and falls back to a
+/// loose `images/` directory. Only this reader knows that.
+pub struct SpineImporter;
+
+impl crate::importer::Importer for SpineImporter {
+    fn id(&self) -> &'static str {
+        "import.spine"
+    }
+
+    fn label(&self) -> &str {
+        "Spine JSON"
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["json"]
+    }
+
+    fn declared_version(&self, path: &std::path::Path) -> Option<String> {
+        declared_version(&std::fs::read_to_string(path).ok()?)
+    }
+
+    fn read(&self, path: &std::path::Path) -> Result<Loaded, crate::importer::ImportError> {
+        use crate::importer::ImportError;
+
+        let json = std::fs::read_to_string(path)
+            .map_err(|e| ImportError::Io(format!("could not read {}: {e}", path.display())))?;
+        let dir = path.parent().unwrap_or(std::path::Path::new("."));
+
+        // Read up front so an unreadable atlas fails here, with the file name
+        // still in hand, rather than halfway through the conversion.
+        let atlas_text = std::fs::read_dir(dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.extension().and_then(|x| x.to_str()) == Some("atlas"))
+            .and_then(|p| std::fs::read_to_string(p).ok());
+
+        let open_page = |file: &str| image::open(dir.join(file)).ok().map(|i| i.to_rgba8());
+        let images_dir = dir.join("images");
+        let open_loose = |name: &str| {
+            // Spine writes an attachment path with `/` for a subdirectory and no
+            // extension, which is how the files sit on disk.
+            image::open(images_dir.join(format!("{name}.png")))
+                .ok()
+                .map(|i| i.to_rgba8())
+        };
+        let images = match &atlas_text {
+            Some(text) => Images::Atlas {
+                text,
+                pages: &open_page,
+            },
+            None if images_dir.is_dir() => Images::Loose(&open_loose),
+            None => Images::None,
+        };
+
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("imported");
+        match read(&json, images, name) {
+            Ok(loaded) => Ok(loaded),
+            // A `.json` that is not a Spine skeleton is the case a caller
+            // trying several importers has to be able to tell from a broken one.
+            Err(Error::NotASkeleton) => Err(ImportError::NotThisFormat),
+            Err(e) => Err(ImportError::Malformed(e.to_string())),
+        }
+    }
+}

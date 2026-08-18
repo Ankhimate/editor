@@ -1951,3 +1951,74 @@ mod tests {
         assert_eq!(loaded.name, "hero");
     }
 }
+
+/// DragonBones, as a registered importer.
+///
+/// A rig is a trio: `<stem>_ske.json` beside `<stem>_tex.json` and
+/// `<stem>_tex.png`. The atlas is found by that naming rather than by scanning
+/// for an extension the way the Spine reader does — both DragonBones files are
+/// `.json`, so taking the first one found would pick the atlas about half the
+/// time. That rule is why an importer owns its own file discovery.
+pub struct DragonBonesImporter;
+
+impl crate::importer::Importer for DragonBonesImporter {
+    fn id(&self) -> &'static str {
+        "import.dragonbones"
+    }
+
+    fn label(&self) -> &str {
+        "DragonBones"
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["json"]
+    }
+
+    fn declared_version(&self, path: &std::path::Path) -> Option<String> {
+        declared_version(&std::fs::read_to_string(path).ok()?)
+    }
+
+    fn read(&self, path: &std::path::Path) -> Result<Loaded, crate::importer::ImportError> {
+        use crate::importer::ImportError;
+
+        let json = std::fs::read_to_string(path)
+            .map_err(|e| ImportError::Io(format!("could not read {}: {e}", path.display())))?;
+        let dir = path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
+
+        // `walk_ske.json` pairs with `walk_tex.json`. A file renamed away from
+        // that convention still imports — as geometry, with every texture in the
+        // report — rather than failing.
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let stem = file_name
+            .strip_suffix("_ske.json")
+            .or_else(|| file_name.strip_suffix(".json"))
+            .unwrap_or(file_name);
+        let atlas_text = std::fs::read_to_string(dir.join(format!("{stem}_tex.json"))).ok();
+
+        let open_page = |file: &str| image::open(dir.join(file)).ok().map(|i| i.to_rgba8());
+        let open_loose = |name: &str| {
+            image::open(dir.join(format!("{name}.png")))
+                .ok()
+                .map(|i| i.to_rgba8())
+        };
+        let images = match &atlas_text {
+            Some(text) => Images::Atlas {
+                text,
+                pages: &open_page,
+            },
+            None => Images::Loose(&open_loose),
+        };
+
+        match read(&json, images, stem) {
+            Ok(loaded) => Ok(loaded),
+            Err(Error::NotASkeleton) => Err(ImportError::NotThisFormat),
+            Err(e) => Err(ImportError::Malformed(e.to_string())),
+        }
+    }
+}
