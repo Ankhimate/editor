@@ -221,6 +221,7 @@ dependencies = [
  "glam",
  "image",
  "log",
+ "serde",
  "serde_json",
  "spade",
 ]

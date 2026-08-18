@@ -107,6 +107,8 @@ a commit.
 - `docs/plugin-plan.md` — the plugin API's four surfaces, the headless split
   underneath them, and why an MCP server is a consumer of that API rather than a
   second road.
+- `docs/plugin-api.md` — the verbs, their arguments and the read surface, as
+  they stand. A public contract.
 - `docs/nested-armatures.md` — a slot that draws another rig on its own
   playhead: why it beats Spine's static skin swap, and why it waits for the
   plugin work.
