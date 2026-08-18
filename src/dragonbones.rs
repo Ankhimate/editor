@@ -714,6 +714,9 @@ fn convert(
                             glam::vec2(f(&nested_bone, "x", 0.0), -f(&nested_bone, "y", 0.0));
                         let bone_scale =
                             glam::vec2(f(&nested_bone, "scX", 1.0), f(&nested_bone, "scY", 1.0));
+                        // The nested armature times its own flipbook, and may
+                        // declare a frame rate different from the rig holding it.
+                        let nested_fps = f(nested, "frameRate", fps).max(1.0);
 
                         let mut folded = 0usize;
                         let mut first_folded: Option<String> = None;
@@ -786,15 +789,26 @@ fn convert(
                             let host_index = display_names.len() - 1;
                             let attachment_name = format!("{display_name}#{host_index}");
                             // One frame is a plain region; several are a
-                            // flipbook. `Hold` rather than `Loop`: the nested
-                            // armature's own clip drives it, and a sequence that
-                            // spun on its own would animate an effect that is
-                            // meant to be switched on for a few frames.
+                            // flipbook, and the nested armature's own clip says
+                            // how it runs. `we_bl_4`'s `fade_in` steps one
+                            // display per frame at the armature's frame rate,
+                            // which is what a `Sequence` at that rate already
+                            // means — so the clip is read as the sequence's
+                            // shape rather than imported as a second animation.
+                            //
+                            // `Loop` rather than `Once`: `Pose` drives a
+                            // sequence from the *animation's* playhead, not from
+                            // when the attachment appeared. A flash switched on
+                            // at frame 6 would find a `Once` sequence already
+                            // run out and hold its last frame; looping puts it
+                            // back at the start of a cycle. The flash shows for
+                            // as many frames as the sequence is long, so the two
+                            // stay in step.
                             let sequence =
                                 (frames.len() > 1).then(|| ankhimate_core::attachment::Sequence {
                                     frames: frames.clone(),
-                                    fps: fps,
-                                    mode: ankhimate_core::attachment::SequenceMode::Hold,
+                                    fps: nested_fps,
+                                    mode: ankhimate_core::attachment::SequenceMode::Loop,
                                     setup_index: 0,
                                 });
                             skel.skins[default_skin].set(
@@ -1662,6 +1676,14 @@ mod tests {
             .expect("two displays are a sequence");
         assert_eq!(seq.frames, ["sword", "axe"], "in display order");
         assert_eq!(region.texture, "sword", "the first frame shows at rest");
+        // Loop, not Hold: `Pose` drives a sequence from the animation's
+        // playhead, so an effect switched on partway through would find a
+        // once-through sequence already finished and sit on its last frame.
+        assert_eq!(
+            seq.mode,
+            ankhimate_core::attachment::SequenceMode::Loop,
+            "a held sequence never advances, which is why the flash did not fade"
+        );
 
         assert_eq!(
             names,
