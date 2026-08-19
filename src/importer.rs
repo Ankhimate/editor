@@ -96,6 +96,28 @@ pub trait Importer: Send + Sync {
             .any(|e| e.eq_ignore_ascii_case(ext))
     }
 
+    /// What options this importer accepts, as JSON Schema.
+    ///
+    /// Most take none. The ones that do — PSD's layer selection and scale, a
+    /// sprite sheet's grid — are *parameterised*, not conversational: every
+    /// option has a sensible default, so an unattended caller gets a usable
+    /// result and the editor's panel refines rather than supplies.
+    ///
+    /// That distinction is why these fit the registry at all. An importer that
+    /// genuinely needed a conversation could not be reached from a script, and
+    /// would have to stay panel-only.
+    fn options_schema(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
+    /// Read `path` with options, when the caller has any.
+    ///
+    /// Defaults to ignoring them, so an importer with no options implements one
+    /// method rather than two that must agree.
+    fn read_with(&self, path: &Path, _options: &serde_json::Value) -> Result<Loaded, ImportError> {
+        self.read(path)
+    }
+
     /// Read `path` and whatever sits beside it.
     ///
     /// The importer finds its own sidecars: only it knows that a Spine rig keeps
@@ -132,6 +154,7 @@ impl Importers {
         let mut importers = Self::new();
         importers.register(Box::new(crate::spine::SpineImporter));
         importers.register(Box::new(crate::dragonbones::DragonBonesImporter));
+        importers.register(Box::new(crate::psd::PsdImporter));
         importers
     }
 

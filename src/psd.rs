@@ -813,3 +813,127 @@ mod tests {
         assert!(!options.wants("head"));
     }
 }
+
+/// PSD, as a registered importer.
+///
+/// Layered artwork rather than a rig format, and the difference shows: a PSD has
+/// no animations and no constraints, so this produces a skeleton and images and
+/// nothing else. The editor's own panel additionally offers *merging* into an
+/// open document, which the registry has no way to express — an importer returns
+/// a rig, and merging is a different question.
+///
+/// Registered anyway, because the options are parameters rather than a
+/// conversation: every one has a default that produces a usable rig, so a script
+/// or an MCP client can import a PSD without a UI and refine afterwards.
+pub struct PsdImporter;
+
+impl crate::importer::Importer for PsdImporter {
+    fn id(&self) -> &'static str {
+        "import.psd"
+    }
+
+    fn label(&self) -> &str {
+        "Photoshop PSD"
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["psd"]
+    }
+
+    fn options_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "scale": {
+                    "type": "number", "default": 1,
+                    "description": "World units per PSD pixel"
+                },
+                "skip_hidden": {
+                    "type": "boolean", "default": true,
+                    "description": "Skip layers hidden in Photoshop — usually references"
+                },
+                "include": {
+                    "type": "array", "items": { "type": "string" },
+                    "description": "Layer paths to import; omit for everything"
+                },
+                "flatten": {
+                    "type": "array", "items": { "type": "string" },
+                    "description": "Groups to collapse into one attachment rather than a bone tree"
+                }
+            }
+        })
+    }
+
+    fn read(&self, path: &std::path::Path) -> Result<crate::Loaded, crate::importer::ImportError> {
+        self.read_with(path, &serde_json::Value::Null)
+    }
+
+    fn read_with(
+        &self,
+        path: &std::path::Path,
+        options: &serde_json::Value,
+    ) -> Result<crate::Loaded, crate::importer::ImportError> {
+        use crate::importer::ImportError;
+
+        let bytes = std::fs::read(path)
+            .map_err(|e| ImportError::Io(format!("could not read {}: {e}", path.display())))?;
+
+        let strings = |key: &str| -> std::collections::HashSet<String> {
+            options
+                .get(key)
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let opts = ImportOptions {
+            scale: options.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
+            include: strings("include"),
+            flatten: strings("flatten"),
+            skip_hidden: options
+                .get("skip_hidden")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+        };
+
+        let imported = import(&bytes, &opts).map_err(|e| match e {
+            // The reader does not distinguish "not a PSD" from "a PSD that
+            // will not parse", and the extension has already narrowed it — so a
+            // `.psd` this cannot read is reported as not ours rather than as
+            // broken, and a caller trying several importers moves on.
+            PsdError::Parse(_) => ImportError::NotThisFormat,
+            // Empty is different: it parsed, it is a PSD, and it has nothing in
+            // it. Saying "not that format" there would send the user hunting.
+            other => ImportError::Malformed(other.to_string()),
+        })?;
+
+        let mut report = crate::convert::LoadReport::default();
+        for skipped in &imported.summary.skipped {
+            report.lossy(
+                "layer",
+                skipped,
+                "this layer produced no attachment — it is empty, hidden, or an \
+                 adjustment rather than pixels",
+            );
+        }
+
+        Ok(crate::Loaded {
+            skeleton: imported.skeleton,
+            // A PSD carries artwork and no motion, which is the honest answer
+            // rather than an empty clip nobody asked for.
+            animations: ankhimate_core::slotmap::SlotMap::with_key(),
+            assets: imported.assets,
+            name: path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("imported")
+                .to_string(),
+            fps: 30,
+            export_presets: Vec::new(),
+            report,
+        })
+    }
+}

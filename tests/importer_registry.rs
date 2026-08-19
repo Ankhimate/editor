@@ -176,3 +176,63 @@ fn a_plugin_registers_through_the_same_door_a_built_in_does() {
         "and it is offered for its own extension"
     );
 }
+
+#[test]
+fn psd_is_registered_and_offers_its_own_extension() {
+    // Layered artwork rather than a rig format, but it fits the registry
+    // because its options are parameters with defaults rather than a
+    // conversation — so a script can import one without a UI.
+    let importers = Importers::builtin();
+    let psd = importers.get("import.psd").expect("registered");
+
+    assert_eq!(psd.extensions(), ["psd"]);
+    assert_eq!(
+        importers.claiming(Path::new("art.psd")).count(),
+        1,
+        "and nothing else claims it"
+    );
+}
+
+#[test]
+fn an_importer_with_options_describes_them() {
+    // What a plugin author reads instead of the source, and what an MCP client
+    // lists a tool from. An importer with options and no schema is one nobody
+    // can drive unattended.
+    let importers = Importers::builtin();
+    let schema = importers.get("import.psd").unwrap().options_schema();
+
+    assert!(schema["properties"]["scale"].is_object(), "{schema}");
+    assert!(schema["properties"]["skip_hidden"].is_object());
+}
+
+#[test]
+fn an_importer_without_options_says_so() {
+    // Spine takes none, and `Null` is how that reads — an empty object would
+    // suggest options nobody can pass.
+    let importers = Importers::builtin();
+    assert!(
+        importers
+            .get("import.spine")
+            .unwrap()
+            .options_schema()
+            .is_null(),
+        "no options is not the same as an empty set of them"
+    );
+}
+
+#[test]
+fn a_psd_that_will_not_parse_is_not_claimed() {
+    // Every `.psd` reaching `read_any` should be tried and moved past rather
+    // than reported as a broken PSD — the reader cannot tell the two apart, and
+    // "not that format" is the answer that lets a caller keep looking.
+    use ankhimate_formats::ImportError;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "notes.psd", "this is not a psd at all");
+
+    let importers = Importers::builtin();
+    let Err(err) = importers.get("import.psd").unwrap().read(&path) else {
+        panic!("a text file should not read as a PSD");
+    };
+    assert!(matches!(err, ImportError::NotThisFormat), "{err}");
+}
