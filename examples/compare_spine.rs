@@ -36,6 +36,7 @@ fn main() {
         name: &loaded.name,
         fps: loaded.fps,
         export_presets: &loaded.export_presets,
+        psd_layer_paths: &Default::default(),
     };
 
     // Setup pose: no animation applied, which is what an importer shows first.
