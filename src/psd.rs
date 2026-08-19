@@ -58,6 +58,29 @@ fn tags_of(raw: &str) -> crate::psd_tags::Tags {
     tags
 }
 
+/// The rectangle covering every one of `parts`, or nothing when there are none.
+fn union_of(parts: impl Iterator<Item = (i32, i32, u32, u32)>) -> (i32, i32, u32, u32) {
+    let (mut min_x, mut min_y) = (i32::MAX, i32::MAX);
+    let (mut max_x, mut max_y) = (i32::MIN, i32::MIN);
+    let mut any = false;
+    for (x, y, w, h) in parts {
+        any = true;
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x + w as i32);
+        max_y = max_y.max(y + h as i32);
+    }
+    if !any {
+        return (0, 0, 0, 0);
+    }
+    (
+        min_x,
+        min_y,
+        (max_x - min_x).max(0) as u32,
+        (max_y - min_y).max(0) as u32,
+    )
+}
+
 /// Layer whose position defines its group's bone origin.
 pub const PIVOT_LAYER: &str = "$pivot";
 /// Group-name prefix that asks for an IK constraint over the bones inside.
@@ -182,13 +205,23 @@ pub fn layer_tree(bytes: &[u8]) -> Result<Vec<LayerNode>, PsdError> {
             .get(id)
             .cloned()
             .unwrap_or_else(|| group.name().into());
+        // A group's extent is the union of what is inside it. The `psd` crate
+        // reports `1x1` for a group's own rectangle — measured, not assumed —
+        // and this used to hardcode `0x0`, so either way a caller reading these
+        // bounds got a number that meant nothing.
+        let (left, top, width, height) = union_of(
+            psd.get_group_sub_layers(id)
+                .unwrap_or_default()
+                .iter()
+                .map(|l| layer_bounds(l)),
+        );
         nodes.push(LayerNode {
             depth: path.matches('/').count(),
             path: path.clone(),
             name: group.name().to_string(),
             is_group: true,
             visible: shown(group),
-            bounds: (0, 0, 0, 0),
+            bounds: (left, top, width, height),
         });
         for layer in psd.get_group_sub_layers(id).unwrap_or_default() {
             nodes.push(node_for(layer, &format!("{path}/{}", layer.name())));
