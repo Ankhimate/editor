@@ -26,7 +26,7 @@
 
 use ankhimate_core::assets::{AssetDb, ImageAsset};
 use ankhimate_core::attachment::{Attachment, Rect, RegionAttachment};
-use ankhimate_core::constraints::{Constraint, IkConstraint};
+use ankhimate_core::constraints::{Constraint, IkConstraint, PhysicsConstraint};
 use ankhimate_core::ids::{BoneId, SkinId, SlotId};
 use ankhimate_core::math::Transform;
 use ankhimate_core::skeleton::{Bone, Skeleton};
@@ -336,6 +336,29 @@ pub struct PsdImport {
     pub summary: ImportSummary,
     /// Layer path per slot, so a re-import can find the same layer again.
     pub layer_paths: HashMap<String, String>,
+    /// Attachments a `[mesh]` tag asked to be traced, as attachment names.
+    ///
+    /// A request rather than a result, because the tracer lives in `document`
+    /// and `formats` cannot reach it: `core` is the runtime contract and stays
+    /// dependency-light (PLAN §3.1), so moving `meshgen` down to make this
+    /// crate's life easier would drag `spade` and `image` into the crate that
+    /// has to compile for `wasm32`. Marking the layers costs one field; the
+    /// alternative costs `core` its shape.
+    pub trace_requests: Vec<TraceRequest>,
+}
+
+/// One `[mesh]` layer, and what its tags asked for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraceRequest {
+    /// The attachment to replace with a traced mesh.
+    pub attachment: String,
+    /// The slot it hangs from.
+    pub slot: String,
+    /// `[mesh:n]` — how closely the outline follows the pixels, 0–100. The
+    /// tracer's own default when the tag is bare.
+    pub detail: Option<f32>,
+    /// `[weights]` — bind the traced vertices to the bones around them.
+    pub weights: bool,
 }
 
 /// What changed when a PSD was re-imported over an existing document.
@@ -495,6 +518,7 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
     let mut layer_paths = HashMap::new();
     let mut frame_images: HashMap<String, String> = HashMap::new();
     let mut leads: HashMap<String, (SkinId, SlotId, String)> = HashMap::new();
+    let mut trace_requests: Vec<TraceRequest> = Vec::new();
 
     // Read the file's own structure before building anything, so a guess is
     // made against the whole tree rather than against whatever has been seen so
@@ -621,6 +645,7 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
                         layer_paths: &mut layer_paths,
                         frame_images: &mut frame_images,
                         leads: &mut leads,
+                        trace_requests: &mut trace_requests,
                     },
                     &plan,
                     skin_id,
@@ -662,6 +687,7 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
                         layer_paths: &mut layer_paths,
                         frame_images: &mut frame_images,
                         leads: &mut leads,
+                        trace_requests: &mut trace_requests,
                     },
                     &plan,
                     default_skin,
@@ -760,6 +786,7 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
                     layer_paths: &mut layer_paths,
                     frame_images: &mut frame_images,
                     leads: &mut leads,
+                    trace_requests: &mut trace_requests,
                 },
                 &plan,
                 default_skin,
@@ -787,6 +814,7 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
                 layer_paths: &mut layer_paths,
                 frame_images: &mut frame_images,
                 leads: &mut leads,
+                trace_requests: &mut trace_requests,
             },
             &plan,
             default_skin,
@@ -805,9 +833,13 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
         let Some(group) = psd.groups().get(id) else {
             continue;
         };
-        if !group.name().starts_with(IK_PREFIX) {
+        // Read through `tags_of`, not off the raw name: `$ik ` is an alias
+        // into `[ik:name]` and matching the prefix here meant the alias worked
+        // while the tag it aliases to did nothing.
+        let group_tags = tags_of(group.name());
+        let Some(ik_name) = group_tags.value_or_name("ik").map(str::to_string) else {
             continue;
-        }
+        };
         let Some(path) = paths.get(id) else { continue };
         let Some(&start) = bones.get(path) else {
             continue;
@@ -823,7 +855,7 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
         let tip_origin = world_origin(&skeleton, tip);
         let target = skeleton.add_bone(Bone {
             name: ankhimate_core::skeleton::unique_name(
-                &format!("{}_target", group.name().trim_start_matches(IK_PREFIX)),
+                &format!("{ik_name}_target"),
                 skeleton.bones.iter().map(|(_, b)| b.name.as_str()),
             ),
             parent: None,
@@ -837,7 +869,7 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
         });
         summary.bones += 1;
         skeleton.add_constraint(Constraint::Ik(IkConstraint {
-            name: group.name().trim_start_matches(IK_PREFIX).to_string(),
+            name: ik_name.clone(),
             target,
             bones: chain,
             bend_direction: 1.0,
@@ -848,6 +880,66 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
             stiffness: 0.0,
         }));
         summary.constraints += 1;
+    }
+
+    // `[physics]` on a group: every bone in it sways. A cape, a ponytail and a
+    // chain of cloth are all the same request, and all of them are chains — so
+    // the constraint goes on each bone rather than on the group's own, or only
+    // the top of the cape would move.
+    for id in psd.group_ids_in_order() {
+        let Some(group) = psd.groups().get(id) else {
+            continue;
+        };
+        let group_tags = tags_of(group.name());
+        if !group_tags.has("physics") {
+            continue;
+        }
+        let Some(path) = paths.get(id) else { continue };
+        let Some(&start) = bones.get(path) else {
+            continue;
+        };
+
+        // `[physics:cloth]` names a preset. A number would have to be seven
+        // numbers, and a layer name is not the place to tune a simulation —
+        // the inspector is. What a tag can usefully say is *what kind of thing
+        // this is*.
+        let preset = group_tags.value("physics").unwrap_or("cloth");
+        let Some(settings) = physics_preset(preset) else {
+            summary
+                .unknown_tags
+                .push((path.clone(), format!("physics:{preset}")));
+            continue;
+        };
+
+        let chain = descendant_chain(&skeleton, start);
+        let chain = if chain.is_empty() { vec![start] } else { chain };
+        for (depth, bone) in chain.iter().enumerate() {
+            let bone_name = skeleton
+                .bones
+                .get(*bone)
+                .map(|b| b.name.clone())
+                .unwrap_or_default();
+            skeleton.add_constraint(Constraint::Physics(PhysicsConstraint {
+                name: ankhimate_core::skeleton::unique_name(
+                    &format!("{bone_name}_physics"),
+                    skeleton.constraints.iter().map(|(_, c)| c.name()),
+                ),
+                bone: *bone,
+                // Further down the chain sways more: the tip of a cape moves
+                // more than where it attaches. Without this every link responds
+                // identically and the whole thing swings as one board.
+                inertia: (settings.inertia + depth as f32 * 0.05).min(0.95),
+                strength: settings.strength,
+                damping: settings.damping,
+                mass: settings.mass,
+                wind: glam::Vec2::ZERO,
+                gravity: settings.gravity,
+                mix: 1.0,
+                rotate: true,
+                translate: false,
+            }));
+            summary.constraints += 1;
+        }
     }
 
     // Sequences, once every layer is in. A run is ordered by number and the
@@ -868,6 +960,7 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
         assets,
         summary,
         layer_paths,
+        trace_requests,
     })
 }
 
@@ -990,6 +1083,8 @@ struct Sink<'a> {
     /// imported after it. Frames arrive in stacking order and a run is ordered
     /// by number, so the sequence cannot be assembled until every layer is in.
     frame_images: &'a mut HashMap<String, String>,
+    /// `[mesh]` layers, gathered for the caller to trace.
+    trace_requests: &'a mut Vec<TraceRequest>,
     /// Where a run lead's attachment landed, so the sequence can be put on it
     /// once the frames are known. `Skin` has no by-texture lookup and adding
     /// one to `core` for an importer's convenience is the wrong place for it.
@@ -1135,6 +1230,20 @@ fn add_layer(
         name.clone(),
         region(name.clone(), offset, w as f32 * scale, h as f32 * scale),
     );
+    // `[mesh]` is a request, not a result: the tracer is in `document`. The
+    // attachment is imported as a region either way, so a build that ignores
+    // the request still gets a working rig — a tag that half-applies would be
+    // worse than one that does nothing.
+    if tags.has("mesh") {
+        sink.trace_requests.push(TraceRequest {
+            attachment: name.clone(),
+            slot: skeleton.slots[slot].name.clone(),
+            // `[mesh:70]` is the detail dial; bare `[mesh]` takes the tracer's
+            // own default rather than a number invented here.
+            detail: tags.number("mesh"),
+            weights: tags.has("weights"),
+        });
+    }
     if is_lead {
         sink.leads.insert(path.to_string(), (skin, slot, name));
     }
@@ -1203,6 +1312,58 @@ fn apply_sequences(
             );
         }
         summary.sequences.push((run.stem.clone(), count));
+    }
+}
+
+/// Named physics presets for `[physics:<kind>]`.
+///
+/// A tag names a *kind of thing*, not seven numbers: a layer name is not where
+/// a simulation gets tuned, and `[physics:0.3,0.8,0.4,1,0,-9.8,1]` would be
+/// unreadable and unmaintainable both. These are starting points the inspector
+/// refines.
+struct PhysicsPreset {
+    inertia: f32,
+    strength: f32,
+    damping: f32,
+    mass: f32,
+    gravity: glam::Vec2,
+}
+
+fn physics_preset(name: &str) -> Option<PhysicsPreset> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        // Light, hangs, settles slowly.
+        "cloth" | "cape" | "skirt" => Some(PhysicsPreset {
+            inertia: 0.6,
+            strength: 0.35,
+            damping: 0.75,
+            mass: 1.0,
+            gravity: glam::Vec2::new(0.0, -9.8),
+        }),
+        // Stiffer and lighter than cloth, and it barely falls.
+        "hair" | "ponytail" => Some(PhysicsPreset {
+            inertia: 0.5,
+            strength: 0.6,
+            damping: 0.8,
+            mass: 0.6,
+            gravity: glam::Vec2::new(0.0, -4.0),
+        }),
+        // Heavy and quick to stop: a sword on a belt, a pouch.
+        "dangle" | "chain" => Some(PhysicsPreset {
+            inertia: 0.7,
+            strength: 0.5,
+            damping: 0.6,
+            mass: 2.0,
+            gravity: glam::Vec2::new(0.0, -9.8),
+        }),
+        // No gravity at all — a floating antenna or a tail that follows.
+        "float" | "tail" => Some(PhysicsPreset {
+            inertia: 0.65,
+            strength: 0.4,
+            damping: 0.85,
+            mass: 0.8,
+            gravity: glam::Vec2::ZERO,
+        }),
+        _ => None,
     }
 }
 
@@ -1387,6 +1548,47 @@ mod tests {
         options.include.insert("torso".into());
         assert!(options.wants("torso"));
         assert!(!options.wants("head"));
+    }
+    #[test]
+    fn every_named_physics_kind_resolves_and_an_unknown_one_does_not() {
+        // The reader, not the grammar: an unknown kind must return `None` so the
+        // caller reports it. Quietly picking cloth for `[physics:jelly]` is a rig
+        // that moves wrongly for a reason nobody can find.
+        for kind in [
+            "cloth", "cape", "skirt", "hair", "ponytail", "dangle", "chain", "float", "tail",
+        ] {
+            assert!(
+                physics_preset(kind).is_some(),
+                "`{kind}` is offered in the docs and resolves to nothing"
+            );
+        }
+        assert!(physics_preset("jelly").is_none());
+        assert!(
+            physics_preset("CLOTH").is_some(),
+            "the kind folds case, like every other tag value that names a thing"
+        );
+    }
+
+    #[test]
+    fn the_physics_presets_differ_from_one_another() {
+        // Four names for one set of numbers would be a worse API than one name:
+        // it promises a distinction the rig does not have.
+        let cloth = physics_preset("cloth").expect("cloth");
+        let hair = physics_preset("hair").expect("hair");
+        let float = physics_preset("float").expect("float");
+
+        assert!(
+            hair.mass < cloth.mass,
+            "hair is lighter than cloth: {} vs {}",
+            hair.mass,
+            cloth.mass
+        );
+        assert_eq!(
+            float.gravity,
+            glam::Vec2::ZERO,
+            "a floating thing does not fall"
+        );
+        assert!(cloth.gravity.y < 0.0, "and cloth does");
     }
 }
 

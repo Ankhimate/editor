@@ -454,6 +454,18 @@ fn run_import(state: &mut AppState, pending: &PendingPsd) {
         }
     };
 
+    // `[mesh]` and `[weights]`, applied before the import is dispatched. The
+    // tracer lives in `document` because `core` stays dependency-light, so the
+    // reader marked the layers and this is where the marks become meshes —
+    // done here rather than as separate commands so twelve tagged layers are
+    // one undo step rather than thirteen.
+    let mut imported = imported;
+    let (traced, not_traced) = ankhimate_document::psd_mesh::apply(
+        &mut imported.skeleton,
+        &imported.assets,
+        &imported.trace_requests,
+    );
+
     let summary = imported.summary.clone();
     let command = ankhimate_document::commands::psd_cmds::ImportPsd::new(
         imported,
@@ -461,7 +473,9 @@ fn run_import(state: &mut AppState, pending: &PendingPsd) {
         pending.name.clone(),
     );
     if state.dispatch(Box::new(command)) {
-        state.session.set_status(import_status(&summary));
+        state
+            .session
+            .set_status(import_status(&summary, &traced, &not_traced));
     }
 }
 
@@ -471,7 +485,11 @@ fn run_import(state: &mut AppState, pending: &PendingPsd) {
 /// handed over five layers and got one slot back, and a blend mode this model
 /// cannot express means a layer will draw differently here than it did in
 /// Photoshop. Both are things they should hear about without opening a panel.
-fn import_status(summary: &ankhimate_formats::psd::ImportSummary) -> String {
+fn import_status(
+    summary: &ankhimate_formats::psd::ImportSummary,
+    traced: &[ankhimate_document::psd_mesh::Traced],
+    not_traced: &[ankhimate_document::psd_mesh::NotTraced],
+) -> String {
     let mut line = format!(
         "Imported {} bones, {} slots, {} images",
         summary.bones, summary.slots, summary.images
@@ -482,6 +500,22 @@ fn import_status(summary: &ankhimate_formats::psd::ImportSummary) -> String {
         notes.push(format!(
             "{} sequence(s) over {frames} frames",
             summary.sequences.len()
+        ));
+    }
+    if !traced.is_empty() {
+        let weighted = traced.iter().filter(|t| t.weighted).count();
+        notes.push(match weighted {
+            0 => format!("{} mesh(es) traced", traced.len()),
+            n => format!("{} mesh(es) traced, {n} weighted", traced.len()),
+        });
+    }
+    // A `[mesh]` that produced nothing is named, not counted: the artist tagged
+    // a specific layer and got a plain region back, and "one failed" does not
+    // tell them which.
+    for failure in not_traced.iter().take(3) {
+        notes.push(format!(
+            "{} not traced: {}",
+            failure.attachment, failure.because
         ));
     }
     if !summary.lost_blend.is_empty() {
@@ -626,7 +660,7 @@ mod tests {
             lost_blend: vec![("cape".into(), "Overlay".into())],
             ..Default::default()
         };
-        let line = import_status(&summary);
+        let line = import_status(&summary, &[], &[]);
         assert!(line.contains("1 sequence(s) over 3 frames"), "{line}");
         assert!(line.contains("1 blend mode(s)"), "{line}");
     }
@@ -636,12 +670,16 @@ mod tests {
         // The parenthetical is for things that happened. A rig that came across
         // whole should not read as though something went wrong.
         use ankhimate_formats::psd::ImportSummary;
-        let line = import_status(&ImportSummary {
-            bones: 2,
-            slots: 2,
-            images: 2,
-            ..Default::default()
-        });
+        let line = import_status(
+            &ImportSummary {
+                bones: 2,
+                slots: 2,
+                images: 2,
+                ..Default::default()
+            },
+            &[],
+            &[],
+        );
         assert_eq!(line, "Imported 2 bones, 2 slots, 2 images");
     }
 }
