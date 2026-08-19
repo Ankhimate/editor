@@ -198,6 +198,23 @@ ankhimate.registerExporter({
 | `ankhimate.registerExporter(spec)` | Declare a format this plugin writes |
 | `emit(path, contents)` | A text file, relative to the output directory |
 | `emitBytes(path, base64)` | A binary one |
+| `bakeAtlas(settings)` | Pack the rig's images; pages as base64 PNG, regions as metadata |
+
+`bakeAtlas` is what lets a plugin produce a real engine format. Most runtime
+formats want a packed atlas, and a script has neither pixels nor a rectangle
+packer — writing one in JS would be slower and worse than the baker that already
+ships. Settings are `trim`, `padding`, `extrude`, `max_page`, `power_of_two` and
+`allow_rotation`; omitted ones take the same defaults a preset gets.
+
+```js
+const atlas = bakeAtlas({ padding: 2 });
+for (const page of atlas.pages) emitBytes(`atlas_${page.index}.png`, page.png_base64);
+emit("atlas.json", JSON.stringify(atlas.regions));
+```
+
+A bake that fails returns `{ error }` rather than throwing, so a rig with one
+undecodable image lets a plugin write the rest and say what was missing — the
+same choice the importers make with their report.
 
 **A plugin never touches the disk.** It emits, and the host builds the same
 `Plan` the template path produces — so path confinement, the all-or-nothing

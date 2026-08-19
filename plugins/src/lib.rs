@@ -392,6 +392,24 @@ impl Host {
                 })?,
             )?;
 
+            // ── atlas.bake ───────────────────────────────────────────────
+            // The one thing a plugin exporter could not produce. Most runtime
+            // formats want a packed atlas, and a script cannot pack one: it has
+            // no pixels and no rectangle packer, and writing one in JS would be
+            // slower and worse than the baker that already ships.
+            //
+            // Returns metadata as JSON and pages as base64 PNG, so the script
+            // decides the layout and `emitBytes` writes them — the plugin still
+            // never touches the disk.
+            let bake_doc = cell.clone();
+            ank.set(
+                "bakeAtlas",
+                Function::new(ctx.clone(), move |settings_json: String| -> String {
+                    let borrowed = bake_doc.borrow();
+                    bake_atlas(&borrowed.doc, &settings_json)
+                })?,
+            )?;
+
             global.set("__ankhimate", ank)?;
 
             // A thin JS shim so a plugin writes objects rather than JSON text.
@@ -428,6 +446,8 @@ impl Host {
                   __ankhimate.declareExporter(spec.id, spec.label ?? spec.id);
                 };
                 globalThis.emit = (path, contents) => __ankhimate.emit(path, String(contents));
+                globalThis.bakeAtlas = (settings) =>
+                  JSON.parse(__ankhimate.bakeAtlas(JSON.stringify(settings ?? {})));
                 globalThis.emitBytes = (path, base64) => __ankhimate.emitBytes(path, base64);
                 globalThis.__ankhimate_run_export = () => {
                   const ids = Object.keys(__exporters);
@@ -666,4 +686,75 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+/// Pack a document's images and hand the result back as JSON.
+///
+/// Pages arrive base64-encoded so a script can pass them straight to
+/// `emitBytes`; regions arrive as the same shape `docs/export-context.md`
+/// documents, so an exporter and a template describe an atlas identically.
+///
+/// A failure is reported in the returned object rather than thrown. A rig with
+/// one undecodable image should let a plugin write the rest and say what was
+/// missing, which is the same choice the importers make with `LoadReport`.
+fn bake_atlas(doc: &ankhimate_document::Document, settings_json: &str) -> String {
+    use ankhimate_export::atlas::{AtlasSettings, bake};
+
+    let given: serde_json::Value =
+        serde_json::from_str(settings_json).unwrap_or(serde_json::Value::Null);
+    let number = |key: &str, default: u32| -> u32 {
+        given
+            .get(key)
+            .and_then(|v| v.as_u64())
+            .unwrap_or(default as u64) as u32
+    };
+    let flag = |key: &str, default: bool| -> bool {
+        given.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+    };
+    let defaults = AtlasSettings::default();
+    let settings = AtlasSettings {
+        trim: flag("trim", defaults.trim),
+        padding: number("padding", defaults.padding),
+        extrude: number("extrude", defaults.extrude),
+        max_page: number("max_page", defaults.max_page),
+        power_of_two: flag("power_of_two", defaults.power_of_two),
+        allow_rotation: flag("allow_rotation", defaults.allow_rotation),
+    };
+
+    let atlas = match bake(&doc.assets, &settings) {
+        Ok(atlas) => atlas,
+        Err(e) => {
+            return serde_json::json!({ "error": format!("{e:?}") }).to_string();
+        }
+    };
+
+    let pages: Vec<serde_json::Value> = atlas
+        .pages
+        .iter()
+        .map(|page| {
+            let mut bytes = Vec::new();
+            let encoded = image::DynamicImage::ImageRgba8(page.pixels.clone())
+                .write_to(
+                    &mut std::io::Cursor::new(&mut bytes),
+                    image::ImageFormat::Png,
+                )
+                .is_ok();
+            serde_json::json!({
+                "index": page.index,
+                "width": page.width,
+                "height": page.height,
+                "png_base64": if encoded {
+                    crate::importer::encode_base64(&bytes)
+                } else {
+                    String::new()
+                },
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "pages": pages,
+        "regions": atlas.regions,
+    })
+    .to_string()
 }
