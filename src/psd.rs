@@ -941,6 +941,17 @@ fn layer_rgba(layer: &psd::PsdLayer) -> Option<Vec<u8>> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| layer.rgba())).ok()
 }
 
+/// Is there anything to see in this PNG?
+///
+/// Decoded rather than read off the layer's bounds: Photoshop's bounds describe
+/// the region the layer *may* paint, and a cleared layer keeps them.
+fn has_visible_pixels(png: &[u8]) -> bool {
+    let Ok(image) = image::load_from_memory(png) else {
+        return true;
+    };
+    image.to_rgba8().pixels().any(|p| p.0[3] > 0)
+}
+
 /// Crop one layer out of the canvas-sized buffer the reader hands back.
 fn layer_png(layer: &psd::PsdLayer, canvas: (u32, u32)) -> Option<(Vec<u8>, u32, u32)> {
     let (left, top, width, height) = layer_bounds(layer);
@@ -1043,6 +1054,18 @@ fn add_layer(
         summary.skipped.push(format!("{path} (no pixels)"));
         return;
     };
+    // A layer with nothing visible in it is not art. Photoshop leaves these
+    // behind — an empty `Layer 1` from a stray click, a layer whose content was
+    // deleted rather than the layer — and each one imported is a slot the
+    // artist has to find and delete in a rig they did not make.
+    //
+    // Checked on the alpha rather than on the size: the stray layer in the test
+    // fixture is 1x1, so a size threshold would have to guess where "too small"
+    // begins, and a genuinely tiny piece of art does exist.
+    if !has_visible_pixels(&bytes) {
+        summary.skipped.push(format!("{path} (fully transparent)"));
+        return;
+    }
 
     // `[slot:name]` names the slot; the tags are stripped either way, so a layer
     // called `arm [mesh]` becomes `arm` rather than carrying its own markup.
