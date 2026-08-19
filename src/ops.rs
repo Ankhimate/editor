@@ -106,6 +106,7 @@ impl DocOps {
         let mut ops = Self::new();
         crate::doc_ops::register(&mut ops);
         crate::import_ops::register(&mut ops);
+        crate::constraint_ops::register(&mut ops);
         ops
     }
 
