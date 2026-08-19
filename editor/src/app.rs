@@ -146,7 +146,7 @@ impl AnkhimateApp {
         let torn_off: Vec<Tab> = config
             .torn_off
             .iter()
-            .filter_map(|name| Tab::from_title(name))
+            .filter_map(|name| Tab::from_saved(name))
             .filter(|t| t.can_tear_off())
             .collect();
 
@@ -297,9 +297,9 @@ impl AnkhimateApp {
     }
 
     /// The tile id of a pane, if it is still in the tree at all.
-    fn find_pane(&self, tab: crate::ui::Tab) -> Option<egui_tiles::TileId> {
+    fn find_pane(&self, tab: &crate::ui::Tab) -> Option<egui_tiles::TileId> {
         self.tree.tiles.iter().find_map(|(id, tile)| match tile {
-            egui_tiles::Tile::Pane(pane) if *pane == tab => Some(*id),
+            egui_tiles::Tile::Pane(pane) if pane == tab => Some(*id),
             _ => None,
         })
     }
@@ -859,7 +859,7 @@ impl eframe::App for AnkhimateApp {
                             ui.menu_button("View", |ui| {
                                 ui.set_min_width(210.0);
                                 let animating = self.state.session.is_animating();
-                                for tab in crate::ui::Tab::ALL {
+                                for tab in crate::ui::Tab::ALL.iter() {
                                     let found = self.find_pane(tab);
                                     let mut on = found.is_some_and(|id| self.tree.is_visible(id));
                                     let label = format!("{}  {}", tab.icon(), tab.title());
@@ -880,7 +880,7 @@ impl eframe::App for AnkhimateApp {
                                             // The pane was removed from the tree
                                             // entirely rather than hidden, so
                                             // ticking it has to put one back.
-                                            None => self.add_pane(tab),
+                                            None => self.add_pane(tab.clone()),
                                         }
                                     }
                                 }
@@ -924,7 +924,7 @@ impl eframe::App for AnkhimateApp {
                                 // list: fourteen panes would bury the rest of
                                 // the View menu.
                                 ui.menu_button("Open in a window", |ui| {
-                                    for tab in Tab::ALL {
+                                    for tab in Tab::ALL.iter().cloned() {
                                         if !tab.can_tear_off() {
                                             continue;
                                         }
@@ -1130,8 +1130,8 @@ impl eframe::App for AnkhimateApp {
         // A tool asked for a pane to be brought forward — double-clicking art
         // opening the slot editor, say. Consumed here, once.
         if let Some(tab) = self.state.session.focus_tab.take() {
-            if self.find_pane(tab).is_none() {
-                self.add_pane(tab);
+            if self.find_pane(&tab).is_none() {
+                self.add_pane(tab.clone());
             }
             self.tree.make_active(
                 |_, tile| matches!(tile, egui_tiles::Tile::Pane(pane) if *pane == tab),
@@ -1711,7 +1711,7 @@ impl AnkhimateApp {
                                     // The same call the docked tile makes, so a
                                     // panel cannot behave differently for being
                                     // in another window.
-                                    behavior.pane_contents(ui, tab);
+                                    behavior.pane_contents(ui, &tab);
                                 },
                             );
                         });
@@ -1719,7 +1719,7 @@ impl AnkhimateApp {
                     // destroying it: a panel is not a document, and losing one
                     // to a misclick should cost a menu item, not the layout.
                     if ctx.input(|i| i.viewport().close_requested()) {
-                        closed.push(tab);
+                        closed.push(tab.clone());
                     }
                 },
             );
@@ -1832,11 +1832,7 @@ impl AnkhimateApp {
 
     /// Persist which panes are torn off, so a second monitor stays set up.
     fn save_torn_off(&mut self) {
-        self.config.torn_off = self
-            .torn_off
-            .iter()
-            .map(|t| t.title().to_string())
-            .collect();
+        self.config.torn_off = self.torn_off.iter().map(|t| t.saved_name()).collect();
         self.config.save();
     }
 
@@ -1916,9 +1912,9 @@ mod view_menu_tests {
     #[test]
     fn the_default_layout_holds_every_pane() {
         let app = AnkhimateApp::default();
-        for tab in Tab::ALL {
+        for tab in Tab::ALL.iter().cloned() {
             assert!(
-                app.find_pane(tab).is_some(),
+                app.find_pane(&tab).is_some(),
                 "{tab:?} is missing from the default layout, so View could not show it"
             );
         }
@@ -1931,7 +1927,7 @@ mod view_menu_tests {
     #[test]
     fn closing_the_uv_tab_drops_its_target() {
         let mut app = AnkhimateApp::default();
-        let id = app.find_pane(Tab::UvEditor).unwrap();
+        let id = app.find_pane(&Tab::UvEditor).unwrap();
         app.state.session.uv_pane = Some(crate::ui::uv::UvPane::new(
             app.state.doc.skeleton.default_skin,
             app.state
@@ -1955,7 +1951,7 @@ mod view_menu_tests {
             "target outlived the tab"
         );
         assert!(
-            app.find_pane(Tab::UvEditor).is_none(),
+            app.find_pane(&Tab::UvEditor).is_none(),
             "the tile is still in the tree"
         );
     }
@@ -1963,12 +1959,12 @@ mod view_menu_tests {
     #[test]
     fn hiding_a_pane_keeps_its_place_in_the_tree() {
         let mut app = AnkhimateApp::default();
-        let id = app.find_pane(Tab::Assets).unwrap();
+        let id = app.find_pane(&Tab::Assets).unwrap();
         app.tree.set_visible(id, false);
         assert!(!app.tree.is_visible(id));
         // Still findable, so ticking the box again shows the same pane rather
         // than grafting a second copy on.
-        assert_eq!(app.find_pane(Tab::Assets), Some(id));
+        assert_eq!(app.find_pane(&Tab::Assets), Some(id));
         app.tree.set_visible(id, true);
         assert!(app.tree.is_visible(id));
     }
@@ -1978,23 +1974,23 @@ mod view_menu_tests {
     #[test]
     fn a_removed_pane_can_be_added_back() {
         let mut app = AnkhimateApp::default();
-        let id = app.find_pane(Tab::Skins).unwrap();
+        let id = app.find_pane(&Tab::Skins).unwrap();
         app.tree.remove_recursively(id);
-        assert_eq!(app.find_pane(Tab::Skins), None);
+        assert_eq!(app.find_pane(&Tab::Skins), None);
 
         app.add_pane(Tab::Skins);
-        let restored = app.find_pane(Tab::Skins).expect("pane came back");
+        let restored = app.find_pane(&Tab::Skins).expect("pane came back");
         assert!(app.tree.is_visible(restored));
     }
 
     #[test]
     fn reset_layout_restores_everything() {
         let mut app = AnkhimateApp::default();
-        let id = app.find_pane(Tab::Timeline).unwrap();
+        let id = app.find_pane(&Tab::Timeline).unwrap();
         app.tree.remove_recursively(id);
         app.tree = AnkhimateApp::default_layout();
-        for tab in Tab::ALL {
-            assert!(app.find_pane(tab).is_some(), "{tab:?} did not come back");
+        for tab in Tab::ALL.iter().cloned() {
+            assert!(app.find_pane(&tab).is_some(), "{tab:?} did not come back");
         }
     }
 }
@@ -2005,7 +2001,8 @@ mod mode_visibility_tests {
     use crate::ui::Tab;
 
     fn is_shown(app: &AnkhimateApp, tab: Tab) -> bool {
-        app.find_pane(tab).is_some_and(|id| app.tree.is_visible(id))
+        app.find_pane(&tab)
+            .is_some_and(|id| app.tree.is_visible(id))
     }
 
     #[test]
@@ -2014,14 +2011,15 @@ mod mode_visibility_tests {
 
         app.state.session.work_mode = crate::session::WorkMode::Setup;
         app.apply_mode_visibility();
-        for tab in Tab::ALL {
-            assert_eq!(is_shown(&app, tab), !tab.is_animation(), "{tab:?} in Setup");
+        for tab in Tab::ALL.iter().cloned() {
+            let shown = is_shown(&app, tab.clone());
+            assert_eq!(shown, !tab.is_animation(), "{tab:?} in Setup");
         }
 
         app.state.session.work_mode = crate::session::WorkMode::Animate;
         app.apply_mode_visibility();
-        for tab in Tab::ALL {
-            assert!(is_shown(&app, tab), "{tab:?} in Animate");
+        for tab in Tab::ALL.iter().cloned() {
+            assert!(is_shown(&app, tab.clone()), "{tab:?} in Animate");
         }
     }
 

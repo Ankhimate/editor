@@ -27,7 +27,16 @@ pub mod weights;
 use eframe::egui;
 use egui_tiles::{Behavior, TileId, UiResponse};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// A pane the dock can hold.
+///
+/// **Not `Copy`, and deliberately so.** `Tab::Plugin` carries the panel's id,
+/// because the project's rule is that every extensible thing is looked up by
+/// name (`CLAUDE.md`) — a fixed slot with a side table would be a second way to
+/// say the same thing and a second place for the two to disagree.
+///
+/// The cost is that a tab is cloned rather than copied at 36 call sites. That is
+/// the honest price of a panel list that a plugin can add to.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Tab {
     Canvas,
     Inspector,
@@ -44,6 +53,8 @@ pub enum Tab {
     Events,
     Constraints,
     Export,
+    /// A panel a plugin contributes, by its dotted id.
+    Plugin(String),
 }
 
 impl Tab {
@@ -70,8 +81,25 @@ impl Tab {
         Tab::Export,
     ];
 
-    pub fn title(self) -> &'static str {
-        match self {
+    /// What the tab says.
+    ///
+    /// A `String` rather than `&'static str`: a plugin's title is read from its
+    /// own file at load time and cannot be a literal in ours.
+    pub fn title(&self) -> String {
+        self.builtin_title()
+            .map(str::to_string)
+            .unwrap_or_else(|| match self {
+                // The id is the fallback, not a placeholder: a panel whose
+                // plugin failed to load should name itself so the user can find
+                // what is missing.
+                Tab::Plugin(id) => id.clone(),
+                _ => unreachable!("every built-in has a title"),
+            })
+    }
+
+    /// The title of a built-in pane, or `None` for a plugin's.
+    fn builtin_title(&self) -> Option<&'static str> {
+        Some(match self {
             Tab::Canvas => "Viewport",
             Tab::Inspector => "Properties",
             Tab::Hierarchy => "Hierarchy",
@@ -87,7 +115,8 @@ impl Tab {
             Tab::Events => "Events",
             Tab::Constraints => "Constraints",
             Tab::Export => "Export",
-        }
+            Tab::Plugin(_) => return None,
+        })
     }
 
     /// The tab whose [`Tab::title`] is `title`, if any.
@@ -96,7 +125,26 @@ impl Tab {
     /// rather than the enum so a removed variant degrades to "not torn off"
     /// instead of failing the whole parse.
     pub fn from_title(title: &str) -> Option<Tab> {
-        Tab::ALL.into_iter().find(|t| t.title() == title)
+        Tab::ALL.iter().find(|t| t.title() == title).cloned()
+    }
+
+    /// The tab a saved layout named, built-in or plugin.
+    ///
+    /// A plugin panel's saved name is its **id**, not its title: a plugin that
+    /// renames its panel between sessions would otherwise lose every torn-off
+    /// window, and the id is the thing that does not change. A name matching no
+    /// built-in and containing a dot is read as an id, which is the same shape
+    /// verbs use and the one a plugin panel is required to have.
+    pub fn from_saved(name: &str) -> Option<Tab> {
+        Tab::from_title(name).or_else(|| name.contains('.').then(|| Tab::Plugin(name.into())))
+    }
+
+    /// What a saved layout should store for this tab.
+    pub fn saved_name(&self) -> String {
+        match self {
+            Tab::Plugin(id) => id.clone(),
+            _ => self.title(),
+        }
     }
 
     /// Can this pane be torn into its own OS window (T-910)?
@@ -106,7 +154,7 @@ impl Tab {
     /// pass into another window is its own piece of work — one I would rather
     /// not land untested behind a feature that otherwise only moves egui panels
     /// around.
-    pub fn can_tear_off(self) -> bool {
+    pub fn can_tear_off(&self) -> bool {
         !matches!(self, Tab::Canvas)
     }
 
@@ -115,14 +163,14 @@ impl Tab {
     /// Setup mode has no playhead and no active clip, so these show an
     /// invitation to switch modes and nothing else. Four cards of that is a lot
     /// of screen spent saying "not now".
-    pub fn is_animation(self) -> bool {
+    pub fn is_animation(&self) -> bool {
         matches!(
             self,
             Tab::Timeline | Tab::Graph | Tab::Animations | Tab::Events
         )
     }
 
-    pub fn icon(self) -> &'static str {
+    pub fn icon(&self) -> &'static str {
         match self {
             Tab::Canvas => crate::ui::icons::VIEWPORT,
             Tab::Inspector => crate::ui::icons::PROPERTIES,
@@ -133,6 +181,10 @@ impl Tab {
             Tab::Assets => crate::ui::icons::ASSETS,
             Tab::Skins => crate::ui::icons::SKIN,
             Tab::Export => crate::ui::icons::EXPORT,
+            // One glyph for every plugin panel. A per-panel icon would mean a
+            // plugin naming one from our set, which pins the icon font as a
+            // public contract for the sake of a decoration.
+            Tab::Plugin(_) => crate::ui::icons::PLUGIN,
             Tab::SlotEditor => crate::ui::icons::SLOT_EDITOR,
             Tab::UvEditor => crate::ui::icons::MESH,
             Tab::Weights => crate::ui::icons::WEIGHT_PAINT,
@@ -220,7 +272,7 @@ impl AppBehavior<'_> {
     /// calling the same code the docked tile does. Two copies of this match is
     /// how a panel starts behaving differently depending on which window it is
     /// in, which is the failure this whole feature has to avoid.
-    pub fn pane_contents(&mut self, ui: &mut egui::Ui, pane: Tab) {
+    pub fn pane_contents(&mut self, ui: &mut egui::Ui, pane: &Tab) {
         // Consistent inner margin for all non-canvas panels
         let margin = egui::Margin::same(8);
         match pane {
@@ -337,6 +389,21 @@ impl AppBehavior<'_> {
                     constraints::ui(ui, self.state);
                 });
             }
+            Tab::Plugin(id) => {
+                // Nothing loads plugins yet — the editor has only just gained
+                // the dependency, and the loader, the panel cache and the
+                // thumbnail lookup a `Thumbnails` widget needs are all their own
+                // piece of work. Saying so is better than an empty card, which
+                // reads as a panel that is broken rather than one not wired up.
+                egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "`{id}` is a plugin panel. The editor does not load                              plugins yet."
+                        ))
+                        .color(ui.visuals().weak_text_color()),
+                    );
+                });
+            }
         }
     }
 }
@@ -357,7 +424,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             },
             ui.visuals().panel_fill,
         );
-        self.pane_contents(ui, *pane);
+        self.pane_contents(ui, pane);
         // Round the card, by carving rather than by filling.
         //
         // Neither end of the card is ours to fill. egui_tiles paints the tab
@@ -863,5 +930,51 @@ mod compact_tab_tests {
                 "{tab:?} would collapse to an empty tab"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use super::Tab;
+
+    #[test]
+    fn a_plugin_panel_survives_a_saved_layout() {
+        // A torn-off panel is stored by name and read back on the next launch.
+        // Before `Tab::Plugin` existed the list was closed, so this is the round
+        // trip that has to work for the variant to be worth anything.
+        let tab = Tab::Plugin("tools.mirror".into());
+        let saved = tab.saved_name();
+        assert_eq!(Tab::from_saved(&saved), Some(tab));
+    }
+
+    #[test]
+    fn a_plugin_panel_is_saved_by_id_and_not_by_title() {
+        // The id is the thing that does not change. A plugin that renamed its
+        // panel between sessions would otherwise lose every torn-off window.
+        assert_eq!(
+            Tab::Plugin("tools.mirror".into()).saved_name(),
+            "tools.mirror"
+        );
+    }
+
+    #[test]
+    fn a_built_in_pane_still_round_trips_by_title() {
+        // The change must not break the layouts users already have saved.
+        for tab in Tab::ALL {
+            let saved = tab.saved_name();
+            assert_eq!(
+                Tab::from_saved(&saved),
+                Some(tab.clone()),
+                "`{saved}` did not come back"
+            );
+        }
+    }
+
+    #[test]
+    fn a_saved_name_that_is_neither_reads_as_nothing() {
+        // A pane removed from a future build should degrade to "not torn off"
+        // rather than failing the whole config parse — the reason `from_title`
+        // stores names in the first place.
+        assert_eq!(Tab::from_saved("Some Removed Panel"), None);
     }
 }

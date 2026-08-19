@@ -103,6 +103,8 @@ pub const TAG: &str = f::TAG;
 pub const SEQUENCE: &str = f::FILM;
 /// Something the import could not carry across.
 pub const LOSSY: &str = f::ALERT_TRIANGLE;
+/// A panel a plugin contributes.
+pub const PLUGIN: &str = f::PUZZLE;
 /// A group collapsed into one attachment instead of a bone with children.
 pub const MERGE_GROUP: &str = f::COMBINE;
 pub const LOOP: &str = f::REPEAT;
