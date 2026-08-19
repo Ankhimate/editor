@@ -38,6 +38,7 @@ pub mod import_ops;
 /// call it rather than with the viewport that displays the result.
 pub mod meshgen;
 pub mod ops;
+pub mod part_ops;
 pub mod psd_mesh;
 pub mod read;
 pub mod rebind;
