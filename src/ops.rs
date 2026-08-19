@@ -109,6 +109,7 @@ impl DocOps {
         crate::constraint_ops::register(&mut ops);
         crate::rig_ops::register(&mut ops);
         crate::part_ops::register(&mut ops);
+        crate::shape_ops::register(&mut ops);
         ops
     }
 

@@ -43,6 +43,7 @@ pub mod psd_mesh;
 pub mod read;
 pub mod rebind;
 pub mod rig_ops;
+pub mod shape_ops;
 mod work_mode;
 
 pub use args::{ArgError, Args, Resolver};
