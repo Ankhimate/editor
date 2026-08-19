@@ -1124,6 +1124,8 @@ fn convert(
         name,
         fps: fps.round() as u32,
         export_presets: Vec::new(),
+        // A foreign rig format carries no PSD provenance.
+        psd_layer_paths: Default::default(),
         report: std::mem::take(report),
     }
 }

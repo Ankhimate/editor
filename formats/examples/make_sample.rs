@@ -499,6 +499,7 @@ fn main() {
             name: "walker",
             fps: 30,
             export_presets: &[],
+            psd_layer_paths: &Default::default(),
         },
         &[],
     )

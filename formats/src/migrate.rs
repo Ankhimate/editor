@@ -335,6 +335,7 @@ mod tests {
             constraint_order: Vec::new(),
             animations: Vec::new(),
             export_presets: Vec::new(),
+            psd_layer_paths: Default::default(),
             groups: Vec::new(),
             extra: Default::default(),
         }

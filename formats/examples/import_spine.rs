@@ -101,6 +101,7 @@ fn main() {
             name: &loaded.name,
             fps: loaded.fps,
             export_presets: &[],
+            psd_layer_paths: &Default::default(),
         },
         // The bytes already live on each asset, which is where `save` reads
         // them from; this list is for images arriving beside a project rather

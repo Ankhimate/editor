@@ -28,6 +28,7 @@ fn main() {
         name: &loaded.name,
         fps: loaded.fps,
         export_presets: &loaded.export_presets,
+        psd_layer_paths: &Default::default(),
     });
 
     let preset = presets::builtin()

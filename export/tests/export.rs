@@ -379,6 +379,7 @@ fn fixture() -> Project {
         ],
         groups: Vec::new(),
         export_presets: Vec::new(),
+        psd_layer_paths: Default::default(),
         extra: Default::default(),
     }
 }

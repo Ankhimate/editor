@@ -933,6 +933,9 @@ impl crate::importer::Importer for PsdImporter {
                 .to_string(),
             fps: 30,
             export_presets: Vec::new(),
+            // The whole point of registering this: a re-import compares against
+            // these, and without them every layer looks new.
+            psd_layer_paths: imported.layer_paths,
             report,
         })
     }

@@ -169,6 +169,13 @@ mod tests {
     use ankhimate_core::slotmap::SlotMap;
     use ankhimate_core::transforms::Inherit;
 
+    /// Empty PSD provenance, for the tests that do not exercise it.
+    ///
+    /// A named static rather than a temporary, because `ProjectRef` borrows and
+    /// a `&Default::default()` inside the constructor does not outlive the call.
+    static NO_PSD: std::sync::LazyLock<std::collections::HashMap<String, String>> =
+        std::sync::LazyLock::new(Default::default);
+
     /// A `ProjectRef` over the pieces a test happens to care about.
     fn project<'a>(
         skeleton: &'a Skeleton,
@@ -184,6 +191,7 @@ mod tests {
             name,
             fps,
             export_presets: &[],
+            psd_layer_paths: &NO_PSD,
         }
     }
 
@@ -1305,6 +1313,7 @@ mod tests {
             name: "t",
             fps: 30,
             export_presets: &presets,
+            psd_layer_paths: &Default::default(),
         })
         .expect("serialize");
 
@@ -1333,6 +1342,7 @@ mod tests {
             name: "t",
             fps: 30,
             export_presets: &presets,
+            psd_layer_paths: &Default::default(),
         })
         .expect("serialize");
 

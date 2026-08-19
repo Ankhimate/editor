@@ -92,6 +92,8 @@ impl Document {
             name: &self.meta.name,
             fps: self.meta.fps,
             export_presets: &self.export_presets,
+            // Carried so a re-import can tell a redrawn layer from a new one.
+            psd_layer_paths: &self.psd_layer_paths,
         }
     }
 }

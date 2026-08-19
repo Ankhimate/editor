@@ -140,6 +140,7 @@ fn main() {
             name: &loaded.name,
             fps: loaded.fps,
             export_presets: &loaded.export_presets,
+            psd_layer_paths: &Default::default(),
         };
         match ankhimate_formats::save(&out, &project, &[]) {
             Ok(()) => println!("\n  wrote {}", out.display()),
