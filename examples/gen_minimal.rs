@@ -28,6 +28,7 @@ fn main() {
         name: "minimal",
         fps: 30,
         export_presets: &[],
+        psd_layer_paths: &Default::default(),
     })
     .unwrap();
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();

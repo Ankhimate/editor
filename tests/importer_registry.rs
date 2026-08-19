@@ -236,3 +236,69 @@ fn a_psd_that_will_not_parse_is_not_claimed() {
     };
     assert!(matches!(err, ImportError::NotThisFormat), "{err}");
 }
+
+#[test]
+fn psd_provenance_survives_a_save_and_reopen() {
+    // Without this the link is lost on save, every layer looks new on
+    // re-import, and `psd::diff` cannot do the one job it exists for. It was
+    // dropped by both `save` and `load` before being written to the schema.
+    use ankhimate_core::animation::Animation;
+    use ankhimate_core::assets::AssetDb;
+    use ankhimate_core::ids::AnimationId;
+    use ankhimate_core::skeleton::Skeleton;
+    use ankhimate_core::slotmap::SlotMap;
+
+    let skeleton = Skeleton::new();
+    let animations: SlotMap<AnimationId, Animation> = SlotMap::with_key();
+    let assets = AssetDb::new();
+    let mut paths = std::collections::HashMap::new();
+    paths.insert("arm".to_string(), "torso/arm".to_string());
+
+    let json = ankhimate_formats::to_json(&ankhimate_formats::ProjectRef {
+        skeleton: &skeleton,
+        animations: &animations,
+        assets: &assets,
+        name: "rig",
+        fps: 30,
+        export_presets: &[],
+        psd_layer_paths: &paths,
+    })
+    .expect("writes");
+
+    let reloaded = ankhimate_formats::from_json(&json).expect("reads");
+    assert_eq!(
+        reloaded.psd_layer_paths.get("arm").map(String::as_str),
+        Some("torso/arm"),
+        "the layer a redrawn asset came from"
+    );
+}
+
+#[test]
+fn a_rig_that_never_saw_a_psd_serialises_as_it_did_before() {
+    // The field is skipped when empty, so adding it does not change the bytes
+    // of every existing project.
+    use ankhimate_core::animation::Animation;
+    use ankhimate_core::assets::AssetDb;
+    use ankhimate_core::ids::AnimationId;
+    use ankhimate_core::skeleton::Skeleton;
+    use ankhimate_core::slotmap::SlotMap;
+
+    let skeleton = Skeleton::new();
+    let animations: SlotMap<AnimationId, Animation> = SlotMap::with_key();
+    let assets = AssetDb::new();
+    let json = ankhimate_formats::to_json(&ankhimate_formats::ProjectRef {
+        skeleton: &skeleton,
+        animations: &animations,
+        assets: &assets,
+        name: "rig",
+        fps: 30,
+        export_presets: &[],
+        psd_layer_paths: &Default::default(),
+    })
+    .expect("writes");
+
+    assert!(
+        !json.contains("psd_layer_paths"),
+        "an empty map writes nothing"
+    );
+}

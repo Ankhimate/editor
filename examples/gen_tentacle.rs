@@ -47,6 +47,7 @@ fn main() {
         name: "tentacle",
         fps: 30,
         export_presets: &[],
+        psd_layer_paths: &Default::default(),
     })
     .unwrap();
 

@@ -392,6 +392,7 @@ fn an_overshooting_handle_survives_an_ankh_round_trip() {
         name: &imported.name,
         fps: imported.fps,
         export_presets: &[],
+        psd_layer_paths: &Default::default(),
     })
     .expect("a rig with an overshoot serializes");
     let reloaded = ankhimate_formats::from_json(&json).expect("and reads back");

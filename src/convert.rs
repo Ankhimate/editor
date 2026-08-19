@@ -45,6 +45,8 @@ pub struct ProjectRef<'a> {
     /// keeping it unparsed means a preset written by a newer editor survives an
     /// older one — the same rule `Extra` exists for.
     pub export_presets: &'a [serde_json::Value],
+    /// Asset name → PSD layer path (T-302), for re-import.
+    pub psd_layer_paths: &'a std::collections::HashMap<String, String>,
 }
 
 /// A loaded document, plus anything that could not be resolved.
@@ -58,6 +60,8 @@ pub struct Loaded {
     pub fps: u32,
     /// Export presets, still unparsed — see [`ProjectRef::export_presets`].
     pub export_presets: Vec<serde_json::Value>,
+    /// Asset name → PSD layer path (T-302). Empty for a rig that never saw one.
+    pub psd_layer_paths: std::collections::HashMap<String, String>,
     pub report: LoadReport,
 }
 
@@ -249,6 +253,7 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
     let ProjectRef {
         skeleton,
         animations,
+        psd_layer_paths,
         assets,
         name,
         fps,
@@ -539,6 +544,10 @@ pub fn to_schema(project: &ProjectRef<'_>) -> schema::Project {
             .collect(),
         animations,
         export_presets: export_presets.to_vec(),
+        psd_layer_paths: psd_layer_paths
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
         groups: skeleton
             .group_order
             .iter()
@@ -1253,6 +1262,11 @@ pub fn from_schema(project: &schema::Project) -> Loaded {
         name: project.name.clone(),
         fps: project.fps,
         export_presets: project.export_presets.clone(),
+        psd_layer_paths: project
+            .psd_layer_paths
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
         report,
     }
 }

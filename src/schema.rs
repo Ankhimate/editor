@@ -52,6 +52,16 @@ pub struct Project {
     /// Folders the hierarchy is filed into. Organisation, not rig structure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<Group>,
+    /// Asset name → the PSD layer it came from (T-302).
+    ///
+    /// Saved because a re-import compares against it: without it, reopening a
+    /// project loses the link and every layer looks new, so `psd::diff` cannot
+    /// tell "the same arm, redrawn" from "a layer that was not there before".
+    ///
+    /// Defaulted and skipped when empty, so a rig that never saw a PSD
+    /// serialises exactly as it did before this existed.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub psd_layer_paths: std::collections::BTreeMap<String, String>,
     /// Export presets (T-603) — a rig's export settings belong to the rig.
     ///
     /// Held as opaque JSON rather than a typed field: the preset type lives in
