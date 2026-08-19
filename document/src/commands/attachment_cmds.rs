@@ -13,7 +13,7 @@ use super::EditCommand;
 use crate::WorkMode;
 use crate::doc::Document;
 use ankhimate_core::animation::Timeline;
-use ankhimate_core::attachment::{Attachment, RegionAttachment};
+use ankhimate_core::attachment::{Attachment, RegionAttachment, Sequence};
 use ankhimate_core::ids::{SkinId, SlotId};
 
 /// The editable transform of a region attachment — everything the inspector
@@ -165,6 +165,117 @@ impl EditCommand for SetRegionProps {
 
     fn label(&self) -> &str {
         "Edit Attachment"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Set an attachment's sequence — its frames, rate and mode — or clear it.
+///
+/// A sequence is **rig data**, like the region transform beside it: it says what
+/// this art *is*, not what it does in one animation. `evaluate()` derives the
+/// showing frame from playback time (see `Pose::slot_sequence_frames`), so there
+/// are no keys to write and nothing here belongs to a timeline.
+///
+/// `None` clears it, which is how a run that should never have been folded gets
+/// taken apart — the frames stay in the asset database either way.
+pub struct SetSequence {
+    skin: SkinId,
+    slot: SlotId,
+    name: String,
+    after: Option<Sequence>,
+    before: Option<Option<Sequence>>,
+}
+
+impl SetSequence {
+    pub fn new(
+        skin: SkinId,
+        slot: SlotId,
+        name: impl Into<String>,
+        after: Option<Sequence>,
+    ) -> Self {
+        Self {
+            skin,
+            slot,
+            name: name.into(),
+            after,
+            before: None,
+        }
+    }
+
+    /// A sequence lives on either kind of textured attachment, so this returns
+    /// the field rather than the attachment — the two cases differ in nothing
+    /// else.
+    fn sequence<'a>(&self, doc: &'a mut Document) -> Option<&'a mut Option<Sequence>> {
+        match doc
+            .skeleton
+            .skins
+            .get_mut(self.skin)?
+            .entries
+            .get_mut(&(self.slot, self.name.clone()))?
+        {
+            Attachment::Region(r) => Some(&mut r.sequence),
+            Attachment::Mesh(m) => Some(&mut m.sequence),
+            _ => None,
+        }
+    }
+}
+
+impl EditCommand for SetSequence {
+    fn apply(&mut self, doc: &mut Document) {
+        let after = self.after.clone();
+        let capture = self.before.is_none();
+        if let Some(sequence) = self.sequence(doc) {
+            if capture {
+                self.before = Some(sequence.clone());
+            }
+            *sequence = after;
+        }
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        let Some(before) = self.before.clone() else {
+            return;
+        };
+        if let Some(sequence) = self.sequence(doc) {
+            *sequence = before;
+        }
+    }
+
+    fn merge(&mut self, next: &dyn EditCommand) -> bool {
+        match next.as_any().downcast_ref::<SetSequence>() {
+            // Dragging the fps spinner is one undo step, the same way dragging
+            // any other number in the inspector is.
+            //
+            // Only between two *edits*, though. This command also creates and
+            // clears, and merging a drag into the creation makes one undo throw
+            // the sequence away — which is what happened the first time, and
+            // reads to the user as undo doing something they did not do.
+            // What separates them is the state this command *found*: an edit
+            // started from a sequence, a creation started from nothing. So the
+            // test is on `before`, not on either `after`.
+            Some(other)
+                if other.skin == self.skin
+                    && other.slot == self.slot
+                    && other.name == self.name
+                    && matches!(self.before, Some(Some(_)))
+                    && other.after.is_some() =>
+            {
+                self.after = other.after.clone();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn label(&self) -> &str {
+        "Edit Sequence"
     }
 
     fn requires_mode(&self) -> Option<WorkMode> {
@@ -681,5 +792,101 @@ mod tests {
         let region = region_of(&doc, default, slot, "arm");
         doc.skeleton.skins[other].set(slot, "arm", Attachment::Region(region));
         assert_eq!(owning_skin(&doc, other, slot, "arm"), Some(other));
+    }
+
+    fn a_sequence() -> Sequence {
+        Sequence {
+            frames: vec!["fire_01".into(), "fire_02".into(), "fire_03".into()],
+            fps: 12.0,
+            mode: ankhimate_core::attachment::SequenceMode::Loop,
+            setup_index: 0,
+        }
+    }
+
+    fn sequence_of(doc: &Document, skin: SkinId, slot: SlotId) -> Option<Sequence> {
+        match doc.skeleton.skins[skin].get(slot, "arm")? {
+            Attachment::Region(r) => r.sequence.clone(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn setting_a_sequence_is_undoable() {
+        // The property every document edit has to have, checked here because a
+        // sequence is the first thing the PSD importer produces that had no way
+        // to be edited at all.
+        let (mut doc, skin, slot) = doc_with_attachment();
+        let mut history = History::default();
+
+        history.push(
+            Box::new(SetSequence::new(skin, slot, "arm", Some(a_sequence()))),
+            &mut doc,
+        );
+        assert_eq!(
+            sequence_of(&doc, skin, slot).map(|s| s.frames.len()),
+            Some(3)
+        );
+
+        history.undo(&mut doc);
+        assert!(
+            sequence_of(&doc, skin, slot).is_none(),
+            "undo returns the attachment to having no sequence at all"
+        );
+
+        history.redo(&mut doc);
+        assert_eq!(sequence_of(&doc, skin, slot).map(|s| s.fps), Some(12.0));
+    }
+
+    #[test]
+    fn clearing_a_sequence_keeps_the_attachment() {
+        // "Split into separate slots" clears the fold. The attachment and its
+        // texture must survive it — the images are the art, the sequence is only
+        // a statement about how they play.
+        let (mut doc, skin, slot) = doc_with_attachment();
+        let mut history = History::default();
+        history.push(
+            Box::new(SetSequence::new(skin, slot, "arm", Some(a_sequence()))),
+            &mut doc,
+        );
+        history.push(
+            Box::new(SetSequence::new(skin, slot, "arm", None)),
+            &mut doc,
+        );
+
+        assert!(sequence_of(&doc, skin, slot).is_none());
+        assert!(
+            doc.skeleton.skins[skin].get(slot, "arm").is_some(),
+            "the attachment itself is still there"
+        );
+    }
+
+    #[test]
+    fn dragging_the_rate_is_one_undo_step() {
+        // The same rule every other inspector number follows: a drag is one
+        // step, not sixty. Without the merge, undo after adjusting fps walks
+        // back through every intermediate value.
+        let (mut doc, skin, slot) = doc_with_attachment();
+        let mut history = History::default();
+        history.push(
+            Box::new(SetSequence::new(skin, slot, "arm", Some(a_sequence()))),
+            &mut doc,
+        );
+
+        for fps in [13.0, 14.0, 15.0] {
+            let mut next = a_sequence();
+            next.fps = fps;
+            history.push(
+                Box::new(SetSequence::new(skin, slot, "arm", Some(next))),
+                &mut doc,
+            );
+        }
+        assert_eq!(sequence_of(&doc, skin, slot).map(|s| s.fps), Some(15.0));
+
+        history.undo(&mut doc);
+        assert_eq!(
+            sequence_of(&doc, skin, slot).map(|s| s.fps),
+            Some(12.0),
+            "one undo walks back the whole drag, not one frame of it"
+        );
     }
 }

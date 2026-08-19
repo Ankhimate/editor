@@ -2645,6 +2645,9 @@ fn attachment_inspector(
     };
     let props = RegionProps::from_region(region);
     let texture = region.texture.clone();
+    // Cloned with the rest of the read: `sequence_section` needs `state` mutably
+    // for the dispatch that follows it.
+    let sequence = region.sequence.clone();
     let asset_size = state
         .doc
         .assets
@@ -2823,6 +2826,22 @@ fn attachment_inspector(
             name.clone(),
             next,
         )));
+    }
+
+    // The sequence, when this attachment has one. Below the transform because
+    // it is the rarer case, and above the buttons because it is editing rather
+    // than a destructive action.
+    if let Some(sequence) = sequence {
+        if let Some(next) = sequence_section(ui, state, skin, slot_id, &name, &sequence, setup) {
+            state.dispatch(Box::new(
+                ankhimate_document::commands::attachment_cmds::SetSequence::new(
+                    skin,
+                    slot_id,
+                    name.clone(),
+                    next,
+                ),
+            ));
+        }
     }
     if duplicate {
         state.dispatch(Box::new(DuplicateAttachment::new(
@@ -3127,6 +3146,202 @@ fn slot_inspector(ui: &mut egui::Ui, state: &mut AppState, slot_id: ankhimate_co
 }
 
 // ── Section header with left accent bar ───────────────────────────────────
+
+/// The sequence section: the frames this attachment cycles through, and how.
+///
+/// Shown only when there is one. A PSD import folds a numbered run into a single
+/// slot, and until now nothing could change what that fold decided — the frame
+/// order, the rate and the mode were whatever the importer guessed, editable
+/// only by hand in the saved file.
+///
+/// There are no keys here. `evaluate()` derives the showing frame from playback
+/// time, because a sequence *is* "play these in order" — keying the frame index
+/// would be a second way to say the same thing and a second way to get it wrong.
+fn sequence_section(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    skin: ankhimate_core::ids::SkinId,
+    slot_id: ankhimate_core::ids::SlotId,
+    name: &str,
+    sequence: &ankhimate_core::attachment::Sequence,
+    setup: bool,
+) -> Option<Option<ankhimate_core::attachment::Sequence>> {
+    use ankhimate_core::attachment::SequenceMode;
+
+    let mut edited = sequence.clone();
+    let mut changed = false;
+    let mut result = None;
+
+    ui.add_space(10.0);
+    section_header(ui, crate::ui::icons::SEQUENCE, "Sequence");
+    ui.add_space(2.0);
+
+    // The frame count first: it is the answer to "where did my other layers
+    // go?", which is the question a folded run gets asked.
+    info_row(ui, "Frames", &format!("{}", sequence.frames.len()));
+    let showing = state.pose.slot_sequence_frames.get(slot_id).copied();
+    if let Some(index) = showing {
+        if let Some(frame) = sequence.frame(index) {
+            info_row(ui, "Showing", frame);
+        }
+    }
+    ui.add_space(4.0);
+
+    ui.add_enabled_ui(setup, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Rate");
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut edited.fps)
+                        .speed(0.5)
+                        .range(0.0..=120.0)
+                        .suffix(" fps"),
+                )
+                .on_hover_text("Frames per second. Zero holds on the setup frame.")
+                .changed();
+        });
+        ui.add_space(ROW_GAP);
+
+        ui.horizontal(|ui| {
+            ui.label("Mode");
+            let label = mode_label(edited.mode);
+            egui::ComboBox::from_id_salt("sequence_mode")
+                .selected_text(label)
+                .width(130.0)
+                .show_ui(ui, |ui| {
+                    for mode in [
+                        SequenceMode::Hold,
+                        SequenceMode::Once,
+                        SequenceMode::Loop,
+                        SequenceMode::PingPong,
+                        SequenceMode::OnceReverse,
+                        SequenceMode::LoopReverse,
+                        SequenceMode::PingPongReverse,
+                    ] {
+                        changed |= ui
+                            .selectable_value(&mut edited.mode, mode, mode_label(mode))
+                            .changed();
+                    }
+                });
+        });
+        ui.add_space(ROW_GAP);
+
+        ui.horizontal(|ui| {
+            ui.label("Setup frame");
+            let mut index = edited.setup_index as i32;
+            let last = sequence.frames.len().saturating_sub(1) as i32;
+            if ui
+                .add(egui::DragValue::new(&mut index).speed(0.2).range(0..=last))
+                .on_hover_text("The frame shown in Setup, and where playback starts")
+                .changed()
+            {
+                edited.setup_index = index.max(0) as u32;
+                changed = true;
+            }
+        });
+    });
+
+    // The frame list, in play order. Reorderable because the importer's order
+    // comes from the numbering, and a run numbered backwards is a real thing an
+    // artist does.
+    ui.add_space(6.0);
+    let mut swap: Option<(usize, usize)> = None;
+    let mut drop_frame: Option<usize> = None;
+    egui::ScrollArea::vertical()
+        .id_salt("sequence_frames")
+        .max_height(120.0)
+        .show(ui, |ui| {
+            for (index, frame) in sequence.frames.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let playing = showing == Some(index as u32);
+                    let text = egui::RichText::new(format!("{index}  {frame}")).size(11.0);
+                    // The frame currently on screen is marked, so the list and
+                    // the viewport can be read as one thing.
+                    ui.label(if playing { text.strong() } else { text });
+                    if !setup {
+                        return;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button(crate::ui::icons::DELETE).clicked() {
+                            drop_frame = Some(index);
+                        }
+                        if ui
+                            .add_enabled(
+                                index + 1 < sequence.frames.len(),
+                                egui::Button::new(crate::ui::icons::CARET_DOWN).small(),
+                            )
+                            .clicked()
+                        {
+                            swap = Some((index, index + 1));
+                        }
+                        if ui
+                            .add_enabled(
+                                index > 0,
+                                egui::Button::new(crate::ui::icons::CARET_UP).small(),
+                            )
+                            .clicked()
+                        {
+                            swap = Some((index, index - 1));
+                        }
+                    });
+                });
+            }
+        });
+
+    if let Some((a, b)) = swap {
+        edited.frames.swap(a, b);
+        changed = true;
+    }
+    if let Some(index) = drop_frame {
+        edited.frames.remove(index);
+        // A sequence of one is not a sequence. Removing the second-to-last
+        // frame clears it rather than leaving a flipbook that cannot flip.
+        if edited.frames.len() < 2 {
+            result = Some(None);
+            return result;
+        }
+        edited.setup_index = edited
+            .setup_index
+            .min(edited.frames.len().saturating_sub(1) as u32);
+        changed = true;
+    }
+
+    ui.add_space(4.0);
+    if ui
+        .add_enabled(
+            setup,
+            egui::Button::new("Split into separate slots").small(),
+        )
+        .on_hover_text(
+            "Stop treating these as frames. The images stay; each gets its own \
+             attachment again.",
+        )
+        .clicked()
+    {
+        result = Some(None);
+        return result;
+    }
+
+    let _ = (skin, name);
+    if changed {
+        result = Some(Some(edited));
+    }
+    result
+}
+
+/// A sequence mode as the artist reads it, rather than as the enum spells it.
+fn mode_label(mode: ankhimate_core::attachment::SequenceMode) -> &'static str {
+    use ankhimate_core::attachment::SequenceMode as M;
+    match mode {
+        M::Hold => "Hold",
+        M::Once => "Once",
+        M::Loop => "Loop",
+        M::PingPong => "Ping-pong",
+        M::OnceReverse => "Once, reversed",
+        M::LoopReverse => "Loop, reversed",
+        M::PingPongReverse => "Ping-pong, reversed",
+    }
+}
 
 pub fn section_header(ui: &mut egui::Ui, icon: &str, label: &str) {
     ui.add_space(2.0);
