@@ -17,7 +17,7 @@
 //! memory. Resolution failure is an error the caller sees, not a silent no-op.
 
 use crate::doc::Document;
-use ankhimate_core::ids::{AnimationId, BoneId, SlotId};
+use ankhimate_core::ids::{AnimationId, BoneId, SkinId, SlotId};
 use serde_json::Value;
 
 /// What an operator was asked to do, before names become ids.
@@ -176,6 +176,28 @@ impl Args {
             .collect()
     }
 
+    /// A list of names — a bone chain, a set of slots.
+    pub fn str_list(&self, key: &str) -> Result<Vec<String>, ArgError> {
+        let v = self.get(key).ok_or_else(|| ArgError::Missing(key.into()))?;
+        let array = v.as_array().ok_or_else(|| ArgError::WrongType {
+            key: key.into(),
+            wanted: "an array of names",
+            got: type_of(v),
+        })?;
+        array
+            .iter()
+            .map(|n| {
+                n.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| ArgError::WrongType {
+                        key: key.into(),
+                        wanted: "an array of names",
+                        got: type_of(n),
+                    })
+            })
+            .collect()
+    }
+
     /// A flat list of indices.
     pub fn u32_list(&self, key: &str) -> Result<Vec<u32>, ArgError> {
         let v = self.get(key).ok_or_else(|| ArgError::Missing(key.into()))?;
@@ -245,6 +267,56 @@ impl<'a> Resolver<'a> {
         match args.opt_str(key)? {
             None => Ok(None),
             Some(_) => self.bone(args, key).map(Some),
+        }
+    }
+
+    /// A list of bone names, in the order given.
+    ///
+    /// Order is the argument for a chain — root first, tip last — so this
+    /// preserves it rather than resolving into a set. An unknown name fails the
+    /// whole list: half a chain is not a shorter chain, it is a different one.
+    pub fn bone_list(&self, args: &Args, key: &str) -> Result<Vec<BoneId>, ArgError> {
+        args.str_list(key)?
+            .into_iter()
+            .map(|name| {
+                self.doc
+                    .skeleton
+                    .bones
+                    .iter()
+                    .find(|(_, b)| b.name == name)
+                    .map(|(id, _)| id)
+                    .ok_or_else(|| ArgError::Unresolved {
+                        key: key.into(),
+                        kind: "bone",
+                        name,
+                    })
+            })
+            .collect()
+    }
+
+    /// A skin by name.
+    pub fn skin(&self, args: &Args, key: &str) -> Result<SkinId, ArgError> {
+        let name = args.str(key)?;
+        self.doc
+            .skeleton
+            .skins
+            .iter()
+            .find(|(_, s)| s.name == name)
+            .map(|(id, _)| id)
+            .ok_or_else(|| ArgError::Unresolved {
+                key: key.into(),
+                kind: "skin",
+                name: name.into(),
+            })
+    }
+
+    /// A skin by name, defaulting to the document's default skin.
+    ///
+    /// Most callers mean "the base skin" and should not have to know its name.
+    pub fn skin_or_default(&self, args: &Args, key: &str) -> Result<SkinId, ArgError> {
+        match args.opt_str(key)? {
+            None => Ok(self.doc.skeleton.default_skin),
+            Some(_) => self.skin(args, key),
         }
     }
 

@@ -44,9 +44,27 @@ carries the built-ins; `ids()` lists them and `get(id).schema()` describes one.
 | `anim.key_bone` | Key translate / rotate / scale / shear | either |
 | `anim.key_attachment` | Key which attachment a slot shows | either |
 | `import.report` | Say what an import could not carry across | either |
+| `constraint.create_ik` | IK over a chain, with a target bone at its tip | Setup |
+| `constraint.create_transform` | One bone drives others | Setup |
+| `constraint.create_physics` | A bone that sways, lags and settles | Setup |
+| `constraint.set_ik` | Retune mix, bend, softness, stretch | either |
+| `constraint.set_transform` | Retune per-axis mixes and offsets | either |
+| `constraint.set_physics` | Retune inertia, damping, mass, gravity, wind | either |
+| `constraint.delete` | Remove a constraint by name | Setup |
 
 Verbs that act on a *selection* or a tool live in the editor instead, because a
 selection is something only an editor has.
+
+### Creating and configuring are separate verbs
+
+`constraint.create_ik` takes the chain; `constraint.set_ik` does not. Changing
+what a constraint acts on is a different decision from changing how strongly it
+acts, and a `set` that accepted both would let a typo in `bones` silently
+rebuild the constraint rather than fail.
+
+**An argument left out keeps its current value.** "Leave it" and "reset it to a
+default you never saw" are different answers, and only the first is what a
+partial edit means.
 
 The set is sized by a rule, not by taste. `docs/export-plan.md` requires our own
 runtime format to be a template, so a format the engine cannot express is found

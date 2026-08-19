@@ -29,6 +29,7 @@
 pub mod args;
 pub mod clipboard;
 pub mod commands;
+pub mod constraint_ops;
 pub mod doc;
 pub mod doc_ops;
 pub mod edit;
