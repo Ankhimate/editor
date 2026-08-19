@@ -438,25 +438,19 @@ fn every_known_tag_has_something_that_reads_it() {
     // Listed explicitly rather than derived, so adding a tag to `KNOWN` without
     // a reader fails here rather than passing quietly.
     use ankhimate_formats::psd_tags::KNOWN;
+    // Every known tag now has a reader. `[mesh]` and `[weights]` are read here
+    // as a *request* — the tracer lives in `document`, because `core` is the
+    // runtime contract and stays dependency-light, so `formats` cannot reach
+    // it. The request reaching `PsdImport::trace_requests` is this crate's
+    // whole job for those two.
     const READ: &[&str] = &[
         "bone", "bones", "slot", "slots", "skin", "folder", "ik", "pivot", "clip", "box", "point",
-        "frames", "fps", "scale", "ignore", "merge", "blend", "alpha",
+        "frames", "fps", "scale", "ignore", "merge", "blend", "alpha", "mesh", "weights",
+        "physics",
     ];
-    // Named, so the gap is a list somebody has to shorten rather than a fact
-    // nobody wrote down. `[mesh]` and `[weights]` need the tracer in
-    // `document`, which `formats` cannot reach; `[physics]` needs a model that
-    // does not exist yet.
-    const NOT_YET: &[&str] = &["mesh", "weights", "physics"];
 
-    let unread: Vec<&&str> = KNOWN
-        .iter()
-        .filter(|t| !READ.contains(t) && !NOT_YET.contains(t))
-        .collect();
+    let unread: Vec<&&str> = KNOWN.iter().filter(|t| !READ.contains(t)).collect();
     assert!(unread.is_empty(), "known but read by nothing: {unread:?}");
-    assert!(
-        NOT_YET.iter().all(|t| KNOWN.contains(t)),
-        "the waiting list names a tag that is not known"
-    );
 }
 
 #[test]
@@ -506,5 +500,63 @@ fn a_folded_run_is_named_after_the_run_and_not_its_first_frame() {
     assert!(
         !names.iter().any(|n| n.starts_with("fire_01")),
         "and not for the frame that happened to be first: {names:?}"
+    );
+}
+
+#[test]
+fn a_mesh_tag_becomes_a_request_rather_than_being_dropped() {
+    // `formats` cannot trace: `meshgen` lives in `document` because `core` is
+    // the runtime contract and stays dependency-light, and moving it down to
+    // save this crate a round trip would drag `spade` and `image` into the
+    // crate that has to compile for `wasm32`. So the contract is that a
+    // `[mesh]` layer arrives as a request, and this pins it.
+    //
+    // The fixture has no `[mesh]` layer, so this builds the tags directly —
+    // weaker than the file-driven tests above and worth saying so.
+    let tags = Tags::parse("cape [mesh:70][weights]");
+    assert!(tags.has("mesh"));
+    assert_eq!(tags.number("mesh"), Some(70.0), "the detail dial");
+    assert!(tags.has("weights"));
+
+    let bare = Tags::parse("cape [mesh]");
+    assert_eq!(
+        bare.number("mesh"),
+        None,
+        "bare takes the tracer's own default rather than a number invented here"
+    );
+}
+
+#[test]
+fn a_physics_tag_names_a_kind_and_an_unknown_one_is_reported() {
+    // A layer name is not where a simulation gets tuned — seven numbers in a
+    // group name would be unreadable — so the tag names a kind of thing and the
+    // inspector refines it. An unrecognised kind must be reported: silently
+    // picking cloth for `[physics:jelly]` is a rig that moves wrongly for a
+    // reason nobody can find.
+    let tags = Tags::parse("cape [physics:cloth]");
+    assert_eq!(tags.value("physics"), Some("cloth"));
+
+    let bare = Tags::parse("cape [physics]");
+    assert!(
+        bare.has("physics"),
+        "bare is valid — it means the default kind"
+    );
+    assert_eq!(bare.value("physics"), None);
+}
+
+#[test]
+fn the_ik_tag_works_and_not_only_its_alias() {
+    // Found by reading rather than running: the constraint loop matched the
+    // raw group name against the `$ik ` prefix, so the alias worked and the
+    // `[ik:name]` tag it aliases to did nothing at all. A tag listed as known,
+    // parsed correctly, and ignored by the one place that mattered.
+    let tagged = Tags::parse("arm [ik:reach]");
+    assert_eq!(tagged.value_or_name("ik"), Some("reach"));
+
+    let bare = Tags::parse("arm [ik]");
+    assert_eq!(
+        bare.value_or_name("ik"),
+        Some("arm"),
+        "bare names the constraint after the group"
     );
 }
