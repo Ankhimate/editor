@@ -184,6 +184,121 @@ mod tests {
         assert!(plan.files.is_empty() && plan.binaries.is_empty());
     }
 
+    /// A rig with one real image in its library, so the baker has something to
+    /// pack.
+    fn rig_with_art() -> Document {
+        use ankhimate_document::{Args, DocOps, Edit};
+
+        // 2x2 red PNG — generated rather than hand-written, because a wrong
+        // IDAT length reads as a base64 bug rather than a bad fixture.
+        let png = {
+            let mut bytes = Vec::new();
+            let image = image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]));
+            image::DynamicImage::ImageRgba8(image)
+                .write_to(
+                    &mut std::io::Cursor::new(&mut bytes),
+                    image::ImageFormat::Png,
+                )
+                .expect("encodes");
+            crate::importer::encode_base64(&bytes)
+        };
+
+        let ops = DocOps::builtin();
+        let mut edit = Edit::default();
+        ops.invoke(
+            "bone.create",
+            &mut edit,
+            &Args::from_json(serde_json::json!({ "name": "root" })),
+        )
+        .expect("bone");
+        ops.invoke(
+            "asset.add_image",
+            &mut edit,
+            &Args::from_json(serde_json::json!({ "name": "torso", "bytes_base64": png })),
+        )
+        .expect("image");
+        edit.doc
+    }
+
+    #[test]
+    fn an_exporter_can_bake_an_atlas_and_write_its_pages() {
+        // The gap that stopped a plugin producing a real engine format: most
+        // runtime formats want a packed atlas, and a script has no pixels and
+        // no rectangle packer.
+        let host = Host::new();
+        let exporter = host
+            .exporters(
+                r#"
+                ankhimate.registerExporter({
+                  id: "export.atlas", label: "With Atlas",
+                  write() {
+                    const atlas = bakeAtlas({ padding: 2, trim: false });
+                    for (const page of atlas.pages) {
+                      emitBytes("atlas_" + page.index + ".png", page.png_base64);
+                    }
+                    emit("atlas.json", JSON.stringify(atlas.regions));
+                  },
+                });
+                "#,
+            )
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let plan = exporter.plan(rig_with_art()).expect("exports");
+
+        let page = plan
+            .binaries
+            .iter()
+            .find(|(path, _)| path == "atlas_0.png")
+            .expect("a page was written");
+        assert!(
+            image::load_from_memory(&page.1).is_ok(),
+            "and it is a real PNG, not truncated base64"
+        );
+
+        let regions = plan
+            .files
+            .iter()
+            .find(|f| f.path == "atlas.json")
+            .expect("atlas.json");
+        assert!(
+            regions.contents.contains("torso"),
+            "the region names its asset: {}",
+            regions.contents
+        );
+    }
+
+    #[test]
+    fn baking_reports_a_failure_rather_than_throwing() {
+        // A rig with one undecodable image should let a plugin write the rest
+        // and say what was missing — the same choice the importers make with
+        // their report.
+        let host = Host::new();
+        let exporter = host
+            .exporters(
+                r#"
+                ankhimate.registerExporter({
+                  id: "export.probe", label: "Probe",
+                  write() {
+                    const atlas = bakeAtlas({});
+                    emit("result.txt", atlas.error ? "error" : "ok:" + atlas.pages.length);
+                  },
+                });
+                "#,
+            )
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        // An empty library still bakes — one empty page, which is what the
+        // baker does rather than refusing. A plugin sees a result either way.
+        let plan = exporter.plan(rig()).expect("exports");
+        assert_eq!(plan.files[0].contents, "ok:1");
+    }
+
     #[test]
     fn a_throwing_exporter_writes_nothing() {
         // All-or-nothing reaches a plugin: a script that fails halfway must not

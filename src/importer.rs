@@ -218,7 +218,7 @@ mod tests {
 /// Paired with the decoder in `document/src/import_ops.rs`; both are short
 /// enough to write, and a crate for sixty lines of table lookup is a
 /// supply-chain surface nobody asked for.
-fn encode_base64(bytes: &[u8]) -> String {
+pub(crate) fn encode_base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
