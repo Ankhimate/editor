@@ -146,11 +146,10 @@ impl Tags {
 /// came in wrong.
 pub const KNOWN: &[&str] = &[
     // Structure
-    "bone", "bones", "slot", "slots", "skin", "folder", "ik", "pivot", "origin",
-    // Geometry
+    "bone", "bones", "slot", "slots", "skin", "folder", "ik", "pivot", // Geometry
     "mesh", "weights", "clip", "box", "point", // Behaviour
     "physics", "frames", "fps", // Processing
-    "scale", "ignore", "merge", "trim", "blend", "alpha",
+    "scale", "ignore", "merge", "blend", "alpha",
 ];
 
 /// The plural form of a tag, when it has one.

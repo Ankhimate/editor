@@ -31,7 +31,7 @@ use ankhimate_core::ids::{BoneId, SkinId, SlotId};
 use ankhimate_core::math::Transform;
 use ankhimate_core::skeleton::{Bone, Skeleton};
 use ankhimate_core::skin::Skin;
-use ankhimate_core::slot::Slot;
+use ankhimate_core::slot::{BlendMode, Slot};
 use std::collections::{HashMap, HashSet};
 
 /// A layer's tags, with the pre-grammar markers folded in.
@@ -163,6 +163,14 @@ pub struct ImportSummary {
     /// worse than none if it is silent: the failure mode is a rig subtly wrong
     /// for a reason nobody can see.
     pub guesses: Vec<crate::psd_infer::Guess>,
+    /// Layers whose Photoshop blend mode this model has no equivalent for, as
+    /// `(layer path, the mode's name)`.
+    ///
+    /// Photoshop has 28 and this has four. Silently normalising the other 24 to
+    /// Normal is a layer that looked right in the artist's file and wrong in the
+    /// editor with nothing to read about why — the same loss `LoadReport`
+    /// exists for, applied to a slot.
+    pub lost_blend: Vec<(String, String)>,
     /// Runs folded into one attachment, as `(stem, frame count)`.
     ///
     /// Worth reporting on its own: the artist gave the importer five layers and
@@ -174,6 +182,116 @@ pub struct ImportSummary {
     /// A misspelled `[bonee]` should be findable. Dropping it quietly is an
     /// artist wondering why their tag did nothing.
     pub unknown_tags: Vec<(String, String)>,
+}
+
+/// The renderer's blend mode for a Photoshop one, and what was lost saying so.
+///
+/// Photoshop has 28 blend modes and this model has four. Rather than quietly
+/// normalising the other 24 to Normal — which is a layer that looked right in
+/// the artist's file and wrong in the editor, with nothing to read about why —
+/// the ones that do not map are named in the report.
+///
+/// `PassThrough` is a group-only mode meaning "do not isolate", which is what a
+/// slot does anyway; it maps to Normal without loss and is not reported.
+fn blend_mode_of(layer: &psd::PsdLayer) -> (BlendMode, bool) {
+    // `psd 0.3.5` does not export its `BlendMode`, so the type cannot be named
+    // here and the variant is read off its `Debug`. Unpleasant, and the report
+    // wants the mode's name as text regardless — this way the two cannot drift.
+    match blend_mode_name(layer).as_str() {
+        "Normal" | "PassThrough" => (BlendMode::Normal, true),
+        "Multiply" => (BlendMode::Multiply, true),
+        "Screen" => (BlendMode::Screen, true),
+        "LinearDodge" => (BlendMode::Additive, true),
+        _ => (BlendMode::Normal, false),
+    }
+}
+
+/// A `[box]`, `[point]` or `[clip]` layer as the attachment it stands for.
+///
+/// The three share a shape: a layer whose pixels are a placeholder the artist
+/// draws so they can see where the thing is. Its rectangle is the geometry, so
+/// nothing has to be positioned twice — move the layer, move the box.
+///
+/// A rectangle is not the polygon a hull would be. It is the honest reading of
+/// what a PSD says: tracing the silhouette would give a shape the artist did not
+/// author and cannot see, and refining a box in the editor is one drag.
+fn marker_attachment(
+    tags: &crate::psd_tags::Tags,
+    layer: &psd::PsdLayer,
+    canvas: (u32, u32),
+    bone: BoneId,
+    skeleton: &Skeleton,
+    options: &ImportOptions,
+) -> Option<Attachment> {
+    let bounds = layer_bounds(layer);
+    let centre = layer_center(bounds, canvas, options.scale);
+    let origin = world_origin(skeleton, bone);
+    let local = centre - origin;
+
+    if tags.has("point") {
+        // A PSD has no rotation to read, so the point's is zero and the rigger
+        // aims it. Reporting a guessed angle would be worse than none.
+        return Some(Attachment::Point(
+            ankhimate_core::attachment::PointAttachment {
+                position: local,
+                rotation: 0.0,
+            },
+        ));
+    }
+
+    let corners = |half: glam::Vec2| {
+        vec![
+            glam::Vec2::new(local.x - half.x, local.y - half.y),
+            glam::Vec2::new(local.x + half.x, local.y - half.y),
+            glam::Vec2::new(local.x + half.x, local.y + half.y),
+            glam::Vec2::new(local.x - half.x, local.y + half.y),
+        ]
+    };
+    let half = glam::Vec2::new(
+        bounds.2 as f32 * options.scale / 2.0,
+        bounds.3 as f32 * options.scale / 2.0,
+    );
+
+    if tags.has("box") {
+        return Some(Attachment::BoundingBox(
+            ankhimate_core::attachment::BoundingBoxAttachment {
+                vertices: corners(half),
+                weights: Vec::new(),
+            },
+        ));
+    }
+    if tags.has("clip") {
+        return Some(Attachment::Clipping(
+            ankhimate_core::attachment::ClippingAttachment {
+                // `[clip:slot]` stops the clip after that slot; bare `[clip]`
+                // clips everything drawn after it, which is what the model's
+                // `None` already means.
+                vertices: corners(half),
+                end_slot: tags.value("clip").map(str::to_string),
+            },
+        ));
+    }
+    None
+}
+
+/// The Photoshop blend mode's name, for matching on and for the report.
+fn blend_mode_name(layer: &psd::PsdLayer) -> String {
+    format!("{:?}", layer.blend_mode())
+}
+
+/// A blend mode named in a `[blend:…]` tag.
+///
+/// The tag exists for the case the file cannot express: an artist working in a
+/// mode Photoshop has and the engine does not, who knows which of our four they
+/// want at runtime. Spelled as the engine names them, not as Photoshop does.
+fn blend_mode_named(name: &str) -> Option<BlendMode> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(BlendMode::Normal),
+        "additive" | "add" => Some(BlendMode::Additive),
+        "multiply" => Some(BlendMode::Multiply),
+        "screen" => Some(BlendMode::Screen),
+        _ => None,
+    }
 }
 
 /// Frames per second an inferred run plays at.
@@ -516,12 +634,16 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
             continue;
         }
 
+        // `[folder]` is the artist saying what the scatter heuristic guesses:
+        // this group is organisation, its art belongs to the parent's bone. An
+        // explicit form matters because the guess is only usually right, and
+        // the alternative is renaming a group to hide it from a heuristic.
         // A group inference read as art rather than articulation gets no bone
         // of its own: its layers hang from its parent's. This is the half of
         // the "one bone, not eleven" guess that the artist can see in the rig —
         // without it the guess is a sentence in a report and the hierarchy is
         // unchanged.
-        if plan.not_a_bone.contains(&path) {
+        if plan.not_a_bone.contains(&path) || group_tags.has("folder") {
             let parent = group
                 .parent_id()
                 .and_then(|p| paths.get(&p))
@@ -602,9 +724,11 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
         bones.insert(path.clone(), bone);
 
         let default_skin = skeleton.default_skin;
-        if options.flatten.contains(&path) {
+        if options.flatten.contains(&path) || group_tags.has("merge") {
             // Flattened: one attachment for the whole group, composited in
             // stacking order. The group stops being a hierarchy and becomes art.
+            // `[merge]` is the same decision written in the file rather than
+            // ticked in a dialog, so it survives the next import.
             if let Some((asset, bounds)) = flatten_group(&psd, sub_layers, &path, options) {
                 let name = asset.name.clone();
                 let (w, h) = (asset.width as f32, asset.height as f32);
@@ -896,6 +1020,25 @@ fn add_layer(
         summary.skipped.push(format!("{path} (hidden)"));
         return;
     }
+    // A marker layer is geometry, not art: its pixels exist so the artist can
+    // see where it is. Handled before the image is read, so a bounding box drawn
+    // as a flat magenta rectangle does not also become a texture in the atlas.
+    if let Some(attachment) = marker_attachment(&tags, layer, canvas, bone, skeleton, options) {
+        let wanted = tags.value_or_name("slot").unwrap_or(&tags.name);
+        let name = ankhimate_core::skeleton::unique_name(
+            wanted,
+            skeleton.slots.iter().map(|(_, s)| s.name.as_str()),
+        );
+        let slot = skeleton.add_slot(Slot {
+            attachment: Some(name.clone()),
+            ..Slot::new(format!("{name}_slot"), bone)
+        });
+        summary.slots += 1;
+        skeleton.skins[skin].set(slot, name, attachment);
+        layer_paths.insert(format!("{path}_marker"), path.to_string());
+        return;
+    }
+
     let Some((bytes, w, h)) = layer_png(layer, canvas) else {
         summary.skipped.push(format!("{path} (no pixels)"));
         return;
@@ -922,23 +1065,52 @@ fn add_layer(
         return;
     }
 
+    // Photoshop already records blend and opacity per layer, so the common case
+    // needs no tag at all — the artist's file says it and every art tool round
+    // trips it. The tags are for the mode Photoshop has and the engine does not.
+    let (mut blend_mode, mapped) = blend_mode_of(layer);
+    if let Some(named) = tags.value("blend") {
+        match blend_mode_named(named) {
+            Some(mode) => blend_mode = mode,
+            None => summary
+                .unknown_tags
+                .push((path.to_string(), format!("blend:{named}"))),
+        }
+    } else if !mapped {
+        summary
+            .lost_blend
+            .push((path.to_string(), blend_mode_name(layer)));
+    }
+
+    // `[scale:n]` multiplies the import scale for this layer alone: art drawn at
+    // twice the size for a detail pass comes in at the size it is meant to be
+    // rather than needing a resize the next import undoes.
+    let scale = options.scale * tags.number("scale").filter(|s| *s > 0.0).unwrap_or(1.0);
+
+    // `[alpha:n]` takes 0–1, which is how every other number in this grammar
+    // reads; Photoshop stores 0–255 and that is a detail of the file format.
+    let alpha = tags
+        .number("alpha")
+        .map(|a| a.clamp(0.0, 1.0))
+        .unwrap_or(layer.opacity() as f32 / 255.0);
+
     let slot = skeleton.add_slot(Slot {
         attachment: Some(name.clone()),
+        color: [1.0, 1.0, 1.0, alpha],
+        blend_mode,
         ..Slot::new(format!("{name}_slot"), bone)
     });
     summary.slots += 1;
 
     let bone_origin = world_origin(skeleton, bone);
+    // The layer's *position* stays where the artist put it — `[scale]` resizes
+    // the art, it does not move the part. Scaling the offset too would drag a
+    // detail-pass layer away from the thing it belongs to.
     let offset = layer_center(layer_bounds(layer), canvas, options.scale) - bone_origin;
     skeleton.skins[skin].set(
         slot,
         name.clone(),
-        region(
-            name.clone(),
-            offset,
-            w as f32 * options.scale,
-            h as f32 * options.scale,
-        ),
+        region(name.clone(), offset, w as f32 * scale, h as f32 * scale),
     );
     if is_lead {
         sink.leads.insert(path.to_string(), (skin, slot, name));
