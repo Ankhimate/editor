@@ -175,6 +175,40 @@ of commands, so it undoes.** Those replace the document wholesale and cannot.
 quietly is worse than one that refuses, and the report survives an undo because
 it is not part of the rig.
 
+### An exporter is a plugin too
+
+A Handlebars preset stays the right tool when a format is a projection of the
+context. A plugin is for when it is not — a checksum over what was written, a
+binary header, an index built by counting, a layout that depends on the rig
+rather than on the template.
+
+```js
+ankhimate.registerExporter({
+  id: "export.mine", label: "My Engine",
+  write() {
+    const r = rig();
+    emit("rig.json", JSON.stringify(r.skeleton));
+    emit("manifest.txt", "bones=" + r.skeleton.bones.length);
+  },
+});
+```
+
+| Global | Is |
+|---|---|
+| `ankhimate.registerExporter(spec)` | Declare a format this plugin writes |
+| `emit(path, contents)` | A text file, relative to the output directory |
+| `emitBytes(path, base64)` | A binary one |
+
+**A plugin never touches the disk.** It emits, and the host builds the same
+`Plan` the template path produces — so path confinement, the all-or-nothing
+write and never-delete all still hold. Those are `docs/export-plan.md`'s rules
+and handing a script a file handle would put every one of them in the plugin
+author's hands.
+
+A script that throws halfway emits nothing: the files it managed to produce are
+discarded with the plan, because a half-written export is one the user has to
+notice is half-written.
+
 ### Sidecars are not a filesystem
 
 `ankhimate.sidecar` and `sidecarBytes` reach files in the imported rig's own
