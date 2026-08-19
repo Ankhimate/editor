@@ -51,6 +51,15 @@ carries the built-ins; `ids()` lists them and `get(id).schema()` describes one.
 | `constraint.set_transform` | Retune per-axis mixes and offsets | either |
 | `constraint.set_physics` | Retune inertia, damping, mass, gravity, wind | either |
 | `constraint.delete` | Remove a constraint by name | Setup |
+| `skin.create` | Add a skin, optionally copying another's art | Setup |
+| `skin.rename` | Rename a skin | Setup |
+| `skin.delete` | Remove a skin and the art routed into it | Setup |
+| `skin.copy_attachments` | Copy one skin's art into another | Setup |
+| `slot.delete` | Remove a slot, its art and its place in the order | Setup |
+| `slot.set_attachment` | Choose what a slot shows in setup | Setup |
+| `slot.set_color` | Tint a slot | either |
+| `slot.set_presentation` | Blend mode and the dark half of a tint | Setup |
+| `slot.set_draw_order` | Every slot, back to front | Setup |
 
 Verbs that act on a *selection* or a tool live in the editor instead, because a
 selection is something only an editor has.
@@ -65,6 +74,26 @@ rebuild the constraint rather than fail.
 **An argument left out keeps its current value.** "Leave it" and "reset it to a
 default you never saw" are different answers, and only the first is what a
 partial edit means.
+
+### Colours, and the third state
+
+Colours are `[r, g, b]` or `[r, g, b, a]`, each **0..1** — `core`'s convention,
+not the 0..255 a file format might use. The conversion belongs at the format
+boundary; two conventions in one API is how a tint ends up 255 times too bright.
+
+A three-component colour **leaves alpha alone**. `[1, 0, 0]` means "make it
+red", not "make it transparent".
+
+`dark_color` has three states rather than two: absent leaves it, `null` clears
+it, a list sets it. A two-colour tint that could only be set would be a decision
+a script could not take back.
+
+### `slot.set_draw_order` wants every slot
+
+A partial list is refused, not completed. There is no honest rule for where the
+unnamed slots go — appending changes what draws on top, and so does prepending
+— and an importer that dropped a slot from its list should hear about it rather
+than get a rig whose layering is subtly wrong.
 
 The set is sized by a rule, not by taste. `docs/export-plan.md` requires our own
 runtime format to be a template, so a format the engine cannot express is found

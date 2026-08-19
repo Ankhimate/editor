@@ -294,6 +294,29 @@ impl<'a> Resolver<'a> {
             .collect()
     }
 
+    /// A list of slot names, in the order given.
+    ///
+    /// Order matters for the one caller that wants a list — draw order — so it
+    /// is preserved rather than resolved into a set.
+    pub fn slot_list(&self, args: &Args, key: &str) -> Result<Vec<SlotId>, ArgError> {
+        args.str_list(key)?
+            .into_iter()
+            .map(|name| {
+                self.doc
+                    .skeleton
+                    .slots
+                    .iter()
+                    .find(|(_, s)| s.name == name)
+                    .map(|(id, _)| id)
+                    .ok_or_else(|| ArgError::Unresolved {
+                        key: key.into(),
+                        kind: "slot",
+                        name,
+                    })
+            })
+            .collect()
+    }
+
     /// A skin by name.
     pub fn skin(&self, args: &Args, key: &str) -> Result<SkinId, ArgError> {
         let name = args.str(key)?;
