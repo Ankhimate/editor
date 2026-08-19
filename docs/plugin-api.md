@@ -226,6 +226,18 @@ A script that throws halfway emits nothing: the files it managed to produce are
 discarded with the plan, because a half-written export is one the user has to
 notice is half-written.
 
+### Importers can take options
+
+An importer declares `options_schema()` the way an operator declares `schema()`.
+Most take none — Spine and DragonBones read what the file says. PSD takes four:
+`scale`, `skip_hidden`, `include` and `flatten`.
+
+The distinction that matters is **parameters, not a conversation**. Every option
+has a default that produces a usable rig, so an unattended caller — a script, an
+MCP client — imports without a UI and the editor's panel refines rather than
+supplies. An importer that genuinely needed a dialogue could not be registered
+at all, and would stay panel-only.
+
 ### Sidecars are not a filesystem
 
 `ankhimate.sidecar` and `sidecarBytes` reach files in the imported rig's own
