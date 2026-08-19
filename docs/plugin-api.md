@@ -68,9 +68,41 @@ carries the built-ins; `ids()` lists them and `get(id).schema()` describes one.
 | `anim.set_event` | Move, rename, or set what it carries | Animate |
 | `anim.delete_event` | Remove an event | Animate |
 | `doc.set_mode` | Switch between Setup and Animate | either |
+| `attachment.create_box` | A hitbox polygon | Setup |
+| `attachment.create_clip` | A clipping polygon | Setup |
+| `attachment.create_point` | A position and a direction | Setup |
+| `anim.rename` | Rename a clip | either |
+| `anim.duplicate` | Copy a clip, keys and all | either |
+| `anim.delete` | Remove a clip | either |
+| `anim.set_meta` | Length and whether it loops | either |
+| `anim.retime` | Scale every key's time | either |
+| `bone.set_parent` | Reparent without moving it | Setup |
+| `bone.set_length` | Length, with children at the tip following | Setup |
+| `bone.set_color` | Colour in the hierarchy and viewport | Setup |
+| `asset.rename` | Rename an image; attachments follow | Setup |
+| `asset.delete` | Remove an image | Setup |
 
 Verbs that act on a *selection* or a tool live in the editor instead, because a
 selection is something only an editor has.
+
+### What is deliberately not a verb
+
+Painting weights is a brush stroke, editing a mesh is a vertex drag, and a
+viewport group gizmo has no meaning without a viewport. Those are not missing —
+a verb for them would be an argument list nobody could construct by hand.
+
+A plugin that wants a weighted mesh builds one with `attachment.create_mesh`,
+which takes the vertices and their influences outright.
+
+### Polygons are set outright
+
+`attachment.create_box` and `attachment.create_clip` take the whole polygon.
+The commands underneath take per-index edits, because that is what a drag
+produces; a script has a shape in mind and states it. Three points is the
+minimum — two is a line, which imports as a shape that hits nothing.
+
+A bad polygon creates nothing at all: the argument is read before the shape is
+made, so a script never has to clean up after a failure it cannot detect.
 
 ### Creating and configuring are separate verbs
 
