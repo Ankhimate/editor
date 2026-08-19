@@ -315,98 +315,133 @@ fn what_was_decided(ui: &mut egui::Ui, pending: &PendingPsd) {
 
 /// The layer tree with a tick box per row, and a flatten toggle on groups.
 fn layer_tree(ui: &mut egui::Ui, pending: &mut PendingPsd) {
-    egui::ScrollArea::vertical()
-        .max_height(360.0)
-        .min_scrolled_height(360.0)
-        .show(ui, |ui| {
-            ui.set_min_width(330.0);
-            // Collected first: the rows mutate `include`, and the borrow would
-            // otherwise overlap the iteration.
-            let rows: Vec<LayerNode> = pending.nodes.clone();
-            for (index, node) in rows.into_iter().enumerate() {
-                ui.horizontal(|ui| {
-                    // Runtime indent from tree depth — no static class can hold a
-                    // value computed per row.
-                    ui.add_space(node.depth as f32 * 14.0);
-                    let mut on = pending.include.contains(&node.path);
-                    if ui.checkbox(&mut on, "").changed() {
-                        pending.set_subtree(&node.path, on);
-                    }
-                    // The tags on this row, and the name with them stripped —
-                    // which is what the bone or slot will actually be called.
-                    // An artist writing `arm [bone][slot:upper]` should be able
-                    // to see that they get a thing called `arm`, here, rather
-                    // than after the import.
-                    let tags = pending.tags.get(index);
-                    let shown = tags.map(|t| t.name.as_str()).unwrap_or(&node.name);
-                    let icon = if node.is_group {
-                        crate::ui::icons::FOLDER
-                    } else {
-                        crate::ui::icons::IMAGE
-                    };
-                    let label = egui::RichText::new(format!("{icon} {shown}")).size(12.0);
-                    let label = if node.visible {
-                        label
-                    } else {
-                        label.color(ui.visuals().weak_text_color())
-                    };
-                    ui.label(label);
+    // The `ui` handed in belongs to the dialog's `horizontal_top`, so a `ui`
+    // used directly here lays each row out *beside* the last rather than under
+    // it — the tree came out as one row running off both edges of the screen,
+    // taking the right-hand column and the buttons with it.
+    //
+    // `ui.vertical` is what turns the direction back. The width is also fixed
+    // rather than a minimum: `ScrollArea` leaves the cross axis unbounded, so
+    // one wide row — a layer with three tag chips — would otherwise still grow
+    // the dialog past the window.
+    const TREE_WIDTH: f32 = 330.0;
+    ui.vertical(|ui| {
+        ui.set_max_width(TREE_WIDTH);
+        egui::ScrollArea::both()
+            .max_height(360.0)
+            .min_scrolled_height(360.0)
+            .max_width(TREE_WIDTH)
+            .show(ui, |ui| {
+                ui.set_min_width(TREE_WIDTH);
+                // Collected first: the rows mutate `include`, and the borrow would
+                // otherwise overlap the iteration.
+                let rows: Vec<LayerNode> = pending.nodes.clone();
+                for (index, node) in rows.into_iter().enumerate() {
+                    // Two lines per node: the tick, name and size on one, the tags
+                    // on the next. One line cannot hold both without the row
+                    // growing wider than the panel it lives in.
+                    // Cloned rather than borrowed: the row below mutates `include`,
+                    // and a live borrow of `tags` would overlap it.
+                    let tags = pending.tags.get(index).cloned();
+                    ui.horizontal(|ui| {
+                        // Runtime indent from tree depth — no static class can hold a
+                        // value computed per row.
+                        ui.add_space(node.depth as f32 * 14.0);
+                        let mut on = pending.include.contains(&node.path);
+                        if ui.checkbox(&mut on, "").changed() {
+                            pending.set_subtree(&node.path, on);
+                        }
+                        // The tags on this row, and the name with them stripped —
+                        // which is what the bone or slot will actually be called.
+                        // An artist writing `arm [bone][slot:upper]` should be able
+                        // to see that they get a thing called `arm`, here, rather
+                        // than after the import.
+                        let shown = tags.as_ref().map(|t| t.name.as_str()).unwrap_or(&node.name);
+                        let icon = if node.is_group {
+                            crate::ui::icons::FOLDER
+                        } else {
+                            crate::ui::icons::IMAGE
+                        };
+                        let label = egui::RichText::new(format!("{icon} {shown}")).size(12.0);
+                        let label = if node.visible {
+                            label
+                        } else {
+                            label.color(ui.visuals().weak_text_color())
+                        };
+                        ui.label(label);
 
-                    if let Some(tags) = tags {
-                        for tag in tags.names() {
-                            let known = psd_tags::KNOWN.contains(&tag);
-                            let text = match tags.value(tag) {
-                                Some(value) => format!("{tag}:{value}"),
-                                None => tag.to_string(),
-                            };
-                            // An unrecognised tag is coloured rather than
-                            // hidden: a misspelled `[bonee]` that looks like
-                            // every other chip is an artist wondering why their
-                            // tag did nothing.
-                            let colour = if known {
-                                ui.visuals().weak_text_color()
-                            } else {
-                                ui.visuals().warn_fg_color
-                            };
+                        if node.is_group {
+                            let mut flat = pending.flatten.contains(&node.path);
+                            if ui
+                                // The word cost more width than it was worth in a
+                                // 330px tree; the tooltip still says what it does.
+                                .checkbox(&mut flat, crate::ui::icons::MERGE_GROUP)
+                                .on_hover_text(
+                                    "One attachment for the whole group instead of a bone \
+                                 with children",
+                                )
+                                .changed()
+                            {
+                                if flat {
+                                    pending.flatten.insert(node.path.clone());
+                                } else {
+                                    pending.flatten.remove(&node.path);
+                                }
+                            }
+                        } else if node.bounds.2 > 0 {
                             ui.label(
-                                egui::RichText::new(format!("{} {text}", crate::ui::icons::TAG))
+                                egui::RichText::new(format!("{}×{}", node.bounds.2, node.bounds.3))
+                                    .size(10.0)
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                        }
+                    });
+                    // Tags read off this layer's name, shown on their own line
+                    // under it rather than beside it. Beside it, a layer with
+                    // three of them makes the row wider than the panel — which
+                    // is how this dialog first came out drawn off the edge of
+                    // the screen, with its buttons past the right margin.
+                    let listed: Vec<&str> = tags
+                        .as_ref()
+                        .map(|t| t.names().collect())
+                        .unwrap_or_default();
+                    if !listed.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.add_space(node.depth as f32 * 14.0 + 22.0);
+                            for tag in listed {
+                                let known = psd_tags::KNOWN.contains(&tag);
+                                let text = match tags.as_ref().and_then(|t| t.value(tag)) {
+                                    Some(value) => format!("{tag}:{value}"),
+                                    None => tag.to_string(),
+                                };
+                                // An unrecognised tag is coloured rather than
+                                // omitted: a misspelled `[bonee]` that looks
+                                // like every other chip is an artist wondering
+                                // why their tag did nothing.
+                                let colour = if known {
+                                    ui.visuals().weak_text_color()
+                                } else {
+                                    ui.visuals().warn_fg_color
+                                };
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} {text}",
+                                        crate::ui::icons::TAG
+                                    ))
                                     .size(9.5)
                                     .color(colour),
-                            )
-                            .on_hover_text(if known {
-                                "Read off the layer name"
-                            } else {
-                                "This build does not understand this tag"
-                            });
-                        }
-                    }
-
-                    if node.is_group {
-                        let mut flat = pending.flatten.contains(&node.path);
-                        if ui
-                            .checkbox(&mut flat, "flatten")
-                            .on_hover_text(
-                                "One attachment for the whole group instead of a bone \
-                                 with children",
-                            )
-                            .changed()
-                        {
-                            if flat {
-                                pending.flatten.insert(node.path.clone());
-                            } else {
-                                pending.flatten.remove(&node.path);
+                                )
+                                .on_hover_text(if known {
+                                    "Read off the layer name"
+                                } else {
+                                    "This build does not understand this tag"
+                                });
                             }
-                        }
-                    } else if node.bounds.2 > 0 {
-                        ui.label(
-                            egui::RichText::new(format!("{}×{}", node.bounds.2, node.bounds.3))
-                                .size(10.0)
-                                .color(ui.visuals().weak_text_color()),
-                        );
+                        });
                     }
-                });
-            }
-        });
+                }
+            });
+    });
 }
 
 /// Run the import and fold the result into the document as one undo step.

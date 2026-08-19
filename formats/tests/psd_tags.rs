@@ -458,3 +458,32 @@ fn every_known_tag_has_something_that_reads_it() {
         "the waiting list names a tag that is not known"
     );
 }
+
+#[test]
+fn a_fully_transparent_layer_is_not_imported() {
+    // Found in the running editor, not by a test: the fixture's stray `Layer 1`
+    // came in as a slot with a 1x1 invisible image. Photoshop leaves these
+    // behind and every one imported is something the artist has to find and
+    // delete in a rig they did not build.
+    let import = psd::import(FIXTURE, &psd::ImportOptions::default()).expect("import");
+
+    let names: Vec<&str> = import
+        .skeleton
+        .slots
+        .iter()
+        .map(|(_, s)| s.name.as_str())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n.starts_with("Layer 1")),
+        "an empty layer became a slot: {names:?}"
+    );
+    assert!(
+        import
+            .summary
+            .skipped
+            .iter()
+            .any(|s| s.contains("Layer 1") && s.contains("transparent")),
+        "and it was reported rather than silently dropped: {:?}",
+        import.summary.skipped
+    );
+}

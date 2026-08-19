@@ -219,6 +219,14 @@ pub fn silhouette(image: &image::RgbaImage, alpha_threshold: u8) -> Vec<Vec<Vec2
     // Simplify first to drop the steps, then round the remaining corners. Doing
     // it the other way round smooths the staircase into a wobble and then keeps
     // the wobble.
+    //
+    // Measured, so the division of labour is not guesswork: at this tolerance
+    // `simplify` alone already removes the staircase — a right triangle comes
+    // out of it with three corners and straight edges. What `chaikin` adds is
+    // the sub-pixel rounding on shapes that are genuinely curved, which is why
+    // there is no test here that fails when it is removed. Do not read its
+    // absence as the smoothing being untested; read it as the smoothing being
+    // cosmetic on top of a contour that is already right.
     let tolerance = 1.5;
     find_contours(&mask, width, height)
         .into_iter()
@@ -227,13 +235,19 @@ pub fn silhouette(image: &image::RgbaImage, alpha_threshold: u8) -> Vec<Vec<Vec2
         .collect()
 }
 
-/// Corner-cutting subdivision: replace each corner with the points a quarter and
-/// three quarters along its edges.
+/// Corner-cutting subdivision, applied only where the corner is shallow.
 ///
 /// Two passes take a simplified staircase to something that reads as a curve
 /// without pulling the line far off the pixels — the limit shape stays inside
 /// the original polygon's convex corners, so the outline never swells past the
 /// art it is describing.
+///
+/// **Sharp corners are kept.** Plain Chaikin cuts every corner equally, which
+/// is right for a staircase — many shallow turns standing in for one smooth
+/// edge — and wrong for the thing a staircase is not: a square. A rectangular
+/// sprite came out with four rounded corners and a visible bulge on each side,
+/// an outline describing a shape the artist did not draw. A turn sharper than
+/// [`SHARP_CORNER`] is taken as a real corner of the art and left alone.
 fn chaikin(points: &[Vec2], passes: usize) -> Vec<Vec2> {
     let mut current = points.to_vec();
     for _ in 0..passes {
@@ -244,12 +258,38 @@ fn chaikin(points: &[Vec2], passes: usize) -> Vec<Vec2> {
         for i in 0..current.len() {
             let a = current[i];
             let b = current[(i + 1) % current.len()];
-            next.push(a.lerp(b, 0.25));
-            next.push(a.lerp(b, 0.75));
+            // Whether *this* vertex survives is decided by the turn at `a`
+            // between the edge arriving and the edge leaving.
+            if is_sharp(current[(i + current.len() - 1) % current.len()], a, b) {
+                next.push(a);
+                next.push(a.lerp(b, 0.75));
+            } else {
+                next.push(a.lerp(b, 0.25));
+                next.push(a.lerp(b, 0.75));
+            }
         }
         current = next;
     }
     current
+}
+
+/// A turn this sharp is a corner of the art, not a step in a staircase.
+///
+/// Marching squares produces 90° steps too, but `simplify` has already collapsed
+/// a run of them into one shallow diagonal by the time this runs — so a right
+/// angle surviving to here is a right angle in the drawing.
+const SHARP_CORNER: f32 = std::f32::consts::FRAC_PI_4;
+
+/// Is the turn at `b`, coming from `a` and leaving to `c`, sharper than
+/// [`SHARP_CORNER`]?
+fn is_sharp(a: Vec2, b: Vec2, c: Vec2) -> bool {
+    let incoming = b - a;
+    let outgoing = c - b;
+    if incoming.length_squared() < f32::EPSILON || outgoing.length_squared() < f32::EPSILON {
+        return false;
+    }
+    let turn = incoming.normalize().angle_to(outgoing.normalize()).abs();
+    turn > SHARP_CORNER
 }
 
 pub fn trace(image: &image::RgbaImage, options: TraceOptions) -> Option<Traced> {
@@ -1206,5 +1246,43 @@ mod tests {
             ends.iter().all(|v| (v.x + 50.0).abs() < 1e-3),
             "both ends on the left edge: {ends:?}"
         );
+    }
+
+    #[test]
+    fn a_square_sprite_keeps_its_corners() {
+        // Seen in the editor, not in a test: a solid rectangular sprite was
+        // outlined with four rounded corners and a bulge along each edge — an
+        // outline describing a shape nobody drew.
+        //
+        // Chaikin cut every corner equally, which is right for the staircase
+        // marching squares produces and wrong for the one shape a staircase is
+        // not.
+        let mut image = image::RgbaImage::new(40, 40);
+        for pixel in image.pixels_mut() {
+            *pixel = image::Rgba([255, 160, 90, 255]);
+        }
+
+        let contours = silhouette(&image, 8);
+        let points = contours.first().expect("a full image has one contour");
+
+        // The outline must reach the corners. Rounding pulled each one about a
+        // quarter of the way along both edges, which on a 40px square is 10px
+        // of missing corner.
+        let corners = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(40.0, 0.0),
+            Vec2::new(40.0, 40.0),
+            Vec2::new(0.0, 40.0),
+        ];
+        for corner in corners {
+            let nearest = points
+                .iter()
+                .map(|p| p.distance(corner))
+                .fold(f32::INFINITY, f32::min);
+            assert!(
+                nearest < 2.0,
+                "no point within 2px of corner {corner:?} — nearest was {nearest:.1}"
+            );
+        }
     }
 }
