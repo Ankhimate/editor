@@ -291,6 +291,7 @@ dependencies = [
  "image",
  "log",
  "rquickjs",
+ "serde",
  "serde_json",
  "tempfile",
 ]
