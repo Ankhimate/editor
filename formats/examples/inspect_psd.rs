@@ -116,6 +116,29 @@ imported {} bones, {} slots, {} images, {} skins",
             for (_, bone) in import.skeleton.bones.iter() {
                 println!("  bone {}", bone.name);
             }
+            for (id, slot) in import.skeleton.slots.iter() {
+                // The attachment and its frame count, because a slot holding a
+                // flipbook is the thing most likely to look wrong at a glance.
+                let frames = import
+                    .skeleton
+                    .skins
+                    .iter()
+                    .flat_map(|(_, skin)| {
+                        skin.names_for_slot(id)
+                            .filter_map(|n| skin.get(id, n))
+                            .collect::<Vec<_>>()
+                    })
+                    .find_map(|a| match a {
+                        ankhimate_core::attachment::Attachment::Region(r) => {
+                            r.sequence.as_ref().map(|s| s.frames.len())
+                        }
+                        _ => None,
+                    });
+                match frames {
+                    Some(n) => println!("  slot {} — {n} frames", slot.name),
+                    None => println!("  slot {}", slot.name),
+                }
+            }
         }
         Err(e) => println!(
             "

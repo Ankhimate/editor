@@ -1184,6 +1184,24 @@ fn apply_sequences(
             setup_index: 0,
         });
         skeleton.skins[*skin].set(*slot, lead_image.clone(), Attachment::Region(region));
+
+        // The slot was named after the lead frame, because `add_layer` had not
+        // yet been told the layer heads a run. `fire_01_slot` for a slot that
+        // plays all three frames reads as "frame 1 is here and the others went
+        // missing" — which is the question this import gets asked. The stem is
+        // what the run is called, so the slot takes it.
+        let taken: Vec<String> = skeleton
+            .slots
+            .iter()
+            .filter(|(id, _)| id != slot)
+            .map(|(_, s)| s.name.clone())
+            .collect();
+        if let Some(entry) = skeleton.slots.get_mut(*slot) {
+            entry.name = ankhimate_core::skeleton::unique_name(
+                &format!("{}_slot", run.stem),
+                taken.iter().map(String::as_str),
+            );
+        }
         summary.sequences.push((run.stem.clone(), count));
     }
 }

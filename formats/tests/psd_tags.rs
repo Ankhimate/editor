@@ -487,3 +487,24 @@ fn a_fully_transparent_layer_is_not_imported() {
         import.summary.skipped
     );
 }
+
+#[test]
+fn a_folded_run_is_named_after_the_run_and_not_its_first_frame() {
+    // Asked about the moment it was seen: "why does only fire_01_slot exist?"
+    // The fold was right and the name made it look like a loss — a slot called
+    // `fire_01_slot` reads as frame 1 surviving and the other two going
+    // missing, when it is the slot that plays all three.
+    let import = psd::import(FIXTURE, &psd::ImportOptions::default()).expect("import");
+    let names: Vec<&str> = import
+        .skeleton
+        .slots
+        .iter()
+        .map(|(_, s)| s.name.as_str())
+        .collect();
+
+    assert!(names.contains(&"fire_slot"), "named for the run: {names:?}");
+    assert!(
+        !names.iter().any(|n| n.starts_with("fire_01")),
+        "and not for the frame that happened to be first: {names:?}"
+    );
+}
