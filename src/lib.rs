@@ -284,6 +284,19 @@ impl Host {
                 })?,
             )?;
 
+            // An atlas page is a PNG; a plugin needs its bytes to hand to
+            // `asset.add_image`, and text-only sidecars are what blocked an
+            // importer from bringing artwork across at all.
+            let sidecar_bytes = self.sidecars.as_ref().map(|s| s.clone_dir());
+            ank.set(
+                "sidecarBytes",
+                Function::new(ctx.clone(), move |name: String| {
+                    sidecar_bytes
+                        .as_ref()
+                        .and_then(|dir| importer::Sidecars::new(dir.clone()).read_bytes(&name))
+                })?,
+            )?;
+
             let sidecar_list = self.sidecars.as_ref().map(|s| s.clone_dir());
             ank.set(
                 "sidecars",
@@ -322,6 +335,7 @@ impl Host {
                       spec.id, spec.label ?? spec.id, spec.extensions ?? []);
                   },
                   sidecar: (name) => __ankhimate.sidecar(name),
+                  sidecarBytes: (name) => __ankhimate.sidecarBytes(name),
                   sidecars: () => __ankhimate.sidecars(),
                 };
                 globalThis.__ankhimate_run_import = (text, fileName) => {
