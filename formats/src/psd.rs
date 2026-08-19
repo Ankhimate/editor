@@ -27,7 +27,7 @@
 use ankhimate_core::assets::{AssetDb, ImageAsset};
 use ankhimate_core::attachment::{Attachment, Rect, RegionAttachment};
 use ankhimate_core::constraints::{Constraint, IkConstraint};
-use ankhimate_core::ids::{BoneId, SkinId};
+use ankhimate_core::ids::{BoneId, SkinId, SlotId};
 use ankhimate_core::math::Transform;
 use ankhimate_core::skeleton::{Bone, Skeleton};
 use ankhimate_core::skin::Skin;
@@ -163,11 +163,52 @@ pub struct ImportSummary {
     /// worse than none if it is silent: the failure mode is a rig subtly wrong
     /// for a reason nobody can see.
     pub guesses: Vec<crate::psd_infer::Guess>,
+    /// Runs folded into one attachment, as `(stem, frame count)`.
+    ///
+    /// Worth reporting on its own: the artist gave the importer five layers and
+    /// got one slot back, and a count that does not match what they drew is the
+    /// first sign a frame was hidden or misnumbered.
+    pub sequences: Vec<(String, usize)>,
     /// Tags this build did not recognise, as `(layer path, tag)`.
     ///
     /// A misspelled `[bonee]` should be findable. Dropping it quietly is an
     /// artist wondering why their tag did nothing.
     pub unknown_tags: Vec<(String, String)>,
+}
+
+/// Frames per second an inferred run plays at.
+///
+/// A numbered run says nothing about timing, so this is a starting point the
+/// artist changes, not a reading of the file. `[fps:n]` overrides it.
+const DEFAULT_SEQUENCE_FPS: f32 = 12.0;
+
+/// What inference decided, in the terms the import loop works in.
+///
+/// Inference reasons about the whole tree at once and the loop sees one node at
+/// a time, so the translation happens once, up front. The alternative — asking
+/// `psd_infer` again per layer — is how the guess an artist reads and the rig
+/// they get end up disagreeing.
+#[derive(Debug, Default)]
+struct ImportPlan {
+    /// Lead layer path to the run it heads.
+    sequences: HashMap<String, SequencePlan>,
+    /// Every frame path, including the lead, to which run it belongs to.
+    frames: HashMap<String, FramePlan>,
+    /// Group paths whose art belongs to their parent's bone.
+    not_a_bone: HashSet<String>,
+}
+
+#[derive(Debug)]
+struct SequencePlan {
+    stem: String,
+    frames: Vec<String>,
+    fps: Option<f32>,
+}
+
+#[derive(Debug)]
+struct FramePlan {
+    /// The run's first frame by number, which owns the slot.
+    lead: String,
 }
 
 /// A finished import: a skeleton, the images it references, and what happened.
@@ -213,7 +254,7 @@ pub fn layer_tree(bytes: &[u8]) -> Result<Vec<LayerNode>, PsdError> {
             psd.get_group_sub_layers(id)
                 .unwrap_or_default()
                 .iter()
-                .map(|l| layer_bounds(l)),
+                .map(layer_bounds),
         );
         nodes.push(LayerNode {
             depth: path.matches('/').count(),
@@ -334,6 +375,8 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
     let mut assets = AssetDb::new();
     let mut summary = ImportSummary::default();
     let mut layer_paths = HashMap::new();
+    let mut frame_images: HashMap<String, String> = HashMap::new();
+    let mut leads: HashMap<String, (SkinId, SlotId, String)> = HashMap::new();
 
     // Read the file's own structure before building anything, so a guess is
     // made against the whole tree rather than against whatever has been seen so
@@ -360,7 +403,38 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
             }
         }
     }
-    crate::psd_infer::infer(&candidates, &node_tags, &mut summary.guesses);
+    let inferred = crate::psd_infer::infer(&candidates, &node_tags, &mut summary.guesses);
+
+    // What inference decided, keyed by the path the import loop knows a layer
+    // by. Both are built here rather than looked up per layer, because the
+    // decision is about the whole tree and the loop only ever sees one node.
+    let mut plan = ImportPlan::default();
+    for (i, node) in nodes.iter().enumerate() {
+        if let Some(sequence) = &inferred[i].sequence {
+            for path in &sequence.frames {
+                plan.frames.insert(
+                    path.clone(),
+                    FramePlan {
+                        lead: sequence.frames[0].clone(),
+                    },
+                );
+            }
+            plan.sequences.insert(
+                sequence.frames[0].clone(),
+                SequencePlan {
+                    stem: sequence.stem.clone(),
+                    frames: sequence.frames.clone(),
+                    fps: sequence.fps,
+                },
+            );
+        }
+        // A group inference read as *one* bone keeps its children as art on
+        // it. Recorded as a set of paths rather than re-derived in the loop, so
+        // the importer and the guess the artist reads cannot disagree.
+        if node.is_group && !inferred[i].bone {
+            plan.not_a_bone.insert(node.path.clone());
+        }
+    }
 
     let root = skeleton.add_bone(Bone {
         name: "root".into(),
@@ -422,11 +496,53 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
             for layer in sub_layers {
                 let layer_path = format!("{path}/{}", layer.name());
                 add_layer(
-                    &mut skeleton,
-                    &mut assets,
-                    &mut summary,
-                    &mut layer_paths,
+                    &mut Sink {
+                        skeleton: &mut skeleton,
+                        assets: &mut assets,
+                        summary: &mut summary,
+                        layer_paths: &mut layer_paths,
+                        frame_images: &mut frame_images,
+                        leads: &mut leads,
+                    },
+                    &plan,
                     skin_id,
+                    parent,
+                    layer,
+                    &layer_path,
+                    canvas,
+                    options,
+                );
+            }
+            continue;
+        }
+
+        // A group inference read as art rather than articulation gets no bone
+        // of its own: its layers hang from its parent's. This is the half of
+        // the "one bone, not eleven" guess that the artist can see in the rig —
+        // without it the guess is a sentence in a report and the hierarchy is
+        // unchanged.
+        if plan.not_a_bone.contains(&path) {
+            let parent = group
+                .parent_id()
+                .and_then(|p| paths.get(&p))
+                .and_then(|p| bones.get(p))
+                .copied()
+                .unwrap_or(root);
+            bones.insert(path.clone(), parent);
+            let default_skin = skeleton.default_skin;
+            for layer in sub_layers {
+                let layer_path = format!("{path}/{}", layer.name());
+                add_layer(
+                    &mut Sink {
+                        skeleton: &mut skeleton,
+                        assets: &mut assets,
+                        summary: &mut summary,
+                        layer_paths: &mut layer_paths,
+                        frame_images: &mut frame_images,
+                        leads: &mut leads,
+                    },
+                    &plan,
+                    default_skin,
                     parent,
                     layer,
                     &layer_path,
@@ -513,10 +629,15 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
         for layer in sub_layers {
             let layer_path = format!("{path}/{}", layer.name());
             add_layer(
-                &mut skeleton,
-                &mut assets,
-                &mut summary,
-                &mut layer_paths,
+                &mut Sink {
+                    skeleton: &mut skeleton,
+                    assets: &mut assets,
+                    summary: &mut summary,
+                    layer_paths: &mut layer_paths,
+                    frame_images: &mut frame_images,
+                    leads: &mut leads,
+                },
+                &plan,
                 default_skin,
                 bone,
                 layer,
@@ -535,10 +656,15 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
         }
         let path = layer.name().to_string();
         add_layer(
-            &mut skeleton,
-            &mut assets,
-            &mut summary,
-            &mut layer_paths,
+            &mut Sink {
+                skeleton: &mut skeleton,
+                assets: &mut assets,
+                summary: &mut summary,
+                layer_paths: &mut layer_paths,
+                frame_images: &mut frame_images,
+                leads: &mut leads,
+            },
+            &plan,
             default_skin,
             root,
             layer,
@@ -599,6 +725,18 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
         }));
         summary.constraints += 1;
     }
+
+    // Sequences, once every layer is in. A run is ordered by number and the
+    // layers arrive in stacking order, so the frames a lead cycles through are
+    // not all known when its slot is made.
+    apply_sequences(
+        &mut skeleton,
+        &plan,
+        &frame_images,
+        &leads,
+        &mut summary,
+        DEFAULT_SEQUENCE_FPS,
+    );
 
     skeleton.rebuild_update_order();
     Ok(PsdImport {
@@ -706,12 +844,27 @@ fn layer_png(layer: &psd::PsdLayer, canvas: (u32, u32)) -> Option<(Vec<u8>, u32,
     Some((bytes, w, h))
 }
 
+/// Everything `add_layer` writes into, gathered so the signature says what the
+/// function does rather than listing nine things it happens to touch.
+struct Sink<'a> {
+    skeleton: &'a mut Skeleton,
+    assets: &'a mut AssetDb,
+    summary: &'a mut ImportSummary,
+    layer_paths: &'a mut HashMap<String, String>,
+    /// Image name per frame path, so a run's lead can find the frames that were
+    /// imported after it. Frames arrive in stacking order and a run is ordered
+    /// by number, so the sequence cannot be assembled until every layer is in.
+    frame_images: &'a mut HashMap<String, String>,
+    /// Where a run lead's attachment landed, so the sequence can be put on it
+    /// once the frames are known. `Skin` has no by-texture lookup and adding
+    /// one to `core` for an importer's convenience is the wrong place for it.
+    leads: &'a mut HashMap<String, (SkinId, SlotId, String)>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn add_layer(
-    skeleton: &mut Skeleton,
-    assets: &mut AssetDb,
-    summary: &mut ImportSummary,
-    layer_paths: &mut HashMap<String, String>,
+    sink: &mut Sink,
+    plan: &ImportPlan,
     skin: SkinId,
     bone: BoneId,
     layer: &psd::PsdLayer,
@@ -719,6 +872,10 @@ fn add_layer(
     canvas: (u32, u32),
     options: &ImportOptions,
 ) {
+    let skeleton = &mut *sink.skeleton;
+    let assets = &mut *sink.assets;
+    let summary = &mut *sink.summary;
+    let layer_paths = &mut *sink.layer_paths;
     let tags = tags_of(layer.name());
     // A pivot is a marker, not art: it placed the bone already.
     if tags.has("pivot") {
@@ -754,6 +911,16 @@ fn add_layer(
     assets.add(ImageAsset::new(name.clone(), bytes, w, h));
     summary.images += 1;
     layer_paths.insert(name.clone(), path.to_string());
+    sink.frame_images.insert(path.to_string(), name.clone());
+    let is_lead = plan.frames.get(path).is_some_and(|f| f.lead == path);
+
+    // A frame that is not the run's lead has had its image imported and that is
+    // all it gets: the slot belongs to the lead, which cycles through them. Five
+    // slots for a five-frame flipbook is the answer that made `Sequence` worth
+    // having in the first place.
+    if plan.frames.contains_key(path) && !is_lead {
+        return;
+    }
 
     let slot = skeleton.add_slot(Slot {
         attachment: Some(name.clone()),
@@ -767,12 +934,63 @@ fn add_layer(
         slot,
         name.clone(),
         region(
-            name,
+            name.clone(),
             offset,
             w as f32 * options.scale,
             h as f32 * options.scale,
         ),
     );
+    if is_lead {
+        sink.leads.insert(path.to_string(), (skin, slot, name));
+    }
+}
+
+/// Turn each run's lead attachment into a sequence over its frames.
+///
+/// The followers' images are already in the asset database — every frame has to
+/// be, or the flipbook has nothing to show — and this is what stops them from
+/// each having a slot the artist would have to hide by hand.
+fn apply_sequences(
+    skeleton: &mut Skeleton,
+    plan: &ImportPlan,
+    frame_images: &HashMap<String, String>,
+    leads: &HashMap<String, (SkinId, SlotId, String)>,
+    summary: &mut ImportSummary,
+    fps: f32,
+) {
+    for (lead_path, run) in &plan.sequences {
+        let Some((skin, slot, lead_image)) = leads.get(lead_path) else {
+            // The lead was skipped — hidden, unselected, or without pixels —
+            // so there is no attachment to make a sequence on. The frames that
+            // did import stay as they are rather than being silently dropped.
+            continue;
+        };
+        let frames: Vec<ankhimate_core::attachment::TextureRef> = run
+            .frames
+            .iter()
+            .filter_map(|path| frame_images.get(path).cloned())
+            .collect();
+        if frames.len() < 2 {
+            continue;
+        }
+        let count = frames.len();
+
+        let Some(Attachment::Region(region)) = skeleton.skins[*skin].get(*slot, lead_image) else {
+            continue;
+        };
+        let mut region = region.clone();
+        region.sequence = Some(ankhimate_core::attachment::Sequence {
+            frames,
+            fps: run.fps.unwrap_or(fps),
+            // Looping is the only mode a numbered run implies on its own; a
+            // one-shot effect is a `[frames]` decision the artist makes, not
+            // something the numbering can say.
+            mode: ankhimate_core::attachment::SequenceMode::Loop,
+            setup_index: 0,
+        });
+        skeleton.skins[*skin].set(*slot, lead_image.clone(), Attachment::Region(region));
+        summary.sequences.push((run.stem.clone(), count));
+    }
 }
 
 /// Composite a group's layers into one image, in stacking order.

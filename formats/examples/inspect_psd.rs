@@ -92,4 +92,34 @@ fn main() {
     for (a, b) in mirrors {
         println!("  {a} ↔ {b}");
     }
+
+    // What the importer makes of all that, which is the half the guesses above
+    // cannot show: a guess nothing acts on is a comment.
+    let options = ankhimate_formats::psd::ImportOptions::default();
+    match ankhimate_formats::psd::import(&bytes, &options) {
+        Ok(import) => {
+            let s = &import.summary;
+            println!(
+                "
+imported {} bones, {} slots, {} images, {} skins",
+                s.bones, s.slots, s.images, s.skins
+            );
+            for (stem, frames) in &s.sequences {
+                println!("  sequence {stem} — {frames} frames in one slot");
+            }
+            for (path, tag) in &s.unknown_tags {
+                println!("  unknown tag [{tag}] on {path}");
+            }
+            for skipped in &s.skipped {
+                println!("  skipped {skipped}");
+            }
+            for (_, bone) in import.skeleton.bones.iter() {
+                println!("  bone {}", bone.name);
+            }
+        }
+        Err(e) => println!(
+            "
+import failed: {e}"
+        ),
+    }
 }

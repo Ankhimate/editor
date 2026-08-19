@@ -60,7 +60,12 @@ pub struct Candidate {
 /// What inference concluded about one layer.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Inferred {
-    /// This group should be a bone.
+    /// This layer or group should get a bone of its own.
+    ///
+    /// False for the children of a group inference decided is *one* bone: a
+    /// face's eyes and brows become attachments on the face, not eleven bones
+    /// nobody will pose. It is the flag the importer acts on, so it has to say
+    /// something the guess beside it does not already say.
     pub bone: bool,
     /// These layers are frames of one sprite rather than separate attachments.
     pub sequence: Option<Sequence>,
@@ -75,11 +80,26 @@ pub struct Sequence {
     pub stem: String,
     /// Layer paths, in frame order.
     pub frames: Vec<String>,
+    /// Frames per second from `[fps:n]`, or `None` to take the document's.
+    pub fps: Option<f32>,
+    /// True when a `[frames]` tag said so rather than the numbering implying it.
+    ///
+    /// Kept because the two are not the same fact: an explicit run is not
+    /// reported as a guess, and a caller showing the artist what was decided
+    /// for them must not list back what they wrote themselves.
+    pub explicit: bool,
 }
 
 /// Read what the file implies, for layers the tags left silent.
 pub fn infer(candidates: &[Candidate], tags: &[Tags], guesses: &mut Vec<Guess>) -> Vec<Inferred> {
     let mut out = vec![Inferred::default(); candidates.len()];
+    // Everything starts as its own bone, and the passes below take that away
+    // where they have a reason. The opposite default would make `bone: false`
+    // mean two different things — "decided against" and "never looked at" —
+    // and a consumer cannot tell those apart.
+    for slot in out.iter_mut() {
+        slot.bone = true;
+    }
 
     // Sequences first: a group of stacked frames is not a chain either, so the
     // bone pass would otherwise report it twice — once as "one bone, not 3" and
@@ -115,11 +135,9 @@ fn infer_bones(
         // child is a bone, which is exactly the disagreement this guess offers
         // — firing anyway would tell the artist to write what they wrote.
         if tags[i].has("bone") {
-            out[i].bone = true;
             continue;
         }
         if tags[i].has("bones") {
-            out[i].bone = true;
             for (j, child) in candidates.iter().enumerate() {
                 if is_child_of(&child.path, &candidate.path) {
                     // A child may still refuse with `[!bone]`, which `inherit`
@@ -130,6 +148,7 @@ fn infer_bones(
             continue;
         }
         if tags[i].blocks("bone") || tags[i].has("ignore") {
+            out[i].bone = false;
             continue;
         }
 
@@ -141,7 +160,6 @@ fn infer_bones(
         // A group with one child articulates nothing on its own, and a group
         // with none is a folder.
         if children.len() < 2 {
-            out[i].bone = true;
             continue;
         }
 
@@ -169,12 +187,16 @@ fn infer_bones(
                 ),
                 override_with: format!("[bones] on `{}`", candidate.name),
             });
-            out[i].bone = true;
-            // The children stay attachments on this one bone.
+            // The children stay attachments on this one bone. Saying so here
+            // rather than only in the guess is what lets the importer act on
+            // it — a guess nothing reads is a comment.
+            for (j, child) in candidates.iter().enumerate() {
+                if is_child_of(&child.path, &candidate.path) && !tags[j].has("bone") {
+                    out[j].bone = false;
+                }
+            }
             continue;
         }
-
-        out[i].bone = true;
     }
 }
 
@@ -273,11 +295,17 @@ fn infer_sequences(
         if members.len() < 2 {
             continue;
         }
-        // An explicit `[frames]` anywhere in the run means the artist already
-        // said so, and inference stays quiet.
-        if members.iter().any(|(i, _)| tags[*i].has("frames")) {
+        // `[!frames]` refuses the run: consecutively numbered layers that are
+        // genuinely separate attachments do exist, and the artist saying so
+        // must be able to stop the guess.
+        if members.iter().any(|(i, _)| tags[*i].blocks("frames")) {
             continue;
         }
+        // An explicit `[frames]` means the artist already said so. The run is
+        // still built — a tag naming the feature must not be the one thing
+        // that switches it off — but nothing is reported, because nothing was
+        // guessed.
+        let explicit = members.iter().any(|(i, _)| tags[*i].has("frames"));
         members.sort_by_key(|(_, number)| *number);
 
         let frames: Vec<String> = members
@@ -286,16 +314,28 @@ fn infer_sequences(
             .collect();
         let first = members[0].0;
 
-        guesses.push(Guess {
-            path: candidates[first].path.clone(),
-            decided: format!("`{stem}` is a {}-frame sequence", frames.len()),
-            because: "consecutively numbered layers at the same level read as frames of \
-                      one drawing rather than separate attachments"
-                .to_string(),
-            override_with: format!("[!frames] on `{stem}`"),
-        });
+        if !explicit {
+            guesses.push(Guess {
+                path: candidates[first].path.clone(),
+                decided: format!("`{stem}` is a {}-frame sequence", frames.len()),
+                because: "consecutively numbered layers at the same level read as frames of \
+                          one drawing rather than separate attachments"
+                    .to_string(),
+                override_with: format!("[!frames] on `{stem}`"),
+            });
+        }
 
-        out[first].sequence = Some(Sequence { stem, frames });
+        // `[fps:n]` on any frame speaks for the run; the first one wins so a
+        // disagreement is resolved the same way every time rather than by
+        // whichever layer happens to be last.
+        let fps = members.iter().find_map(|(i, _)| tags[*i].number("fps"));
+
+        out[first].sequence = Some(Sequence {
+            stem,
+            frames,
+            fps,
+            explicit,
+        });
     }
 }
 

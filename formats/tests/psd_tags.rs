@@ -249,3 +249,137 @@ fn an_empty_group_has_no_extent_rather_than_a_wrong_one() {
         }
     }
 }
+
+#[test]
+fn a_sequence_becomes_one_slot_and_not_one_per_frame() {
+    // The whole point of detecting a run. Three frames used to mean three
+    // slots the artist hides by hand, and the flipbook the numbering plainly
+    // meant was lost — inference noticed and nothing acted on it.
+    let import = psd::import(FIXTURE, &psd::ImportOptions::default()).expect("import");
+
+    assert_eq!(
+        import.summary.sequences,
+        [("fire".to_string(), 3)],
+        "the run folded, and said how many frames it folded"
+    );
+
+    let slots: Vec<&str> = import
+        .skeleton
+        .slots
+        .iter()
+        .map(|(_, s)| s.name.as_str())
+        .collect();
+    let frame_slots = slots.iter().filter(|n| n.starts_with("fire")).count();
+    assert_eq!(frame_slots, 1, "one slot for the run: {slots:?}");
+}
+
+#[test]
+fn every_frame_of_a_sequence_is_still_imported_as_an_image() {
+    // The slot collapses; the art must not. A flipbook with one frame in the
+    // asset database is a flipbook that does not play.
+    let import = psd::import(FIXTURE, &psd::ImportOptions::default()).expect("import");
+    let names: Vec<&str> = import
+        .assets
+        .images
+        .values()
+        .map(|a| a.name.as_str())
+        .collect();
+
+    for frame in ["fire_01", "fire_02", "fire_03"] {
+        assert!(names.contains(&frame), "missing {frame} in {names:?}");
+    }
+}
+
+#[test]
+fn the_lead_attachment_cycles_the_frames_in_number_order() {
+    // Order comes from the number, not from the stacking — the fixture stacks
+    // `fire_03` on top, so a reader that trusted the file's order would play it
+    // backwards.
+    use ankhimate_core::attachment::Attachment;
+    let import = psd::import(FIXTURE, &psd::ImportOptions::default()).expect("import");
+
+    let sequence = import
+        .skeleton
+        .skins
+        .iter()
+        .flat_map(|(_, skin)| {
+            import.skeleton.slots.iter().flat_map(move |(slot, _)| {
+                skin.names_for_slot(slot)
+                    .filter_map(move |name| skin.get(slot, name))
+            })
+        })
+        .find_map(|attachment| match attachment {
+            Attachment::Region(r) => r.sequence.clone(),
+            _ => None,
+        })
+        .expect("the fire attachment carries a sequence");
+
+    assert_eq!(sequence.frames, ["fire_01", "fire_02", "fire_03"]);
+    assert!(
+        sequence.fps > 0.0,
+        "a sequence that never advances is a still"
+    );
+}
+
+#[test]
+fn an_explicit_frames_tag_builds_the_run_and_reports_nothing() {
+    // `[frames]` used to *skip* the run entirely, so naming the feature was the
+    // one thing that switched it off. It still must not produce a guess: a
+    // report listing back what the artist wrote is noise that teaches them to
+    // stop reading it.
+    use ankhimate_formats::psd_infer::{self, Candidate};
+
+    let candidates: Vec<Candidate> = ["fire_01", "fire_02"]
+        .iter()
+        .enumerate()
+        .map(|(i, name)| Candidate {
+            path: name.to_string(),
+            name: name.to_string(),
+            depth: 0,
+            is_group: false,
+            bounds: (0, i as i32, 10, 10),
+        })
+        .collect();
+    let tags = vec![
+        Tags::parse("fire_01 [frames][fps:24]"),
+        Tags::parse("fire_02"),
+    ];
+
+    let mut guesses = Vec::new();
+    let inferred = psd_infer::infer(&candidates, &tags, &mut guesses);
+
+    let sequence = inferred[0]
+        .sequence
+        .as_ref()
+        .expect("the tag built the run");
+    assert!(sequence.explicit);
+    assert_eq!(sequence.fps, Some(24.0), "[fps:24] speaks for the run");
+    assert!(
+        !guesses.iter().any(|g| g.decided.contains("sequence")),
+        "nothing was guessed, so nothing is reported: {guesses:?}"
+    );
+}
+
+#[test]
+fn a_refused_run_stays_separate_attachments() {
+    // `[!frames]` is the escape hatch the guess itself advertises. Numbered
+    // layers that really are separate attachments do exist.
+    use ankhimate_formats::psd_infer::{self, Candidate};
+
+    let candidates: Vec<Candidate> = ["card_01", "card_02"]
+        .iter()
+        .enumerate()
+        .map(|(i, name)| Candidate {
+            path: name.to_string(),
+            name: name.to_string(),
+            depth: 0,
+            is_group: false,
+            bounds: (0, i as i32, 10, 10),
+        })
+        .collect();
+    let tags = vec![Tags::parse("card_01 [!frames]"), Tags::parse("card_02")];
+
+    let mut guesses = Vec::new();
+    let inferred = psd_infer::infer(&candidates, &tags, &mut guesses);
+    assert!(inferred.iter().all(|i| i.sequence.is_none()));
+}
