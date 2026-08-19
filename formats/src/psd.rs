@@ -34,6 +34,30 @@ use ankhimate_core::skin::Skin;
 use ankhimate_core::slot::Slot;
 use std::collections::{HashMap, HashSet};
 
+/// A layer's tags, with the pre-grammar markers folded in.
+///
+/// `$pivot`, `$ik <name>` and `@skin:<name>` predate `[tag:value]` and still
+/// work: a PSD is an artist's file, and breaking one to tidy a syntax is a bad
+/// trade. They are translated here rather than handled separately, so the rest
+/// of the reader sees one vocabulary.
+fn tags_of(raw: &str) -> crate::psd_tags::Tags {
+    let mut tags = crate::psd_tags::Tags::parse(raw);
+    if tags.name == PIVOT_LAYER {
+        tags.inherit("pivot", None);
+    }
+    if let Some(rest) = tags.name.strip_prefix(IK_PREFIX) {
+        let name = rest.trim().to_string();
+        tags.inherit("ik", Some(name.clone()));
+        tags.name = name;
+    }
+    if let Some(rest) = tags.name.strip_prefix(SKIN_PREFIX) {
+        let name = rest.trim().to_string();
+        tags.inherit("skin", Some(name.clone()));
+        tags.name = name;
+    }
+    tags
+}
+
 /// Layer whose position defines its group's bone origin.
 pub const PIVOT_LAYER: &str = "$pivot";
 /// Group-name prefix that asks for an IK constraint over the bones inside.
@@ -109,6 +133,18 @@ pub struct ImportSummary {
     pub constraints: usize,
     /// Layers that were skipped, and why — hidden, excluded, or empty.
     pub skipped: Vec<String>,
+    /// Structure the reader decided without being told, each with its evidence
+    /// and the tag that would say otherwise (`psd_infer`).
+    ///
+    /// Carried out to the caller because inference that is usually right is
+    /// worse than none if it is silent: the failure mode is a rig subtly wrong
+    /// for a reason nobody can see.
+    pub guesses: Vec<crate::psd_infer::Guess>,
+    /// Tags this build did not recognise, as `(layer path, tag)`.
+    ///
+    /// A misspelled `[bonee]` should be findable. Dropping it quietly is an
+    /// artist wondering why their tag did nothing.
+    pub unknown_tags: Vec<(String, String)>,
 }
 
 /// A finished import: a skeleton, the images it references, and what happened.
@@ -266,6 +302,33 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
     let mut summary = ImportSummary::default();
     let mut layer_paths = HashMap::new();
 
+    // Read the file's own structure before building anything, so a guess is
+    // made against the whole tree rather than against whatever has been seen so
+    // far. `layer_tree` is the same walk the import modal previews with.
+    let nodes = layer_tree(bytes)?;
+    let candidates: Vec<crate::psd_infer::Candidate> = nodes
+        .iter()
+        .map(|n| crate::psd_infer::Candidate {
+            path: n.path.clone(),
+            name: n.name.clone(),
+            depth: n.depth,
+            is_group: n.is_group,
+            bounds: n.bounds,
+        })
+        .collect();
+    let node_tags: Vec<crate::psd_tags::Tags> = nodes.iter().map(|n| tags_of(&n.name)).collect();
+
+    for (node, tags) in nodes.iter().zip(&node_tags) {
+        for tag in tags.names() {
+            if !crate::psd_tags::KNOWN.contains(&tag) {
+                summary
+                    .unknown_tags
+                    .push((node.path.clone(), tag.to_string()));
+            }
+        }
+    }
+    crate::psd_infer::infer(&candidates, &node_tags, &mut summary.guesses);
+
     let root = skeleton.add_bone(Bone {
         name: "root".into(),
         parent: None,
@@ -308,10 +371,11 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
 
         // `@skin:` groups are containers, not bones: their job is to route what
         // is inside them into a named skin.
-        if let Some(skin_name) = group.name().strip_prefix(SKIN_PREFIX) {
-            let skin_id = *skins.entry(skin_name.to_string()).or_insert_with(|| {
+        let group_tags = tags_of(group.name());
+        if let Some(skin_name) = group_tags.value("skin").map(str::to_string) {
+            let skin_id = *skins.entry(skin_name.clone()).or_insert_with(|| {
                 summary.skins += 1;
-                skeleton.add_skin(Skin::new(skin_name))
+                skeleton.add_skin(Skin::new(&skin_name))
             });
             // Its bone is its parent's, so art in a skin hangs where the base
             // art hangs rather than under a bone that only exists in one outfit.
@@ -342,16 +406,12 @@ pub fn import(bytes: &[u8], options: &ImportOptions) -> Result<PsdImport, PsdErr
 
         // An `$ik ` group is a bone like any other; the constraint is added once
         // its children exist.
-        let bone_name = group
-            .name()
-            .strip_prefix(IK_PREFIX)
-            .unwrap_or(group.name())
-            .to_string();
+        let bone_name = group_tags.name.clone();
 
         // `$pivot` places the bone; without one the group's own bounds do.
         let origin = sub_layers
             .iter()
-            .find(|l| l.name() == PIVOT_LAYER)
+            .find(|l| tags_of(l.name()).has("pivot"))
             .map(|l| layer_center(layer_bounds(l), canvas, options.scale))
             .unwrap_or_else(|| {
                 layer_center(
@@ -626,8 +686,16 @@ fn add_layer(
     canvas: (u32, u32),
     options: &ImportOptions,
 ) {
-    // `$pivot` is a marker, not art: it placed the bone already.
-    if layer.name() == PIVOT_LAYER {
+    let tags = tags_of(layer.name());
+    // A pivot is a marker, not art: it placed the bone already.
+    if tags.has("pivot") {
+        return;
+    }
+    // `[ignore]` travels in the file, unlike an unticked box in a dialog — so a
+    // reference sketch the artist marked once stays out of every import rather
+    // than needing the same click each time.
+    if tags.has("ignore") {
+        summary.skipped.push(format!("{path} (tagged [ignore])"));
         return;
     }
     if !options.wants(path) {
@@ -643,8 +711,11 @@ fn add_layer(
         return;
     };
 
+    // `[slot:name]` names the slot; the tags are stripped either way, so a layer
+    // called `arm [mesh]` becomes `arm` rather than carrying its own markup.
+    let wanted = tags.value_or_name("slot").unwrap_or(&tags.name);
     let name = ankhimate_core::skeleton::unique_name(
-        layer.name(),
+        wanted,
         assets.images.values().map(|a| a.name.as_str()),
     );
     assets.add(ImageAsset::new(name.clone(), bytes, w, h));
@@ -763,6 +834,47 @@ pub fn diff(bytes: &[u8], existing: &HashMap<String, String>) -> Result<Reimport
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_old_markers_still_read_as_tags() {
+        // A PSD is an artist's file. Breaking one to tidy a syntax is a bad
+        // trade, so `$pivot`, `$ik <name>` and `@skin:<name>` translate into the
+        // grammar rather than being handled beside it.
+        assert!(tags_of("$pivot").has("pivot"));
+
+        let ik = tags_of("$ik arm_chain");
+        assert_eq!(ik.value("ik"), Some("arm_chain"));
+        assert_eq!(ik.name, "arm_chain", "and the marker leaves the name");
+
+        let skin = tags_of("@skin:winter");
+        assert_eq!(skin.value("skin"), Some("winter"));
+        assert_eq!(skin.name, "winter");
+    }
+
+    #[test]
+    fn a_new_tag_and_an_old_marker_mean_the_same_thing() {
+        // The port is a translation, not a second dialect: whichever an artist
+        // writes, the reader sees one vocabulary.
+        assert_eq!(
+            tags_of("$pivot").has("pivot"),
+            tags_of("anything [pivot]").has("pivot")
+        );
+        assert_eq!(
+            tags_of("$ik leg").value("ik"),
+            tags_of("leg [ik:leg]").value("ik")
+        );
+    }
+
+    #[test]
+    fn tags_compose_where_the_markers_could_not() {
+        // The reason for the grammar. Each old marker owned the whole layer
+        // name, so a group could not be both a bone and a skin.
+        let tags = tags_of("cape [bone][skin:winter][physics:cloth]");
+        assert!(tags.has("bone"));
+        assert_eq!(tags.value("skin"), Some("winter"));
+        assert_eq!(tags.value("physics"), Some("cloth"));
+        assert_eq!(tags.name, "cape");
+    }
+
     use super::*;
 
     #[test]
