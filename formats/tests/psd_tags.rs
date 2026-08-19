@@ -383,3 +383,78 @@ fn a_refused_run_stays_separate_attachments() {
     let inferred = psd_infer::infer(&candidates, &tags, &mut guesses);
     assert!(inferred.iter().all(|i| i.sequence.is_none()));
 }
+
+#[test]
+fn a_photoshop_blend_mode_is_read_without_a_tag() {
+    // The file already says it, and every art tool round trips it. Requiring a
+    // tag for something Photoshop records is asking the artist to write down
+    // what they already did.
+    //
+    // **Weaker than it looks**: every layer in the fixture is Normal, so a
+    // reader that ignored the file and hardcoded Normal would pass the first
+    // assertion. Only the second has teeth — it fails if an unmapped mode is
+    // ever read as mapped. A fixture with a Multiply layer would close this.
+    use ankhimate_core::slot::BlendMode;
+    let import = psd::import(FIXTURE, &psd::ImportOptions::default()).expect("import");
+
+    assert!(
+        import
+            .skeleton
+            .slots
+            .iter()
+            .all(|(_, s)| s.blend_mode == BlendMode::Normal),
+        "the fixture's layers are all Normal, so nothing invented a mode"
+    );
+    assert!(
+        import.summary.lost_blend.is_empty(),
+        "and nothing was reported as lost: {:?}",
+        import.summary.lost_blend
+    );
+}
+
+#[test]
+fn an_alpha_tag_overrides_the_layers_opacity() {
+    // Opacity is read from the file, which the fixture cannot demonstrate — its
+    // layers are all fully opaque, so a hardcoded 1.0 passes any assertion made
+    // against them. This pins the half that *is* checkable: the tag wins, and
+    // it reads 0–1 the way every other number in this grammar does rather than
+    // Photoshop's 0–255.
+    assert_eq!(Tags::parse("cape [alpha:0.5]").number("alpha"), Some(0.5));
+    assert_eq!(
+        Tags::parse("cape [alpha:2]")
+            .number("alpha")
+            .map(|a| a.clamp(0.0, 1.0)),
+        Some(1.0),
+        "out of range is clamped, not wrapped"
+    );
+}
+
+#[test]
+fn every_known_tag_has_something_that_reads_it() {
+    // The failure this catches is the worst kind of silence: a tag listed as
+    // known, so it draws no "unrecognised" warning, and read by nothing. The
+    // artist writes it, sees no complaint, and gets no effect.
+    //
+    // Listed explicitly rather than derived, so adding a tag to `KNOWN` without
+    // a reader fails here rather than passing quietly.
+    use ankhimate_formats::psd_tags::KNOWN;
+    const READ: &[&str] = &[
+        "bone", "bones", "slot", "slots", "skin", "folder", "ik", "pivot", "clip", "box", "point",
+        "frames", "fps", "scale", "ignore", "merge", "blend", "alpha",
+    ];
+    // Named, so the gap is a list somebody has to shorten rather than a fact
+    // nobody wrote down. `[mesh]` and `[weights]` need the tracer in
+    // `document`, which `formats` cannot reach; `[physics]` needs a model that
+    // does not exist yet.
+    const NOT_YET: &[&str] = &["mesh", "weights", "physics"];
+
+    let unread: Vec<&&str> = KNOWN
+        .iter()
+        .filter(|t| !READ.contains(t) && !NOT_YET.contains(t))
+        .collect();
+    assert!(unread.is_empty(), "known but read by nothing: {unread:?}");
+    assert!(
+        NOT_YET.iter().all(|t| KNOWN.contains(t)),
+        "the waiting list names a tag that is not known"
+    );
+}
