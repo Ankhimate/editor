@@ -392,6 +392,49 @@ impl Host {
                 })?,
             )?;
 
+            // ── Layered documents ────────────────────────────────────────
+            // The tag grammar and inference are not about PSD: a plugin
+            // importing a layered TIFF or a directory of numbered PNGs wants
+            // `[bone]` to mean what it means here and wants the same question
+            // answered about whether a group is a chain or a scatter. Without
+            // these it reimplements both, in JavaScript, and differently — so
+            // `[bones]` would mean one thing in the built-in importer and
+            // another in an addon.
+            ank.set(
+                "readPsd",
+                Function::new(ctx.clone(), move |base64: String| -> String {
+                    let Some(bytes) = decode_base64(&base64) else {
+                        return error_json("that is not base64");
+                    };
+                    match ankhimate_formats::psd_read::read_psd(&bytes) {
+                        Ok(structure) => serde_json::to_string(&structure)
+                            .unwrap_or_else(|e| error_json(&e.to_string())),
+                        Err(e) => error_json(&e.to_string()),
+                    }
+                })?,
+            )?;
+
+            ank.set(
+                "parseTags",
+                Function::new(ctx.clone(), move |raw: String| -> String {
+                    serde_json::to_string(&ankhimate_formats::psd_read::parse_tags(&raw))
+                        .unwrap_or_else(|e| error_json(&e.to_string()))
+                })?,
+            )?;
+
+            ank.set(
+                "inferStructure",
+                Function::new(ctx.clone(), move |layers_json: String| -> String {
+                    let layers: Vec<ankhimate_formats::psd_read::Layer> =
+                        match serde_json::from_str(&layers_json) {
+                            Ok(layers) => layers,
+                            Err(e) => return error_json(&e.to_string()),
+                        };
+                    serde_json::to_string(&ankhimate_formats::psd_read::infer(&layers))
+                        .unwrap_or_else(|e| error_json(&e.to_string()))
+                })?,
+            )?;
+
             // ── atlas.bake ───────────────────────────────────────────────
             // The one thing a plugin exporter could not produce. Most runtime
             // formats want a packed atlas, and a script cannot pack one: it has
@@ -423,6 +466,11 @@ impl Host {
                   invoke: (id, args) => __ops.invokeJson(id, JSON.stringify(args ?? {})),
                 };
                 globalThis.rig = () => JSON.parse(__ops.describeJson());
+                const __unwrap = (json) => {
+                  const value = JSON.parse(json);
+                  if (value && value.__error) throw new Error(value.__error);
+                  return value;
+                };
                 globalThis.names = () => JSON.parse(__ops.namesJson());
 
                 // An importer registers itself; the host decides whether this
@@ -439,6 +487,15 @@ impl Host {
                   sidecar: (name) => __ankhimate.sidecar(name),
                   sidecarBytes: (name) => __ankhimate.sidecarBytes(name),
                   sidecars: () => __ankhimate.sidecars(),
+
+                  // Structure reading. Each throws on failure rather than
+                  // returning an error object: a plugin that ignored a returned
+                  // error would go on to build a rig out of nothing, and the
+                  // stack trace names the line.
+                  readPsd: (base64) => __unwrap(__ankhimate.readPsd(base64)),
+                  parseTags: (name) => __unwrap(__ankhimate.parseTags(name)),
+                  infer: (layers) =>
+                    __unwrap(__ankhimate.inferStructure(JSON.stringify(layers ?? []))),
                 };
                 let __exporters = {};
                 globalThis.ankhimate.registerExporter = (spec) => {
@@ -659,6 +716,15 @@ mod tests {
 }
 
 /// Decode standard base64. Paired with the encoder in `importer.rs`.
+/// A failure a JS caller can tell apart from a result.
+///
+/// These functions return JSON, so an error cannot be an `Err` — and returning
+/// `null` would let a plugin carry on and build a rig out of nothing. The shim
+/// turns this shape into a thrown `Error`, so the stack trace names the line.
+fn error_json(message: &str) -> String {
+    serde_json::json!({ "__error": message }).to_string()
+}
+
 fn decode_base64(text: &str) -> Option<Vec<u8>> {
     const INVALID: u8 = 255;
     let mut table = [INVALID; 256];
