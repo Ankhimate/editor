@@ -28,6 +28,7 @@
 
 pub mod exporter;
 pub mod importer;
+pub mod panel;
 
 use ankhimate_document::{Args, DocOps, Edit};
 use rquickjs::{Context, Function, Object, Runtime};
@@ -61,6 +62,23 @@ impl std::error::Error for PluginError {}
 /// would have to answer what a plugin's captured references mean after an undo,
 /// and the answer is nothing good — so a run borrows the document, does its
 /// work, and hands it back.
+/// Where a run puts what it produced.
+///
+/// One struct rather than five positional `Option`s: a call reading
+/// `run_with(script, edit, None, Some(x), None, None)` says nothing about which
+/// `None` is which, and the compiler cannot tell you when two get swapped.
+#[derive(Default)]
+struct Sinks {
+    /// Importers declared, as `(id, label, extensions)`.
+    declared: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String, Vec<String>)>>>>,
+    /// Exporters declared, as `(id, label)`.
+    exporters: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>>>,
+    /// Files an exporter wrote.
+    emitted: Option<std::rc::Rc<std::cell::RefCell<exporter::Emitted>>>,
+    /// Panels declared, as `(id, title)`.
+    panels: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>>>,
+}
+
 pub struct Host {
     ops: DocOps,
     /// Files a script may open: those beside the one being imported, or none.
@@ -89,7 +107,14 @@ impl Host {
     pub fn exporters(&self, script: &str) -> Result<Vec<exporter::JsExporter>, PluginError> {
         let mut edit = Edit::default();
         let declared = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        self.run_with(script, &mut edit, None, Some(declared.clone()), None)?;
+        self.run_with(
+            script,
+            &mut edit,
+            Sinks {
+                exporters: Some(declared.clone()),
+                ..Sinks::default()
+            },
+        )?;
         let found = declared.borrow().clone();
         Ok(found
             .into_iter()
@@ -113,8 +138,115 @@ impl Host {
     ) -> Result<exporter::Emitted, PluginError> {
         let mut edit = Edit::new(doc);
         let emitted = std::rc::Rc::new(std::cell::RefCell::new(exporter::Emitted::default()));
-        self.run_with(script, &mut edit, None, None, Some(emitted.clone()))?;
+        self.run_with(
+            script,
+            &mut edit,
+            Sinks {
+                emitted: Some(emitted.clone()),
+                ..Sinks::default()
+            },
+        )?;
         Ok(std::mem::take(&mut *emitted.borrow_mut()))
+    }
+
+    /// Read the panels a script registers, without building one.
+    ///
+    /// What a host does at load time: run the file, collect what it declared,
+    /// and put those in the View menu.
+    pub fn panels(&self, script: &str) -> Result<Vec<panel::PanelSpec>, PluginError> {
+        let mut edit = Edit::default();
+        let declared = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        self.run_with(
+            script,
+            &mut edit,
+            Sinks {
+                panels: Some(declared.clone()),
+                ..Sinks::default()
+            },
+        )?;
+        let found = declared.borrow().clone();
+        Ok(found
+            .into_iter()
+            .map(|(id, title)| panel::PanelSpec { id, title })
+            .collect())
+    }
+
+    /// Ask a panel what it shows for this document.
+    ///
+    /// The document is borrowed for the call and handed back: a panel describes
+    /// a rig, it does not edit one. An edit is what [`Self::panel_action`] is
+    /// for, and keeping the two apart is what makes it safe to call this
+    /// whenever the host likes.
+    pub fn build_panel(
+        &self,
+        script: &str,
+        id: &str,
+        edit: &mut Edit,
+    ) -> Result<Vec<panel::Widget>, PluginError> {
+        let json = self.call_panel(script, id, edit, None)?;
+        serde_json::from_str(&json).map_err(|e| {
+            // A widget shape this build does not know fails here rather than
+            // being skipped. A panel silently missing the control its author
+            // wrote reads as the host being broken, and they have no way in.
+            PluginError::Script(format!("that panel returned something unreadable: {e}"))
+        })
+    }
+
+    /// Tell a panel one of its widgets was touched.
+    ///
+    /// Runs against the real document, so the plugin's handler can invoke verbs
+    /// and the edits land where an undo can reach them.
+    pub fn panel_action(
+        &self,
+        script: &str,
+        id: &str,
+        action: &panel::PanelAction,
+        edit: &mut Edit,
+    ) -> Result<(), PluginError> {
+        self.call_panel(script, id, edit, Some(action))?;
+        Ok(())
+    }
+
+    /// Run a script and then call into one of its panels.
+    ///
+    /// The script is re-evaluated each time: a `Context` cannot outlive the
+    /// `with` it was built in, and keeping one alive across frames would mean a
+    /// plugin holding document state between calls — which is the thing that
+    /// makes an addon impossible to reason about when it goes wrong.
+    fn call_panel(
+        &self,
+        script: &str,
+        id: &str,
+        edit: &mut Edit,
+        action: Option<&panel::PanelAction>,
+    ) -> Result<String, PluginError> {
+        let call = match action {
+            None => format!(
+                "globalThis.__ankhimate_panel_result = __ankhimate_build_panel({});",
+                json_string(id)
+            ),
+            Some(action) => format!(
+                "__ankhimate_panel_action({}, {}, {});\n\
+                 globalThis.__ankhimate_panel_result = \"null\";",
+                json_string(id),
+                json_string(&action.action),
+                action.value,
+            ),
+        };
+        let read = "globalThis.__ankhimate_panel_result";
+        let full = format!("{script}\n{call}\nconsole.log({read});");
+
+        let printed = self.run_with(
+            &full,
+            edit,
+            Sinks {
+                // Declarations are collected into nothing: this run is here to
+                // call one panel, and a plugin re-registering on every build is
+                // the normal case rather than a problem.
+                ..Sinks::default()
+            },
+        )?;
+        Ok(printed.last().cloned().unwrap_or_else(|| "null".into()))
     }
 
     /// Let this run open the files beside an imported one.
@@ -157,18 +289,28 @@ impl Host {
         edit: &mut Edit,
         declared: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String, Vec<String>)>>>>,
     ) -> Result<Vec<String>, PluginError> {
-        self.run_with(script, edit, declared, None, None)
+        self.run_with(
+            script,
+            edit,
+            Sinks {
+                declared,
+                ..Sinks::default()
+            },
+        )
     }
 
-    #[allow(clippy::type_complexity)]
     fn run_with(
         &self,
         script: &str,
         edit: &mut Edit,
-        declared: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String, Vec<String>)>>>>,
-        exporters: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>>>,
-        emitted: Option<std::rc::Rc<std::cell::RefCell<exporter::Emitted>>>,
+        sinks: Sinks,
     ) -> Result<Vec<String>, PluginError> {
+        let Sinks {
+            declared,
+            exporters,
+            emitted,
+            panels,
+        } = sinks;
         let runtime = Runtime::new().map_err(|e| PluginError::Engine(e.to_string()))?;
         let context = Context::full(&runtime).map_err(|e| PluginError::Engine(e.to_string()))?;
 
@@ -392,6 +534,20 @@ impl Host {
                 })?,
             )?;
 
+            // ── Panels ───────────────────────────────────────────────────
+            // Declared on load and built on demand, the same split importers
+            // and exporters use. A panel that ran at declaration time would be
+            // describing a document nobody had opened yet.
+            let panel_sink = panels.clone();
+            ank.set(
+                "declarePanel",
+                Function::new(ctx.clone(), move |id: String, title: String| {
+                    if let Some(sink) = &panel_sink {
+                        sink.borrow_mut().push((id, title));
+                    }
+                })?,
+            )?;
+
             // ── Layered documents ────────────────────────────────────────
             // The tag grammar and inference are not about PSD: a plugin
             // importing a layered TIFF or a directory of numbered PNGs wants
@@ -497,6 +653,24 @@ impl Host {
                   infer: (layers) =>
                     __unwrap(__ankhimate.inferStructure(JSON.stringify(layers ?? []))),
                 };
+                let __panels = {};
+                globalThis.ankhimate.registerPanel = (spec) => {
+                  __panels[spec.id] = spec;
+                  __ankhimate.declarePanel(spec.id, spec.title ?? spec.id);
+                };
+                // The host calls these; a plugin never does. `build` returns the
+                // widget list, `handle` is given back the action a widget named.
+                globalThis.__ankhimate_build_panel = (id) => {
+                  const panel = __panels[id];
+                  if (!panel) throw new Error(`no panel registered as \`${id}\``);
+                  return JSON.stringify(panel.build() ?? []);
+                };
+                globalThis.__ankhimate_panel_action = (id, action, value) => {
+                  const panel = __panels[id];
+                  if (!panel) throw new Error(`no panel registered as \`${id}\``);
+                  if (typeof panel.on === "function") panel.on(action, value);
+                };
+
                 let __exporters = {};
                 globalThis.ankhimate.registerExporter = (spec) => {
                   __exporters[spec.id] = spec;
@@ -721,6 +895,15 @@ mod tests {
 /// These functions return JSON, so an error cannot be an `Err` — and returning
 /// `null` would let a plugin carry on and build a rig out of nothing. The shim
 /// turns this shape into a thrown `Error`, so the stack trace names the line.
+/// A string as a JSON literal, for splicing into a generated call.
+///
+/// A panel id comes from a plugin's own file, so this is about correctness
+/// rather than safety — an id with a quote in it would otherwise produce a
+/// script that does not parse, and the error would name the wrong thing.
+fn json_string(text: &str) -> String {
+    serde_json::Value::String(text.to_string()).to_string()
+}
+
 fn error_json(message: &str) -> String {
     serde_json::json!({ "__error": message }).to_string()
 }
