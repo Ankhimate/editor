@@ -268,6 +268,8 @@ impl Operator for Adopted {
         let mut edit = ankhimate_document::Edit {
             doc: std::mem::take(&mut state.doc),
             history: std::mem::take(&mut state.history),
+            // The editor has no importer running, so nothing reports into this.
+            report: Vec::new(),
             mode: state.session.work_mode,
         };
         let outcome = self.0.invoke(&mut edit, args);

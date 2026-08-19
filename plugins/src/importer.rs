@@ -74,6 +74,20 @@ impl Sidecars {
         std::fs::read_to_string(self.dir.join(name)).ok()
     }
 
+    /// Read a binary sidecar, base64-encoded for the script.
+    ///
+    /// An atlas page is a PNG, and a plugin needs the bytes to hand to
+    /// `asset.add_image`. Encoded rather than passed as a typed array because
+    /// the failure mode of a byte channel is a silently truncated image, and
+    /// base64 either decodes or does not.
+    pub fn read_bytes(&self, name: &str) -> Option<String> {
+        if !is_plain_name(name) {
+            return None;
+        }
+        let bytes = std::fs::read(self.dir.join(name)).ok()?;
+        Some(encode_base64(&bytes))
+    }
+
     /// The directory, for a binding that needs its own copy.
     pub(crate) fn clone_dir(&self) -> PathBuf {
         self.dir.clone()
@@ -197,4 +211,35 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(Sidecars::new(dir.path()).read("nothing.json").is_none());
     }
+}
+
+/// Encode bytes as standard base64.
+///
+/// Paired with the decoder in `document/src/import_ops.rs`; both are short
+/// enough to write, and a crate for sixty lines of table lookup is a
+/// supply-chain surface nobody asked for.
+fn encode_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }

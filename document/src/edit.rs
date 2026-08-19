@@ -16,9 +16,29 @@ use crate::doc::Document;
 use crate::work_mode::WorkMode;
 
 /// A document, its undo history, and the mode edits are judged against.
+/// One thing an import could not carry across.
+///
+/// The same shape `formats::LoadReport` uses, kept here so a plugin importer
+/// has the honesty property a Rust one has: an import that drops half a file
+/// quietly is worse than one that refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Approximation {
+    /// The kind of thing — `"curve"`, `"attachment"`, `"timeline"`.
+    pub what: String,
+    /// Where, in the source's own names.
+    pub where_: String,
+    /// What was done instead.
+    pub detail: String,
+}
+
 pub struct Edit {
     pub doc: Document,
     pub history: History,
+    /// What an importer could not represent exactly.
+    ///
+    /// Not undoable: a report is not part of the rig, and undoing an import's
+    /// last bone should not un-say what that import could not do.
+    pub report: Vec<Approximation>,
     /// Which half of the editor's two modes a headless caller is standing in.
     ///
     /// `Setup` by default: a script that builds a rig is doing structural work,
@@ -61,6 +81,7 @@ impl Edit {
         Self {
             doc,
             history: History::default(),
+            report: Vec::new(),
             mode: WorkMode::Setup,
         }
     }

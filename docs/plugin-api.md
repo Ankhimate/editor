@@ -38,10 +38,21 @@ carries the built-ins; `ids()` lists them and `get(id).schema()` describes one.
 | `bone.delete` | Delete a bone and its subtree | Setup |
 | `slot.create` | Add a slot on a bone | Setup |
 | `anim.create` | Add an animation clip | either |
+| `asset.add_image` | Add an image, bytes base64-encoded | Setup |
+| `attachment.create_region` | Put a sprite in a slot | Setup |
+| `attachment.create_mesh` | Put a mesh in a slot, weighted or rigid | Setup |
+| `anim.key_bone` | Key translate / rotate / scale / shear | either |
+| `anim.key_attachment` | Key which attachment a slot shows | either |
+| `import.report` | Say what an import could not carry across | either |
 
-Deliberately few. These are what a script needs to *build* a rig; verbs that act
-on a selection or a tool live in the editor, because a selection is something
-only an editor has.
+Verbs that act on a *selection* or a tool live in the editor instead, because a
+selection is something only an editor has.
+
+The set is sized by a rule, not by taste. `docs/export-plan.md` requires our own
+runtime format to be a template, so a format the engine cannot express is found
+before a user finds it; the import side needs the same guarantee, and the way to
+get it is that a shipped importer must be writable as a plugin. These verbs are
+what that turned out to require.
 
 ### Arguments name things, they do not hold ids
 
@@ -131,6 +142,45 @@ for (const bone of rig().skeleton.bones) {
 | `rig()` | The read surface, as the template context |
 | `names()` | Bones, slots, skins and animations by name |
 | `console.log(msg)` | Comes back to the host as a line |
+| `ankhimate.registerImporter(spec)` | Declare a rig format this plugin reads |
+| `ankhimate.sidecar(name)` | A text file beside the imported one |
+| `ankhimate.sidecarBytes(name)` | The same, base64, for images |
+| `ankhimate.sidecars()` | What is beside the imported file |
+
+### An importer is a plugin
+
+```js
+ankhimate.registerImporter({
+  id: "import.mine", label: "My Format", extensions: ["mine"],
+  read(text, fileName) {
+    const rig = JSON.parse(text);
+    const png = ankhimate.sidecarBytes(rig.atlas);
+    if (png) ops.invoke("asset.add_image", { name: "atlas", bytes_base64: png });
+
+    for (const b of rig.bones)
+      ops.invoke("bone.create", { name: b.name, parent: b.parent });
+
+    ops.invoke("import.report", {
+      what: "constraint", where: "spine_ik", detail: "IK is not read yet",
+    });
+  },
+});
+```
+
+It builds the rig by calling verbs rather than constructing a document — which
+gives it a property the built-in Rust readers do not have: **the import is a run
+of commands, so it undoes.** Those replace the document wholesale and cannot.
+
+`import.report` is what keeps a plugin honest. An import that drops half a file
+quietly is worse than one that refuses, and the report survives an undo because
+it is not part of the rig.
+
+### Sidecars are not a filesystem
+
+`ankhimate.sidecar` and `sidecarBytes` reach files in the imported rig's own
+directory and nowhere else. The host fixes the directory; only a bare file name
+comes from the script, and separators, `..`, absolute paths and drive prefixes
+are refused rather than resolved.
 
 A failed verb **throws** rather than returning nothing, so a plugin can `try`
 around it and a mistake does not continue silently over an edit that never

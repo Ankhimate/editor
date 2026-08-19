@@ -150,6 +150,54 @@ impl Args {
         }
     }
 
+    /// A flat list of numbers.
+    ///
+    /// Flat rather than nested pairs because that is how every rig format on
+    /// disk writes geometry, and asking a plugin to reshape it first is asking
+    /// it to do work the reader can do once.
+    pub fn f32_list(&self, key: &str) -> Result<Vec<f32>, ArgError> {
+        let v = self.get(key).ok_or_else(|| ArgError::Missing(key.into()))?;
+        let array = v.as_array().ok_or_else(|| ArgError::WrongType {
+            key: key.into(),
+            wanted: "an array of numbers",
+            got: type_of(v),
+        })?;
+        array
+            .iter()
+            .map(|n| {
+                n.as_f64()
+                    .map(|x| x as f32)
+                    .ok_or_else(|| ArgError::WrongType {
+                        key: key.into(),
+                        wanted: "an array of numbers",
+                        got: type_of(n),
+                    })
+            })
+            .collect()
+    }
+
+    /// A flat list of indices.
+    pub fn u32_list(&self, key: &str) -> Result<Vec<u32>, ArgError> {
+        let v = self.get(key).ok_or_else(|| ArgError::Missing(key.into()))?;
+        let array = v.as_array().ok_or_else(|| ArgError::WrongType {
+            key: key.into(),
+            wanted: "an array of indices",
+            got: type_of(v),
+        })?;
+        array
+            .iter()
+            .map(|n| {
+                n.as_u64()
+                    .map(|x| x as u32)
+                    .ok_or_else(|| ArgError::WrongType {
+                        key: key.into(),
+                        wanted: "an array of whole numbers",
+                        got: type_of(n),
+                    })
+            })
+            .collect()
+    }
+
     /// An optional string — absent and `null` both mean "not given".
     pub fn opt_str(&self, key: &str) -> Result<Option<&str>, ArgError> {
         match self.get(key) {

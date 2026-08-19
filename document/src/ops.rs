@@ -105,6 +105,7 @@ impl DocOps {
     pub fn builtin() -> Self {
         let mut ops = Self::new();
         crate::doc_ops::register(&mut ops);
+        crate::import_ops::register(&mut ops);
         ops
     }
 

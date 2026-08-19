@@ -32,6 +32,7 @@ pub mod commands;
 pub mod doc;
 pub mod doc_ops;
 pub mod edit;
+pub mod import_ops;
 /// Retriangulation for meshes — geometry, so it travels with the commands that
 /// call it rather than with the viewport that displays the result.
 pub mod meshgen;
@@ -43,7 +44,7 @@ mod work_mode;
 pub use args::{ArgError, Args, Resolver};
 pub use commands::{EditCommand, History, IdRemap};
 pub use doc::{Document, DocumentMeta};
-pub use edit::{Edit, Refused};
+pub use edit::{Approximation, Edit, Refused};
 pub use ops::{DocOperator, DocOps, OpError};
 pub use read::{Names, describe, names};
 pub use work_mode::WorkMode;
