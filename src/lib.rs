@@ -26,6 +26,7 @@
 //! change goes through a command and stays undoable. That is `CLAUDE.md`'s rule
 //! for panels, extended to script.
 
+pub mod exporter;
 pub mod importer;
 
 use ankhimate_document::{Args, DocOps, Edit};
@@ -84,6 +85,38 @@ impl Host {
         }
     }
 
+    /// Read the exporters a script registers, without running one.
+    pub fn exporters(&self, script: &str) -> Result<Vec<exporter::JsExporter>, PluginError> {
+        let mut edit = Edit::default();
+        let declared = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        self.run_with(script, &mut edit, None, Some(declared.clone()), None)?;
+        let found = declared.borrow().clone();
+        Ok(found
+            .into_iter()
+            .map(|(id, label)| exporter::JsExporter {
+                id,
+                label,
+                source: script.to_string(),
+            })
+            .collect())
+    }
+
+    /// Run an export script against a read-only document, collecting its files.
+    ///
+    /// The document is moved in and dropped after: an exporter has no business
+    /// editing, and `Document` is deliberately not `Clone` — a rig with its
+    /// images in it is not something to copy per export.
+    pub(crate) fn run_export(
+        &self,
+        script: &str,
+        doc: ankhimate_document::Document,
+    ) -> Result<exporter::Emitted, PluginError> {
+        let mut edit = Edit::new(doc);
+        let emitted = std::rc::Rc::new(std::cell::RefCell::new(exporter::Emitted::default()));
+        self.run_with(script, &mut edit, None, None, Some(emitted.clone()))?;
+        Ok(std::mem::take(&mut *emitted.borrow_mut()))
+    }
+
     /// Let this run open the files beside an imported one.
     pub fn with_sidecars(mut self, sidecars: importer::Sidecars) -> Self {
         self.sidecars = Some(sidecars);
@@ -123,6 +156,18 @@ impl Host {
         script: &str,
         edit: &mut Edit,
         declared: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String, Vec<String>)>>>>,
+    ) -> Result<Vec<String>, PluginError> {
+        self.run_with(script, edit, declared, None, None)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn run_with(
+        &self,
+        script: &str,
+        edit: &mut Edit,
+        declared: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String, Vec<String>)>>>>,
+        exporters: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>>>,
+        emitted: Option<std::rc::Rc<std::cell::RefCell<exporter::Emitted>>>,
     ) -> Result<Vec<String>, PluginError> {
         let runtime = Runtime::new().map_err(|e| PluginError::Engine(e.to_string()))?;
         let context = Context::full(&runtime).map_err(|e| PluginError::Engine(e.to_string()))?;
@@ -308,6 +353,45 @@ impl Host {
                 })?,
             )?;
 
+            // ── Exporters ────────────────────────────────────────────────
+            let exporter_sink = exporters.clone();
+            ank.set(
+                "declareExporter",
+                Function::new(ctx.clone(), move |id: String, label: String| {
+                    if let Some(sink) = &exporter_sink {
+                        sink.borrow_mut().push((id, label));
+                    }
+                })?,
+            )?;
+
+            // `emit` rather than a file handle. A plugin that could write would
+            // own path confinement, all-or-nothing and never-delete — the three
+            // rules `docs/export-plan.md` calls non-negotiable — and every
+            // exporter author would have to get them right again.
+            let emit_text = emitted.clone();
+            ank.set(
+                "emit",
+                Function::new(ctx.clone(), move |path: String, contents: String| {
+                    if let Some(sink) = &emit_text {
+                        sink.borrow_mut().text.push((path, contents));
+                    }
+                })?,
+            )?;
+
+            // The binary half, base64 in — same channel the importer reads
+            // images through, for the same reason.
+            let emit_bytes = emitted.clone();
+            ank.set(
+                "emitBytes",
+                Function::new(ctx.clone(), move |path: String, base64: String| {
+                    if let Some(sink) = &emit_bytes
+                        && let Some(bytes) = decode_base64(&base64)
+                    {
+                        sink.borrow_mut().binary.push((path, bytes));
+                    }
+                })?,
+            )?;
+
             global.set("__ankhimate", ank)?;
 
             // A thin JS shim so a plugin writes objects rather than JSON text.
@@ -338,6 +422,19 @@ impl Host {
                   sidecarBytes: (name) => __ankhimate.sidecarBytes(name),
                   sidecars: () => __ankhimate.sidecars(),
                 };
+                let __exporters = {};
+                globalThis.ankhimate.registerExporter = (spec) => {
+                  __exporters[spec.id] = spec;
+                  __ankhimate.declareExporter(spec.id, spec.label ?? spec.id);
+                };
+                globalThis.emit = (path, contents) => __ankhimate.emit(path, String(contents));
+                globalThis.emitBytes = (path, base64) => __ankhimate.emitBytes(path, base64);
+                globalThis.__ankhimate_run_export = () => {
+                  const ids = Object.keys(__exporters);
+                  if (!ids.length) throw new Error("this plugin registered no exporter");
+                  __exporters[ids[0]].write();
+                };
+
                 globalThis.__ankhimate_run_import = (text, fileName) => {
                   const ids = Object.keys(__importers);
                   if (!ids.length) throw new Error("this plugin registered no importer");
@@ -539,4 +636,34 @@ mod tests {
 
         assert_eq!(printed, ["no require", "no process"]);
     }
+}
+
+/// Decode standard base64. Paired with the encoder in `importer.rs`.
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    const INVALID: u8 = 255;
+    let mut table = [INVALID; 256];
+    for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        .iter()
+        .enumerate()
+    {
+        table[c as usize] = i as u8;
+    }
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let (mut buffer, mut bits) = (0u32, 0u32);
+    for byte in text.bytes() {
+        if byte == b'=' || byte.is_ascii_whitespace() {
+            continue;
+        }
+        let value = table[byte as usize];
+        if value == INVALID {
+            return None;
+        }
+        buffer = (buffer << 6) | value as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+        }
+    }
+    Some(out)
 }
