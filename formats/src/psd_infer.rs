@@ -81,8 +81,12 @@ pub struct Sequence {
 pub fn infer(candidates: &[Candidate], tags: &[Tags], guesses: &mut Vec<Guess>) -> Vec<Inferred> {
     let mut out = vec![Inferred::default(); candidates.len()];
 
-    infer_bones(candidates, tags, &mut out, guesses);
+    // Sequences first: a group of stacked frames is not a chain either, so the
+    // bone pass would otherwise report it twice — once as "one bone, not 3" and
+    // once as the sequence that already explains why. Two guesses about one
+    // group is how a list of guesses stops being read.
     infer_sequences(candidates, tags, &mut out, guesses);
+    infer_bones(candidates, tags, &mut out, guesses);
     infer_mirrors(candidates, tags, &mut out, guesses);
 
     out
@@ -141,16 +145,26 @@ fn infer_bones(
             continue;
         }
 
+        // A group whose children are a sequence is already explained. Frames
+        // stacked in one place are not a chain either, so the geometry test
+        // would flag it a second time — and two guesses about one group is how
+        // a list of guesses stops being read.
+        let is_sequence = candidates
+            .iter()
+            .enumerate()
+            .any(|(j, c)| is_child_of(&c.path, &candidate.path) && out[j].sequence.is_some());
+
         // Limbs lie end to end; a face's features scatter in two dimensions.
         // 0.9 is deliberately strict: a false "one bone" costs the artist a
         // click, and a false "eleven bones" costs them a hierarchy to clean up.
-        if linearity(&children) < 0.9 {
+        if !is_sequence && linearity(&children) < 0.9 {
             guesses.push(Guess {
                 path: candidate.path.clone(),
                 decided: format!("`{}` is one bone, not {}", candidate.name, children.len()),
                 because: format!(
-                    "its {} layers overlap inside about one layer's area, which reads as \
-                     a drawing grouped for tidiness rather than a chain that articulates",
+                    "its {} layers scatter in two directions rather than lying along one, \
+                     which reads as a drawing grouped for tidiness rather than a chain \
+                     that articulates",
                     children.len()
                 ),
                 override_with: format!("[bones] on `{}`", candidate.name),
@@ -332,10 +346,14 @@ fn infer_mirrors(
         }
     }
 
-    if paired >= 2 {
+    // Each pair is seen from both sides, so the raw count doubles it. Reporting
+    // "4 layers" for two pairs is the kind of small lie that makes an artist
+    // stop trusting the rest of the list.
+    let pairs = paired / 2;
+    if pairs >= 1 {
         guesses.push(Guess {
             path: String::new(),
-            decided: format!("{} layers pair with a mirrored sibling", paired),
+            decided: format!("{pairs} mirrored pair{}", if pairs == 1 { "" } else { "s" }),
             because: "names ending `_l` and `_r` read as left and right of one part, \
                       which is what mirroring a pose acts on"
                 .to_string(),
