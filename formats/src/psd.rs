@@ -483,6 +483,18 @@ fn layer_center(bounds: (i32, i32, u32, u32), canvas: (u32, u32), scale: f32) ->
 }
 
 /// Full path per group id, so nested groups read as `torso/arm`.
+/// # A wart, recorded rather than fixed
+///
+/// Paths are built from **raw** layer names, tags included: a group called
+/// `arm [bone]` gives its children `arm [bone]/upper`. A re-import matches on
+/// the path, so adding a tag to a group renames every path beneath it and the
+/// match is lost — the artist gets a delete plus an add for art that did not
+/// move.
+///
+/// Not fixed here because `psd_layer_paths` is already saved in this shape, so
+/// changing it is a migration rather than an edit. `psd_read::Layer` exposes
+/// `name` alongside `path` so a consumer at least never has to strip tags
+/// itself.
 fn group_paths(psd: &psd::Psd) -> HashMap<u32, String> {
     // `group_ids_in_order` is *not* parent-before-child — a nested group can be
     // listed ahead of the group that contains it — so each path is walked up

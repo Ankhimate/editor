@@ -97,6 +97,83 @@ It answers the question that precedes every edit — a verb names its target, so
 **Angles are degrees.** `core` works in radians; the contract does not
 (PLAN §2.7).
 
+## 2b. Reading a layered document
+
+Three functions, and only one of them is about Photoshop:
+
+```js
+const psd     = ankhimate.readPsd(base64);       // layers + tags + inference
+const layer   = ankhimate.parseTags("cape [bone][physics:cloth]");
+const result  = ankhimate.infer(layers);         // over layers you built
+```
+
+The **tag grammar** — `[bone]`, `[frames]`, `[physics:cloth]` — and
+**inference** — is this group a chain or a scatter, is this run of numbered
+layers a flipbook, which layers mirror which — are not PSD features. They are a
+vocabulary for saying what a layer means and a set of questions about a layer
+tree. A plugin importing a layered TIFF, an Aseprite file or a directory of
+numbered PNGs wants both.
+
+Exposing them is what stops `[bones]` meaning one thing in the built-in importer
+and another in an addon.
+
+### What a layer looks like
+
+```json
+{
+  "path": "arm [bone]/upper",
+  "name": "upper",
+  "raw_name": "upper",
+  "depth": 1,
+  "is_group": false,
+  "visible": true,
+  "bounds": [0, 28, 73, 73],
+  "tags": { "bone": null, "slot": "upper" },
+  "unknown_tags": ["wobble"],
+  "bone": true,
+  "sequence": null,
+  "mirrors": null
+}
+```
+
+`name` is the name with tags stripped — what the bone or slot is called. A
+plugin should not have to know the grammar to find that out.
+
+`tags` gives `null` for a bare tag, so "present with no value" and "not present"
+stay distinguishable.
+
+`unknown_tags` are handed over rather than dropped: a plugin is the one consumer
+that can define new ones.
+
+**`path` carries the raw names**, tags included — `arm [bone]/upper`, not
+`arm/upper`. That is a wart, not a decision: a re-import matches on the path, so
+adding a tag to a group renames every path beneath it. It is unchanged because
+`psd_layer_paths` is already saved in that shape.
+
+### Guesses
+
+`readPsd` and `infer` both return `guesses` beside `layers`:
+
+```json
+{
+  "path": "face",
+  "decided": "`face` is one bone, not 3",
+  "because": "its 3 layers scatter in two directions rather than lying along one…",
+  "override_with": "[bones] on `face`"
+}
+```
+
+Every guess carries its evidence and the tag that would say otherwise. A plugin
+that shows these lets the artist disagree; one that does not is deciding
+silently, which is worse than not guessing at all.
+
+### Failures throw
+
+A bad PSD raises a JS `Error` rather than returning null. A plugin that ignored
+a returned error would go on to build a rig out of nothing, and a stack trace
+naming the line is the difference between finding that in a second and finding
+it in an hour.
+
 ## 3. What is deliberately absent
 
 **A write surface.** Nothing hands out a `&mut Document`. Every mutation is a

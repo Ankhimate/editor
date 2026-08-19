@@ -215,10 +215,14 @@ mod tests {
 
 /// Encode bytes as standard base64.
 ///
+/// Public because base64 is the channel every binary crosses into a script —
+/// a host handing a plugin a PSD to read needs the same encoder the sidecar
+/// reader uses, and a second one would be a second chance to differ.
+///
 /// Paired with the decoder in `document/src/import_ops.rs`; both are short
 /// enough to write, and a crate for sixty lines of table lookup is a
 /// supply-chain surface nobody asked for.
-pub(crate) fn encode_base64(bytes: &[u8]) -> String {
+pub fn encode_base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
