@@ -60,6 +60,14 @@ carries the built-ins; `ids()` lists them and `get(id).schema()` describes one.
 | `slot.set_color` | Tint a slot | either |
 | `slot.set_presentation` | Blend mode and the dark half of a tint | Setup |
 | `slot.set_draw_order` | Every slot, back to front | Setup |
+| `attachment.rename` | Rename an attachment within one skin | Setup |
+| `attachment.duplicate` | Copy one beside itself | Setup |
+| `attachment.remove` | Take one out of a skin | Setup |
+| `attachment.set_region` | Offset, rotation, scale, size, pivot | Setup |
+| `anim.add_event` | Add an event to a clip | Animate |
+| `anim.set_event` | Move, rename, or set what it carries | Animate |
+| `anim.delete_event` | Remove an event | Animate |
+| `doc.set_mode` | Switch between Setup and Animate | either |
 
 Verbs that act on a *selection* or a tool live in the editor instead, because a
 selection is something only an editor has.
@@ -87,6 +95,29 @@ red", not "make it transparent".
 `dark_color` has three states rather than two: absent leaves it, `null` clears
 it, a list sets it. A two-colour tint that could only be set would be a decision
 a script could not take back.
+
+### Mode is a verb
+
+Every verb declares which mode it needs (T-207), and `doc.set_mode` is how a
+script gets into the other one. Without it the event verbs — which write keys,
+and are therefore Animate-only — were unreachable from JavaScript at all.
+
+Mode is not an editor setting leaking in: it decides what an edit *means*, so it
+belongs to the document a script is editing rather than to the window it is not
+looking at.
+
+### Events are named, not counted
+
+`anim.set_event` and `anim.delete_event` identify an event by `(name, time)`.
+The commands underneath address one by its index in a list, but an index is
+wrong the moment anything else inserts an event, and a script has no business
+counting. Times match within 0.1ms, so a time read out of the document and
+passed back finds the same event after a JSON round trip.
+
+### `attachment.set_region` moves the pivot without moving the art
+
+Setting a shoulder pivot means "turn about here", not "and also jump half a
+sprite to the left". The offset compensates.
 
 ### `slot.set_draw_order` wants every slot
 
