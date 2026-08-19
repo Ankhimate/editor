@@ -88,6 +88,21 @@ pub const ZOOM_IN: &str = f::ZOOM_IN;
 pub const ZOOM_OUT: &str = f::ZOOM_OUT;
 pub const IMPORT_SHEET: &str = f::GRID_3X3;
 pub const IMPORT_PSD: &str = f::LAYERS;
+
+// ── What an import decided for you ──────────────────────────────────────────
+//
+// An import reads structure the file did not spell out, and the artist has to
+// be able to tell what they wrote from what was guessed. These are the glyphs
+// that carry that distinction.
+
+/// A decision inference made, which the artist can overrule.
+pub const INFERRED: &str = f::WAND_SPARKLES;
+/// A tag read off a layer name — what the artist said, not what was guessed.
+pub const TAG: &str = f::TAG;
+/// A run of layers folded into one flipbook attachment.
+pub const SEQUENCE: &str = f::FILM;
+/// Something the import could not carry across.
+pub const LOSSY: &str = f::ALERT_TRIANGLE;
 pub const LOOP: &str = f::REPEAT;
 pub const AUDIO: &str = f::VOLUME_2;
 
