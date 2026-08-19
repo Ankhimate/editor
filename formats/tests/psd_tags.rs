@@ -199,3 +199,53 @@ fn the_reason_given_matches_the_test_that_was_run() {
         face.because
     );
 }
+
+#[test]
+fn a_group_reports_the_extent_of_what_is_inside_it() {
+    // This used to hardcode `0x0`, and the `psd` crate's own group rectangle is
+    // `1x1` — measured, not assumed. Either way a caller reading a group's
+    // bounds got a number that meant nothing, and inference reads them.
+    //
+    // The arm's three limbs lie end to end, so its extent is wider than any one
+    // of them; the fire frames stack, so theirs is exactly one frame.
+    let nodes = tree();
+    let bounds = |name: &str| {
+        nodes
+            .iter()
+            .find(|n| n.name == name)
+            .unwrap_or_else(|| panic!("no `{name}`"))
+            .bounds
+    };
+
+    let (_, _, arm_w, _) = bounds("arm [bone]");
+    let (_, _, hand_w, _) = bounds("hand");
+    assert!(
+        arm_w > hand_w * 2,
+        "a chain spans more than one of its links: {arm_w} vs {hand_w}"
+    );
+
+    let (fx_x, fx_y, fx_w, fx_h) = bounds("fx");
+    assert_eq!(
+        (fx_x, fx_y, fx_w, fx_h),
+        bounds("fire_01"),
+        "stacked frames occupy exactly one frame's rectangle"
+    );
+}
+
+#[test]
+fn an_empty_group_has_no_extent_rather_than_a_wrong_one() {
+    // A group with nothing in it should read as nothing, not as a one-pixel
+    // rectangle at the origin that a heuristic would then reason about.
+    let nodes = tree();
+    for node in nodes.iter().filter(|n| n.is_group) {
+        let (_, _, w, h) = node.bounds;
+        let has_children = nodes
+            .iter()
+            .any(|c| c.path.starts_with(&format!("{}/", node.path)));
+        if !has_children {
+            assert_eq!((w, h), (0, 0), "`{}` is empty", node.name);
+        } else {
+            assert!(w > 0 && h > 0, "`{}` has art in it", node.name);
+        }
+    }
+}
