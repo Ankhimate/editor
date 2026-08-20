@@ -46,19 +46,26 @@ impl JsExporter {
     /// Returns a [`Plan`] rather than writing: the caller decides where it lands
     /// and whether to overwrite, and the confinement and all-or-nothing rules
     /// stay in one place rather than being re-implemented per exporter.
-    pub fn plan(&self, doc: Document) -> Result<Plan, crate::PluginError> {
+    /// The document comes back **on both paths**. It has to be moved in —
+    /// `Document` is not `Clone`, and a rig with its images in it is not
+    /// something to copy per export — so a caller that moved its only copy out
+    /// and got an `Err` would lose the user's whole project to a plugin's typo.
+    pub fn plan(&self, doc: Document) -> Result<(Plan, Document), (crate::PluginError, Document)> {
         let host = crate::Host::new();
         let script = format!("{}\n__ankhimate_run_export();", self.source);
-        let emitted = host.run_export(&script, doc)?;
+        let (emitted, doc) = host.run_export(&script, doc)?;
 
-        Ok(Plan {
-            files: emitted
-                .text
-                .into_iter()
-                .map(|(path, contents)| RenderedFile { path, contents })
-                .collect(),
-            binaries: emitted.binary,
-        })
+        Ok((
+            Plan {
+                files: emitted
+                    .text
+                    .into_iter()
+                    .map(|(path, contents)| RenderedFile { path, contents })
+                    .collect(),
+                binaries: emitted.binary,
+            },
+            doc,
+        ))
     }
 }
 
@@ -117,7 +124,7 @@ mod tests {
     fn a_javascript_exporter_emits_files_from_the_rig() {
         let host = Host::new();
         let exporter = host.exporters(PLUGIN).unwrap().into_iter().next().unwrap();
-        let plan = exporter.plan(rig()).expect("exports");
+        let (plan, _doc) = exporter.plan(rig()).expect("exports");
 
         assert_eq!(plan.files.len(), 2);
         let rig_txt = plan
@@ -158,7 +165,7 @@ mod tests {
             .next()
             .unwrap();
 
-        let plan = exporter.plan(rig()).expect("exports");
+        let (plan, _doc) = exporter.plan(rig()).expect("exports");
         assert_eq!(plan.files[0].contents, "1");
     }
 
@@ -180,7 +187,7 @@ mod tests {
             .next()
             .unwrap();
 
-        let plan = exporter.plan(rig()).expect("exports");
+        let (plan, _doc) = exporter.plan(rig()).expect("exports");
         assert!(plan.files.is_empty() && plan.binaries.is_empty());
     }
 
@@ -246,7 +253,7 @@ mod tests {
             .next()
             .unwrap();
 
-        let plan = exporter.plan(rig_with_art()).expect("exports");
+        let (plan, _doc) = exporter.plan(rig_with_art()).expect("exports");
 
         let page = plan
             .binaries
@@ -295,7 +302,7 @@ mod tests {
 
         // An empty library still bakes — one empty page, which is what the
         // baker does rather than refusing. A plugin sees a result either way.
-        let plan = exporter.plan(rig()).expect("exports");
+        let (plan, _doc) = exporter.plan(rig()).expect("exports");
         assert_eq!(plan.files[0].contents, "ok:1");
     }
 
@@ -322,9 +329,41 @@ mod tests {
             .next()
             .unwrap();
 
-        let Err(err) = exporter.plan(rig()) else {
+        let Err((err, _doc)) = exporter.plan(rig()) else {
             panic!("the throw should reach the caller");
         };
         assert!(format!("{err}").contains("second file"), "{err}");
+    }
+
+    #[test]
+    fn a_failed_export_hands_the_document_back() {
+        // The document is moved in because `Document` is not `Clone` — a rig
+        // with its images in it is not something to copy per export. A caller
+        // that moved its only copy out and got a bare `Err` would lose the
+        // user's whole project to a plugin's typo.
+        let host = Host::new();
+        let exporter = host
+            .exporters(
+                r#"
+                ankhimate.registerExporter({
+                  id: "export.bad", label: "Bad",
+                  write() { throw new Error("cannot write this rig"); },
+                });
+                "#,
+            )
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let Err((error, doc)) = exporter.plan(rig()) else {
+            panic!("this should have failed");
+        };
+        assert!(error.to_string().contains("cannot write this rig"));
+        assert_eq!(
+            doc.skeleton.bones.len(),
+            2,
+            "the rig came back whole, not empty"
+        );
     }
 }

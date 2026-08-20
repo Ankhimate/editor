@@ -59,7 +59,7 @@ struct CachedPreview {
     context: serde_json::Value,
 }
 
-pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
+pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plugins) {
     let presets_list = state.doc.presets();
 
     ui.horizontal(|ui| {
@@ -70,7 +70,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                 .on_hover_text("Render every template and write the file set")
                 .clicked()
             {
-                run_export(state, &presets_list);
+                run_export(state, plugins, &presets_list);
             }
             if ui
                 .add_enabled(!presets_list.is_empty(), egui::Button::new("Delete"))
@@ -87,6 +87,26 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                         ui.close();
                     }
                 }
+                // Plugin formats, beside the built-in presets. A plugin
+                // exporter is a format like any other, and a separate menu for
+                // "plugin formats" would be the duplication the registry exists
+                // to remove.
+                //
+                // Added as a preset carrying only the plugin's label: the panel
+                // resolves that label back to the exporter when the export runs,
+                // so a document saved with one still names what produced it even
+                // on a machine where the plugin is not installed.
+                let plugin_exporters = plugins.exporters();
+                if !plugin_exporters.is_empty() {
+                    ui.separator();
+                    for (_, label) in plugin_exporters {
+                        if ui.button(&label).clicked() {
+                            state.dispatch(Box::new(AddPreset::new(Preset::new(label))));
+                            ui.close();
+                        }
+                    }
+                }
+
                 ui.separator();
                 if ui.button("Empty preset").clicked() {
                     let mut blank = Preset::new("New format");
@@ -483,7 +503,7 @@ fn leaf(ui: &mut egui::Ui, label: &str, path: &str, value: &serde_json::Value) {
     response.on_hover_text(format!("{{{{{path}}}}}"));
 }
 
-fn run_export(state: &mut AppState, presets_list: &[Preset]) {
+fn run_export(state: &mut AppState, plugins: &crate::plugins::Plugins, presets_list: &[Preset]) {
     state.session.export.error = None;
     state.session.export.last_export = None;
 
@@ -493,6 +513,15 @@ fn run_export(state: &mut AppState, presets_list: &[Preset]) {
     let Some(dir) = rfd::FileDialog::new().set_title("Export to").pick_folder() else {
         return;
     };
+
+    // A plugin exporter is chosen by name, the same way a preset is. It renders
+    // rather than writes — `run::write` owns path confinement, all-or-nothing
+    // and never-delete, and those are `docs/export-plan.md`'s rules rather than
+    // a plugin author's to re-implement.
+    if let Some(exporter) = plugins.exporter_named(&preset.name) {
+        run_plugin_export(state, exporter, &dir);
+        return;
+    }
 
     let schema = ankhimate_formats::convert::to_schema(&state.doc.as_project_ref());
     match run::export(&schema, &state.doc.assets, preset, &dir) {
@@ -505,5 +534,44 @@ fn run_export(state: &mut AppState, presets_list: &[Preset]) {
             ));
         }
         Err(e) => state.session.export.error = Some(e.to_string()),
+    }
+}
+
+/// Run a plugin exporter and write what it produced.
+///
+/// The document is moved into the exporter and moved back, because
+/// `JsExporter::plan` takes ownership: `Document` is not `Clone` — a rig with
+/// its images in it is not something to copy per export — and an exporter has no
+/// business editing, so it gets the document and hands it straight back.
+fn run_plugin_export(
+    state: &mut AppState,
+    exporter: &ankhimate_plugins::exporter::JsExporter,
+    dir: &std::path::Path,
+) {
+    let doc = std::mem::take(&mut state.doc);
+    let outcome = exporter.plan(doc);
+
+    match outcome {
+        Ok((plan, doc)) => {
+            state.doc = doc;
+            match run::write(&plan, dir) {
+                Ok(()) => {
+                    state.session.export.last_export = Some(format!(
+                        "Wrote {} file(s) and {} image(s) to {}",
+                        plan.files.len(),
+                        plan.binaries.len(),
+                        dir.display()
+                    ));
+                }
+                Err(e) => state.session.export.error = Some(e.to_string()),
+            }
+        }
+        Err((e, doc)) => {
+            // The document comes back on this path too, which is why `plan`
+            // returns it there: losing a user's whole rig to a plugin's typo
+            // would be the worst bug in the program.
+            state.doc = doc;
+            state.session.export.error = Some(e.to_string());
+        }
     }
 }

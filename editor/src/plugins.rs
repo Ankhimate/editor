@@ -41,6 +41,8 @@ pub struct Plugin {
     pub panels: Vec<PanelSpec>,
     /// Importers it contributes.
     pub importers: Vec<ankhimate_plugins::importer::JsImporter>,
+    /// Exporters it contributes.
+    pub exporters: Vec<ankhimate_plugins::exporter::JsExporter>,
     /// Why it did not load, if it did not. `Some` means the rest is empty.
     pub error: Option<String>,
 }
@@ -120,6 +122,34 @@ impl Plugins {
         }
     }
 
+    /// Every exporter any loaded plugin contributes, as `(id, label)`.
+    ///
+    /// For the export panel's format list, which offers these beside the
+    /// template presets: a plugin exporter is a format like any other, and a
+    /// separate menu for "plugin formats" would be the duplication the registry
+    /// exists to remove.
+    pub fn exporters(&self) -> Vec<(String, String)> {
+        self.loaded
+            .iter()
+            .filter(|p| p.is_loaded())
+            .flat_map(|p| p.exporters.iter())
+            .map(|e| (e.id.clone(), e.label.clone()))
+            .collect()
+    }
+
+    /// The exporter whose *label* is `label`.
+    ///
+    /// Looked up by label rather than id because that is what a preset carries
+    /// and what the panel shows — a user picking "Toy Format" from a list has
+    /// named the thing they can see.
+    pub fn exporter_named(&self, label: &str) -> Option<&ankhimate_plugins::exporter::JsExporter> {
+        self.loaded
+            .iter()
+            .filter(|p| p.is_loaded())
+            .flat_map(|p| p.exporters.iter())
+            .find(|e| e.label == label)
+    }
+
     /// A line per plugin, for the status bar or an about box.
     pub fn summary(&self) -> String {
         let failed = self.loaded.iter().filter(|p| !p.is_loaded()).count();
@@ -153,6 +183,7 @@ fn read_one(path: &Path) -> Plugin {
                 source: String::new(),
                 panels: Vec::new(),
                 importers: Vec::new(),
+                exporters: Vec::new(),
                 error: Some(format!("could not be read: {e}")),
             };
         }
@@ -161,6 +192,7 @@ fn read_one(path: &Path) -> Plugin {
     let host = Host::new();
     let panels = host.panels(&source);
     let importers = host.importers(&source);
+    let exporters = host.exporters(&source);
 
     // One failure fails the file. A plugin whose panel registration threw has
     // not necessarily broken its importer, but running half a plugin is how a
@@ -170,6 +202,7 @@ fn read_one(path: &Path) -> Plugin {
         .as_ref()
         .err()
         .or(importers.as_ref().err())
+        .or(exporters.as_ref().err())
         .map(|e| e.to_string());
 
     Plugin {
@@ -178,6 +211,7 @@ fn read_one(path: &Path) -> Plugin {
         source,
         panels: panels.unwrap_or_default(),
         importers: importers.unwrap_or_default(),
+        exporters: exporters.unwrap_or_default(),
         error,
     }
 }
@@ -325,5 +359,52 @@ mod tests {
                 .is_some(),
             "it has a parent to sit beside"
         );
+    }
+
+    #[test]
+    fn a_plugin_exporter_is_found_by_the_label_the_user_sees() {
+        // The export panel lists formats by label and a preset carries one, so
+        // that is what the lookup takes. An id lookup would mean the panel
+        // holding a second identifier it never shows.
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "toy.js",
+            r#"ankhimate.registerExporter({ id: "export.toy", label: "Toy Format",
+                                            write() {} });"#,
+        );
+
+        let plugins = Plugins::load(dir.path());
+        assert_eq!(
+            plugins.exporters(),
+            [("export.toy".to_string(), "Toy Format".to_string())]
+        );
+        assert!(plugins.exporter_named("Toy Format").is_some());
+        assert!(
+            plugins.exporter_named("export.toy").is_none(),
+            "the id is not what the panel shows, so it is not what it looks up"
+        );
+    }
+
+    #[test]
+    fn a_plugin_that_registers_all_three_gives_all_three() {
+        // One file, one plugin: an importer, an exporter and a panel from the
+        // same script all arrive, rather than the first kind found winning.
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "everything.js",
+            r#"
+            ankhimate.registerPanel({ id: "p.one", title: "One", build: () => [] });
+            ankhimate.registerImporter({ id: "i.one", label: "In",
+                                         extensions: ["one"], read() {} });
+            ankhimate.registerExporter({ id: "e.one", label: "Out", write() {} });
+            "#,
+        );
+
+        let plugins = Plugins::load(dir.path());
+        assert_eq!(plugins.panels().len(), 1);
+        assert_eq!(plugins.loaded[0].importers.len(), 1);
+        assert_eq!(plugins.exporters().len(), 1);
     }
 }

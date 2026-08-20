@@ -99,12 +99,18 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plu
         .map(|(_, widgets)| widgets.clone())
         .unwrap_or_default();
 
+    // Thumbnails are resolved before drawing, because loading one needs `&mut
+    // AppState` and drawing takes `&AppState`. Done once per frame for the whole
+    // panel rather than per widget, so a strip of forty images is forty cache
+    // hits and not forty borrows fought over.
+    let textures = resolve_thumbnails(ui.ctx(), state, &widgets);
+
     // Collected rather than acted on in place: a handler dispatches commands,
     // and mutating the document while walking the list that document produced is
     // how a panel draws half of one revision and half of the next.
     let mut touched = None;
     for widget in &widgets {
-        if let Some(action) = draw(ui, state, widget) {
+        if let Some(action) = draw(ui, state, &textures, widget) {
             touched = Some(action);
         }
     }
@@ -202,7 +208,12 @@ fn return_document(state: &mut AppState, mut edit: ankhimate_document::Edit, lab
 }
 
 /// Draw one widget, returning what it produced if the user touched it.
-fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAction> {
+fn draw(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    textures: &Textures,
+    widget: &Widget,
+) -> Option<PanelAction> {
     match widget {
         Widget::Heading { heading } => {
             ui.add_space(6.0);
@@ -405,7 +416,7 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
                     ui.horizontal(|ui| {
                         for name in thumbnails {
                             let chosen = selected.as_deref() == Some(name.as_str());
-                            if thumbnail(ui, state, name, side, chosen) {
+                            if thumbnail(ui, textures, name, side, chosen) {
                                 picked = Some(name.clone());
                             }
                         }
@@ -418,6 +429,43 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             })
         }
     }
+}
+
+/// Loaded thumbnails for this frame, by asset name.
+type Textures = std::collections::HashMap<String, egui::TextureHandle>;
+
+/// Load every thumbnail the panel's widgets ask for.
+///
+/// Up front rather than during the draw: `scaled_thumbnail` needs `&mut
+/// AppState` to fill its cache and the draw has only a shared borrow. Doing it
+/// once for the whole panel also means a strip of forty images is forty cache
+/// hits rather than forty separate decisions about whether to decode.
+fn resolve_thumbnails(ctx: &egui::Context, state: &mut AppState, widgets: &[Widget]) -> Textures {
+    let wanted: Vec<String> = widgets
+        .iter()
+        .filter_map(|w| match w {
+            Widget::Thumbnails { thumbnails, .. } => Some(thumbnails.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+
+    let mut textures = Textures::new();
+    for name in wanted {
+        if textures.contains_key(&name) {
+            continue;
+        }
+        let Some(id) = state.doc.assets.by_name(&name) else {
+            // A name with no image behind it. Left absent rather than defaulted,
+            // so the widget can say the art is missing instead of drawing a
+            // placeholder that looks like art that failed to load.
+            continue;
+        };
+        if let Some(handle) = crate::ui::assets::scaled_thumbnail(ctx, state, id, 128) {
+            textures.insert(name, handle);
+        }
+    }
+    textures
 }
 
 /// How many rows of height a list should reserve.
@@ -498,25 +546,44 @@ fn names_of(state: &AppState, kind: PickKind) -> Vec<String> {
 }
 
 /// One asset thumbnail. Returns true when clicked.
-///
-/// The image is not drawn yet: resolving an asset name to a live egui texture
-/// needs the cache the assets panel keeps, and reaching into it from here would
-/// be a second owner of that cache. The frame, the name and the click all work,
-/// so a plugin using this widget gets a picker that picks — it just picks by
-/// name rather than by sight, which is stated rather than left to be noticed.
-fn thumbnail(ui: &mut egui::Ui, _state: &AppState, name: &str, side: f32, selected: bool) -> bool {
+fn thumbnail(
+    ui: &mut egui::Ui,
+    textures: &Textures,
+    name: &str,
+    side: f32,
+    selected: bool,
+) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
 
-    ui.painter()
-        .rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
-    let short: String = name.chars().take(6).collect();
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        short,
-        egui::FontId::proportional(side * 0.22),
-        ui.visuals().weak_text_color(),
-    );
+    match textures.get(name) {
+        Some(handle) => {
+            // Fitted rather than stretched: a tall sprite squashed into a square
+            // is a picker showing art that is not what will be drawn.
+            let size = handle.size_vec2();
+            let scale = (side / size.x).min(side / size.y);
+            let fitted = egui::Rect::from_center_size(rect.center(), size * scale);
+            ui.painter().image(
+                handle.id(),
+                fitted,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+        None => {
+            // A name the asset library does not have. The frame and a mark, so
+            // it reads as "this art is missing" rather than as a blank square
+            // that failed to paint.
+            ui.painter()
+                .rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "?",
+                egui::FontId::proportional(side * 0.4),
+                ui.visuals().weak_text_color(),
+            );
+        }
+    }
 
     if selected {
         ui.painter().rect_stroke(

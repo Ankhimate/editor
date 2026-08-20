@@ -370,7 +370,7 @@ impl AppBehavior<'_> {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
-                            export::ui(ui, self.state);
+                            export::ui(ui, self.state, self.plugins);
                         });
                     });
             }
