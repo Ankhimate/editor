@@ -135,18 +135,28 @@ impl Host {
         &self,
         script: &str,
         doc: ankhimate_document::Document,
-    ) -> Result<exporter::Emitted, PluginError> {
+    ) -> Result<
+        (exporter::Emitted, ankhimate_document::Document),
+        (PluginError, ankhimate_document::Document),
+    > {
         let mut edit = Edit::new(doc);
         let emitted = std::rc::Rc::new(std::cell::RefCell::new(exporter::Emitted::default()));
-        self.run_with(
+        let outcome = self.run_with(
             script,
             &mut edit,
             Sinks {
                 emitted: Some(emitted.clone()),
                 ..Sinks::default()
             },
-        )?;
-        Ok(std::mem::take(&mut *emitted.borrow_mut()))
+        );
+
+        // The document comes back either way. `run_with` moves it in and moves
+        // it out again whatever the script did, so a failed export must not be
+        // the thing that loses a user their rig.
+        match outcome {
+            Ok(_) => Ok((std::mem::take(&mut *emitted.borrow_mut()), edit.doc)),
+            Err(e) => Err((e, edit.doc)),
+        }
     }
 
     /// Read the panels a script registers, without building one.
