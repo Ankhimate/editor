@@ -11,6 +11,7 @@ pub mod export;
 pub mod icon_font;
 pub mod icons;
 pub mod inspector;
+pub mod plugin_panel;
 pub mod psd_import;
 pub mod rename;
 pub mod settings;
@@ -197,6 +198,11 @@ impl Tab {
 
 pub struct AppBehavior<'a> {
     pub state: &'a mut crate::app_state::AppState,
+    /// Plugins, for drawing the panels they declare.
+    ///
+    /// Borrowed beside `state` rather than held inside it: a plugin's source is
+    /// not part of the document, and putting it there would make it undoable.
+    pub plugins: &'a crate::plugins::Plugins,
     /// Tabs to draw as their icon alone, because their card is too narrow to
     /// hold every label.
     ///
@@ -390,19 +396,14 @@ impl AppBehavior<'_> {
                 });
             }
             Tab::Plugin(id) => {
-                // Nothing loads plugins yet — the editor has only just gained
-                // the dependency, and the loader, the panel cache and the
-                // thumbnail lookup a `Thumbnails` widget needs are all their own
-                // piece of work. Saying so is better than an empty card, which
-                // reads as a panel that is broken rather than one not wired up.
-                egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "`{id}` is a plugin panel. The editor does not load                              plugins yet."
-                        ))
-                        .color(ui.visuals().weak_text_color()),
-                    );
-                });
+                egui::ScrollArea::vertical()
+                    .id_salt(("plugin_panel", id))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                            plugin_panel::ui(ui, self.state, self.plugins, id);
+                        });
+                    });
             }
         }
     }
@@ -799,6 +800,7 @@ mod layout_tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut behavior = AppBehavior {
                     state: &mut state,
+                    plugins: &Default::default(),
                     theme: &theme,
                     grid: &grid,
                     fonts: &fonts,

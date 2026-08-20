@@ -71,7 +71,12 @@ impl std::error::Error for ImportError {}
 pub trait Importer: Send + Sync {
     /// Stable dotted id — `"import.spine"`. What a menu entry, a plugin and an
     /// MCP tool all name, so it is a public contract like an operator id.
-    fn id(&self) -> &'static str;
+    /// The dotted id a caller names this importer by.
+    ///
+    /// `&str`, not `&'static str`: a plugin's importer reads its id out of its
+    /// own file at load time, and a vocabulary that only built-ins can join is
+    /// the closed list this registry exists to replace.
+    fn id(&self) -> &str;
 
     /// Human-readable, for the File▸Import menu.
     fn label(&self) -> &str;
@@ -141,7 +146,9 @@ pub trait Importer: Send + Sync {
 /// reader.
 #[derive(Default)]
 pub struct Importers {
-    by_id: std::collections::BTreeMap<&'static str, Box<dyn Importer>>,
+    /// Keyed by an owned id, because a plugin's importer names itself out of
+    /// its own file and cannot hand out a `&'static str`.
+    by_id: std::collections::BTreeMap<String, Box<dyn Importer>>,
 }
 
 impl Importers {
@@ -159,15 +166,15 @@ impl Importers {
     }
 
     pub fn register(&mut self, importer: Box<dyn Importer>) {
-        self.by_id.insert(importer.id(), importer);
+        self.by_id.insert(importer.id().to_string(), importer);
     }
 
     pub fn get(&self, id: &str) -> Option<&dyn Importer> {
         self.by_id.get(id).map(|b| &**b)
     }
 
-    pub fn ids(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.by_id.keys().copied()
+    pub fn ids(&self) -> impl Iterator<Item = &str> + '_ {
+        self.by_id.keys().map(String::as_str)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &dyn Importer> + '_ {
@@ -187,11 +194,11 @@ impl Importers {
     ///
     /// Returns the importer's id alongside the rig, since a caller that guessed
     /// wants to know what it actually got.
-    pub fn read_any(&self, path: &Path) -> Result<(&'static str, Loaded), ImportError> {
+    pub fn read_any(&self, path: &Path) -> Result<(String, Loaded), ImportError> {
         let mut last = None;
         for importer in self.claiming(path) {
             match importer.read(path) {
-                Ok(loaded) => return Ok((importer.id(), loaded)),
+                Ok(loaded) => return Ok((importer.id().to_string(), loaded)),
                 // Not this one — keep looking. A malformed file of a format that
                 // *did* claim it is worth remembering, though: reporting "no
                 // importer accepted this" for a Spine rig with a typo in it

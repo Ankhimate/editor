@@ -1618,7 +1618,7 @@ mod tests {
 pub struct PsdImporter;
 
 impl crate::importer::Importer for PsdImporter {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "import.psd"
     }
 

@@ -318,6 +318,12 @@ pub struct Session {
     /// `None` (the slot shows nothing) and from a `SlotVisible` key (the
     /// animation hides it) — both of those are things the rig actually does.
     pub hidden_slots: std::collections::HashSet<SlotId>,
+    /// What each plugin panel is showing, and the revision it was built at.
+    ///
+    /// Session state by every measure the rule gives: it is not saved, not
+    /// undone, and would be wrong to find in a teammate's file. A panel's
+    /// widget list is a view of the document, not part of it.
+    pub panels: crate::ui::plugin_panel::PanelCache,
     /// Bones the viewport is isolated to, with their descendants (T-903).
     ///
     /// Empty means not isolated. When it is not empty, everything outside the
@@ -410,6 +416,7 @@ impl Session {
 
     pub fn new(active_skin: SkinId) -> Self {
         Self {
+            panels: Default::default(),
             camera: crate::ui::canvas::camera::Camera2D::default(),
             selection: None,
             selected_bones: Vec::new(),

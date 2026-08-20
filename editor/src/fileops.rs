@@ -117,12 +117,27 @@ pub fn importers() -> ankhimate_formats::Importers {
     ankhimate_formats::Importers::builtin()
 }
 
+/// The built-ins plus whatever the loaded plugins add.
+///
+/// A plugin that registers a format reaches the File▸Import menu, a dropped
+/// file and an id lookup through this one call — none of those three know a
+/// plugin exists, which is the duplication the registry was built to remove.
+pub fn importers_with(plugins: &crate::plugins::Plugins) -> ankhimate_formats::Importers {
+    let mut importers = importers();
+    plugins.register_importers(&mut importers);
+    importers
+}
+
 /// File▸Import▸<format> — prompt with that format's extensions, then read.
 ///
 /// The user has already said which format, so the named importer is used rather
 /// than guessed at: obeying beats guessing when the caller knows.
-pub fn import_with(state: &mut AppState, id: &str) -> FileOutcome {
-    let importers = importers();
+pub fn import_with(
+    state: &mut AppState,
+    plugins: &crate::plugins::Plugins,
+    id: &str,
+) -> FileOutcome {
+    let importers = importers_with(plugins);
     let Some(importer) = importers.get(id) else {
         return FileOutcome::Error(format!("no importer named `{id}`"));
     };
@@ -133,12 +148,17 @@ pub fn import_with(state: &mut AppState, id: &str) -> FileOutcome {
     else {
         return FileOutcome::Cancelled;
     };
-    import_path_with(state, id, &path)
+    import_path_with(state, plugins, id, &path)
 }
 
 /// Read `path` with the importer `id` names. The dialog-free seam.
-pub fn import_path_with(state: &mut AppState, id: &str, path: &Path) -> FileOutcome {
-    let importers = importers();
+pub fn import_path_with(
+    state: &mut AppState,
+    plugins: &crate::plugins::Plugins,
+    id: &str,
+    path: &Path,
+) -> FileOutcome {
+    let importers = importers_with(plugins);
     let Some(importer) = importers.get(id) else {
         return FileOutcome::Error(format!("no importer named `{id}`"));
     };
@@ -354,7 +374,12 @@ mod tests {
         state.dispatch(Box::new(CreateBone::new(bone("leftover"))));
         let before = state.revision;
 
-        let outcome = import_path_with(&mut state, "import.spine", &path);
+        let outcome = import_path_with(
+            &mut state,
+            &crate::plugins::Plugins::default(),
+            "import.spine",
+            &path,
+        );
         assert!(
             matches!(outcome, FileOutcome::Imported { .. }),
             "expected an import outcome"
@@ -393,9 +418,12 @@ mod tests {
         std::fs::write(&path, rig).unwrap();
 
         let mut state = AppState::default();
-        let FileOutcome::Imported { report, .. } =
-            import_path_with(&mut state, "import.spine", &path)
-        else {
+        let FileOutcome::Imported { report, .. } = import_path_with(
+            &mut state,
+            &crate::plugins::Plugins::default(),
+            "import.spine",
+            &path,
+        ) else {
             panic!("a rig without images still imports");
         };
         assert!(state.doc.skeleton.bones.values().any(|b| b.name == "arm"));
@@ -442,7 +470,12 @@ mod tests {
         state.dispatch(Box::new(CreateBone::new(bone("leftover"))));
         let before = state.revision;
 
-        let outcome = import_path_with(&mut state, "import.dragonbones", &path);
+        let outcome = import_path_with(
+            &mut state,
+            &crate::plugins::Plugins::default(),
+            "import.dragonbones",
+            &path,
+        );
         assert!(
             matches!(outcome, FileOutcome::Imported { .. }),
             "expected an import outcome"
@@ -477,7 +510,12 @@ mod tests {
         std::fs::write(&path, DRAGONBONES_RIG).unwrap();
 
         let mut state = AppState::default();
-        import_path_with(&mut state, "import.dragonbones", &path);
+        import_path_with(
+            &mut state,
+            &crate::plugins::Plugins::default(),
+            "import.dragonbones",
+            &path,
+        );
 
         let clip = state.doc.animations.values().next().expect("one clip");
         assert_eq!(clip.name, "wave");
@@ -495,7 +533,12 @@ mod tests {
         let mut state = AppState::default();
         state.dispatch(Box::new(CreateBone::new(bone("keep-me"))));
 
-        let outcome = import_path_with(&mut state, "import.dragonbones", &path);
+        let outcome = import_path_with(
+            &mut state,
+            &crate::plugins::Plugins::default(),
+            "import.dragonbones",
+            &path,
+        );
         assert!(matches!(outcome, FileOutcome::Error(_)));
         assert!(
             state
@@ -518,7 +561,12 @@ mod tests {
         state.dispatch(Box::new(CreateBone::new(bone("keep-me"))));
         let before = state.revision;
 
-        let outcome = import_path_with(&mut state, "import.spine", &path);
+        let outcome = import_path_with(
+            &mut state,
+            &crate::plugins::Plugins::default(),
+            "import.spine",
+            &path,
+        );
         assert!(matches!(outcome, FileOutcome::Error(_)));
         assert!(
             state

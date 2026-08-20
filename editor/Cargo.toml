@@ -11,6 +11,7 @@ ankhimate-core = { version = "0.1.0", path = "../core" }
 ankhimate-document = { version = "0.1.0", path = "../document" }
 ankhimate-formats = { version = "0.1.0", path = "../formats" }
 ankhimate-export = { version = "0.1.0", path = "../export" }
+ankhimate-plugins = { version = "0.1.0", path = "../plugins" }
 rfd = "0.15"
 eframe = "0.34.3"
 env_logger = "0.11.10"

@@ -1277,7 +1277,7 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
 pub struct SpineImporter;
 
 impl crate::importer::Importer for SpineImporter {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "import.spine"
     }
 

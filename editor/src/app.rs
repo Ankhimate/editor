@@ -34,6 +34,8 @@ pub struct AnkhimateApp {
     naming_group: Option<(Option<ankhimate_core::ids::GroupId>, String)>,
     /// Panes drawn in their own OS window (T-910).
     torn_off: Vec<Tab>,
+    /// Plugins read at startup, and what they declared.
+    plugins: crate::plugins::Plugins,
     /// The program mark. Re-rasterises itself from vector art when the size it
     /// is drawn at changes, so a UI-scale change stays sharp.
     logo: crate::ui::branding::Logo,
@@ -150,9 +152,17 @@ impl AnkhimateApp {
             .filter(|t| t.can_tear_off())
             .collect();
 
+        // Plugins, once, at startup. A file changing under a running editor is
+        // a thing to opt into rather than a surprise: a reload discards
+        // whatever a panel was showing.
+        let plugins = crate::plugins::Plugins::directory()
+            .map(|dir| crate::plugins::Plugins::load(&dir))
+            .unwrap_or_default();
+
         let autosave = crate::autosave::Autosave::new(config.autosave_secs);
 
         let mut app = Self {
+            plugins,
             theme: default_theme,
             available_themes,
             config,
@@ -375,6 +385,10 @@ impl AnkhimateApp {
 impl Default for AnkhimateApp {
     fn default() -> Self {
         Self {
+            // No plugins in the default app: `Default` is for tests, which
+            // should not read whatever happens to be in the developer's config
+            // directory.
+            plugins: crate::plugins::Plugins::default(),
             tree: Self::default_layout(),
             theme: theme::Theme::default(),
             available_themes: vec![theme::Theme::default()],
@@ -744,7 +758,9 @@ impl eframe::App for AnkhimateApp {
                                     // new format is a registration rather than
                                     // an edit here — which is the whole point
                                     // of the registry.
-                                    for importer in crate::fileops::importers().iter() {
+                                    let importers =
+                                        crate::fileops::importers_with(&self.plugins);
+                                    for importer in importers.iter() {
                                         if ui
                                             .add(egui::Button::new(format!(
                                                 "{}…",
@@ -884,6 +900,31 @@ impl eframe::App for AnkhimateApp {
                                         }
                                     }
                                 }
+
+                                // Plugin panels, under the built-ins. Listed
+                                // here rather than in a menu of their own: a
+                                // panel is a panel, and a user looking for one
+                                // should not have to know which came from a
+                                // file they dropped in a folder.
+                                let plugin_panels = self.plugins.panels();
+                                if !plugin_panels.is_empty() {
+                                    ui.separator();
+                                    for (id, title) in plugin_panels {
+                                        let tab = Tab::Plugin(id);
+                                        let found = self.find_pane(&tab);
+                                        let mut on =
+                                            found.is_some_and(|tile| self.tree.is_visible(tile));
+                                        let label =
+                                            format!("{}  {title}", crate::ui::icons::PLUGIN);
+                                        if ui.checkbox(&mut on, label).clicked() {
+                                            match found {
+                                                Some(tile) => self.tree.set_visible(tile, on),
+                                                None => self.add_pane(tab),
+                                            }
+                                        }
+                                    }
+                                }
+
                                 ui.separator();
                                 // Layer toggles live here too: they are "what is
                                 // drawn", the same question the panel list asks.
@@ -1219,6 +1260,7 @@ impl eframe::App for AnkhimateApp {
             .show(ctx, |ui| {
                 let mut behavior = AppBehavior {
                     state: &mut self.state,
+                    plugins: &self.plugins,
                     theme: &self.theme,
                     grid: &self.config.grid,
                     fonts: &self.config.fonts,
@@ -1701,6 +1743,7 @@ impl AnkhimateApp {
                                     let mut close_requests = Vec::new();
                                     let mut behavior = AppBehavior {
                                         state: &mut self.state,
+                                        plugins: &self.plugins,
                                         theme: &self.theme,
                                         grid: &self.config.grid,
                                         fonts: &self.config.fonts,
@@ -1850,7 +1893,7 @@ impl AnkhimateApp {
             FileAction::OpenPath(path) => fileops::open_path(&mut self.state, &path),
             FileAction::Save => fileops::save(&self.state, &self.current_path),
             FileAction::SaveAs => fileops::save_as(&self.state),
-            FileAction::Import(id) => fileops::import_with(&mut self.state, &id),
+            FileAction::Import(id) => fileops::import_with(&mut self.state, &self.plugins, &id),
         };
         match outcome {
             FileOutcome::Saved(path) => {

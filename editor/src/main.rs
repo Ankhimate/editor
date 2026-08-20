@@ -7,6 +7,7 @@ pub mod fileops;
 pub mod keymap;
 pub mod operators;
 mod paste_tests;
+pub mod plugins;
 pub mod registry;
 pub mod renderer;
 pub mod session;

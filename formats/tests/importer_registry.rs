@@ -152,7 +152,7 @@ fn a_plugin_registers_through_the_same_door_a_built_in_does() {
 
     struct Pretend;
     impl Importer for Pretend {
-        fn id(&self) -> &'static str {
+        fn id(&self) -> &str {
             "import.pretend"
         }
         fn label(&self) -> &str {

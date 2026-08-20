@@ -1964,7 +1964,7 @@ mod tests {
 pub struct DragonBonesImporter;
 
 impl crate::importer::Importer for DragonBonesImporter {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "import.dragonbones"
     }
 
