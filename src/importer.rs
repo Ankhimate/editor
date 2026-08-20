@@ -45,6 +45,8 @@
 //! added.
 
 use ankhimate_document::Edit;
+use ankhimate_formats::convert::Loaded;
+use ankhimate_formats::importer::ImportError;
 use std::path::{Path, PathBuf};
 
 /// The files a JS importer may open: those beside the one being imported.
@@ -124,6 +126,12 @@ fn is_plain_name(name: &str) -> bool {
 }
 
 /// A rig format described by a script.
+///
+/// `Clone` because a registry takes ownership and the editor keeps its own copy
+/// beside it: the script is the whole of the state, and copying a string per
+/// registration is cheaper than an `Rc` whose only reason to exist is to avoid
+/// copying a string.
+#[derive(Clone)]
 pub struct JsImporter {
     pub id: String,
     pub label: String,
@@ -162,6 +170,92 @@ impl JsImporter {
         );
         host.run(&script, &mut edit)?;
         Ok(edit)
+    }
+}
+
+/// A JavaScript importer is an importer like any other.
+///
+/// This is the join that makes the plugin surface reachable: a plugin that
+/// registers `import.dragonbones` appears in the File▸Import menu, answers
+/// `read_any` for a dropped file, and is callable by id — with nobody writing
+/// menu code for it. The alternative was a second list of "plugin importers"
+/// beside the built-in one, which is the duplication the registry exists to
+/// remove.
+impl ankhimate_formats::importer::Importer for JsImporter {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn extensions(&self) -> &[&str] {
+        // The trait wants borrowed strs and a plugin's extensions are owned, so
+        // this cannot borrow them. Claiming is done by `claims` below instead,
+        // which is what actually decides whether a file is offered — the list
+        // is for the file dialog's filter.
+        &[]
+    }
+
+    fn claims(&self, path: &std::path::Path) -> bool {
+        let Some(extension) = path.extension().and_then(|e| e.to_str()) else {
+            return false;
+        };
+        self.extensions
+            .iter()
+            .any(|wanted| wanted.eq_ignore_ascii_case(extension))
+    }
+
+    fn read(&self, path: &std::path::Path) -> Result<Loaded, ImportError> {
+        let edit = JsImporter::read(self, path).map_err(|e| {
+            // A plugin's own message, not "the import failed". The author threw
+            // it deliberately and the user is the one who has to act on it.
+            ImportError::Malformed(e.to_string())
+        })?;
+        Ok(as_loaded(edit, path))
+    }
+}
+
+/// What a script built, in the shape the rest of the loader speaks.
+///
+/// A straight move rather than a conversion: `Edit` already holds a `Document`,
+/// and a document is a skeleton, its animations and its assets. What is added
+/// here is the two things a script has no way to know — the file's own name, and
+/// that its approximations are import loss rather than editing history.
+fn as_loaded(edit: Edit, path: &std::path::Path) -> Loaded {
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("imported")
+        .to_string();
+
+    let mut report = ankhimate_formats::convert::LoadReport::default();
+    // `Lossy::what` is a `&'static str` and a plugin's kind is a `String` read
+    // from its own file, so the name is leaked to reach that lifetime. A leak
+    // per reported approximation, bounded by one import — against dropping the
+    // kind, which would leave every plugin's loss reported as the same
+    // anonymous thing. The right fix is `Cow` on `Lossy`, which is a change to
+    // a shared type and not this commit's business.
+    report.lossy = edit
+        .report
+        .into_iter()
+        .map(|a| ankhimate_formats::convert::Lossy {
+            what: Box::leak(a.what.into_boxed_str()),
+            where_: a.where_,
+            detail: a.detail,
+        })
+        .collect();
+
+    Loaded {
+        skeleton: edit.doc.skeleton,
+        animations: edit.doc.animations,
+        assets: edit.doc.assets,
+        name,
+        fps: edit.doc.meta.fps,
+        export_presets: Vec::new(),
+        psd_layer_paths: edit.doc.psd_layer_paths,
+        report,
     }
 }
 
