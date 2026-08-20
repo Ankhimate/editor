@@ -907,7 +907,8 @@ impl eframe::App for AnkhimateApp {
                                 // should not have to know which came from a
                                 // file they dropped in a folder.
                                 let plugin_panels = self.plugins.panels();
-                                if !plugin_panels.is_empty() {
+                                let any_plugins = !self.plugins.loaded.is_empty();
+                                if !plugin_panels.is_empty() || any_plugins {
                                     ui.separator();
                                     for (id, title) in plugin_panels {
                                         let tab = Tab::Plugin(id);
@@ -922,6 +923,45 @@ impl eframe::App for AnkhimateApp {
                                                 None => self.add_pane(tab),
                                             }
                                         }
+                                    }
+
+                                    // Where plugins live, and which of them
+                                    // loaded. Without this a plugin in the wrong
+                                    // folder is indistinguishable from a plugin
+                                    // that threw — both are simply absent, and
+                                    // the user has nothing to check.
+                                    for plugin in &self.plugins.loaded {
+                                        let Some(error) = &plugin.error else {
+                                            continue;
+                                        };
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{}  {} failed",
+                                                crate::ui::icons::LOSSY,
+                                                plugin.name
+                                            ))
+                                            .small()
+                                            .color(ui.visuals().warn_fg_color),
+                                        )
+                                        .on_hover_text(error);
+                                    }
+
+                                    if let Some(dir) = crate::plugins::Plugins::directory() {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{}  {}",
+                                                crate::ui::icons::PLUGIN,
+                                                self.plugins.summary()
+                                            ))
+                                            .small()
+                                            .weak(),
+                                        )
+                                        .on_hover_text(format!(
+                                            "Plugins are read from
+{}
+at startup.",
+                                            dir.display()
+                                        ));
                                     }
                                 }
 

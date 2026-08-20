@@ -179,12 +179,26 @@ pub enum PickKind {
 /// widget produced. A button produces nothing, a checkbox a bool, a picker a
 /// name — so the value is JSON rather than a second enum to keep in step with
 /// the first.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PanelAction {
     /// The `on` field of the widget that was touched.
     pub action: String,
     /// What it produced. `null` for a button.
     pub value: serde_json::Value,
+    /// Every widget's current value, by action name.
+    ///
+    /// **The host tracks these, not the plugin.** A fresh runtime is built per
+    /// call so a plugin cannot hold state across an undo — which also means
+    /// `this.name = value` in one handler is gone by the next, and a panel that
+    /// tried it would read every field as `undefined`. That was not a
+    /// hypothetical: the first plugin written against this API did exactly that
+    /// and created nine bones all called `new_bone`.
+    ///
+    /// So the panel's state lives where it can survive: here. A handler reading
+    /// `state.name` gets what the user typed, whether they typed it this call or
+    /// four calls ago.
+    #[serde(default)]
+    pub state: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Widget {

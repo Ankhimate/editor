@@ -110,7 +110,7 @@ fn touching_a_widget_reaches_the_plugin_and_the_document() {
         "tools.mirror",
         &PanelAction {
             action: "go".into(),
-            value: serde_json::Value::Null,
+            ..Default::default()
         },
         &mut edit,
     )
@@ -140,6 +140,7 @@ fn a_widgets_value_reaches_the_handler() {
         &PanelAction {
             action: "offset".into(),
             value: serde_json::json!(42),
+            ..Default::default()
         },
         &mut edit,
     )
@@ -217,5 +218,84 @@ fn a_panel_that_throws_says_why() {
     assert!(
         error.to_string().contains("no head bone"),
         "the author's own message survived: {error}"
+    );
+}
+
+#[test]
+fn a_handler_reads_values_the_user_set_on_earlier_calls() {
+    // The bug this exists for: a fresh runtime is built per call, so a handler
+    // writing `this.name = value` finds it gone next time. The first plugin
+    // written against this API did that and created nine bones all named
+    // `new_bone`.
+    //
+    // The host tracks the values instead and hands them back, so a handler
+    // reading `state.name` sees what the user typed whenever they typed it.
+    let host = Host::new();
+    let mut edit = ankhimate_document::Edit::default();
+    let mut state = serde_json::Map::new();
+    state.insert("name".into(), serde_json::json!("elbow"));
+
+    host.panel_action(
+        r#"
+        ankhimate.registerPanel({
+          id: "p", title: "P",
+          build: () => [],
+          on(action, value, state) {
+            if (action === "create") ops.invoke("bone.create", { name: state.name });
+          },
+        });
+        "#,
+        "p",
+        &PanelAction {
+            action: "create".into(),
+            value: serde_json::Value::Null,
+            state,
+        },
+        &mut edit,
+    )
+    .expect("the action runs");
+
+    assert!(
+        edit.doc
+            .skeleton
+            .bones
+            .iter()
+            .any(|(_, b)| b.name == "elbow"),
+        "the handler used the value from an earlier call, not a default"
+    );
+}
+
+#[test]
+fn a_handler_with_no_state_still_runs() {
+    // A panel whose widgets are all buttons has nothing to remember, and should
+    // not have to guard against `state` being absent.
+    let host = Host::new();
+    let mut edit = ankhimate_document::Edit::default();
+    host.panel_action(
+        r#"
+        ankhimate.registerPanel({
+          id: "p", title: "P",
+          build: () => [],
+          on(action, value, state) {
+            ops.invoke("bone.create", { name: `keys_${Object.keys(state).length}` });
+          },
+        });
+        "#,
+        "p",
+        &PanelAction {
+            action: "go".into(),
+            ..Default::default()
+        },
+        &mut edit,
+    )
+    .expect("the action runs");
+
+    assert!(
+        edit.doc
+            .skeleton
+            .bones
+            .iter()
+            .any(|(_, b)| b.name == "keys_0"),
+        "an empty state arrived as an object, not as undefined"
     );
 }

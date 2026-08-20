@@ -290,4 +290,40 @@ mod tests {
         assert_eq!(plugins.loaded.len(), 1);
         assert_eq!(plugins.loaded[0].name, "real");
     }
+
+    #[test]
+    fn the_summary_says_what_is_worth_saying() {
+        // A user whose plugin did not appear needs to tell "no plugins found"
+        // from "one plugin, and it failed" — the two look identical in a menu
+        // that only lists what worked.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(Plugins::load(dir.path()).summary(), "No plugins");
+
+        write(dir.path(), "good.js", "");
+        assert_eq!(Plugins::load(dir.path()).summary(), "1 plugin(s)");
+
+        write(dir.path(), "bad.js", "throw new Error('nope');");
+        assert_eq!(
+            Plugins::load(dir.path()).summary(),
+            "2 plugin(s), 1 failed to load"
+        );
+    }
+
+    #[test]
+    fn the_plugin_directory_sits_beside_the_config_file() {
+        // Where this is wrong the user has no way to find out: a plugin in the
+        // wrong folder is indistinguishable from one that threw. Pinned because
+        // I put a file one level up from here and lost a restart to it.
+        let Some(dir) = Plugins::directory() else {
+            return;
+        };
+        assert_eq!(dir.file_name().and_then(|n| n.to_str()), Some("plugins"));
+        assert!(
+            dir.parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .is_some(),
+            "it has a parent to sit beside"
+        );
+    }
 }

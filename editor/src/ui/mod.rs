@@ -272,6 +272,24 @@ pub fn tab_bar_height(style: &egui::Style) -> f32 {
 pub const TAB_TOP_PAD: f32 = 10.0;
 
 impl AppBehavior<'_> {
+    /// What a tab should say, resolving a plugin panel's declared title.
+    ///
+    /// Falls back to the id, which is not a placeholder: a panel whose plugin
+    /// stopped loading should still name itself, so the user can see which file
+    /// to go looking for.
+    fn plugin_title(&self, pane: &Tab) -> String {
+        match pane {
+            Tab::Plugin(id) => self
+                .plugins
+                .panels()
+                .into_iter()
+                .find(|(panel_id, _)| panel_id == id)
+                .map(|(_, title)| title)
+                .unwrap_or_else(|| id.clone()),
+            _ => pane.title(),
+        }
+    }
+
     /// Draw one pane's contents.
     ///
     /// Split out of `pane_ui` so a torn-off window (T-910) draws a panel by
@@ -495,7 +513,11 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
     }
 
     fn tab_title_for_pane(&mut self, pane: &Tab) -> egui::WidgetText {
-        pane.title().into()
+        // A plugin panel's title lives with the plugin, not with the tab: the
+        // tab carries the id, which is what a saved layout and a View menu
+        // resolve against. Looked up here because this is the one place that
+        // has both.
+        self.plugin_title(pane).into()
     }
 
     fn drag_preview_color(&self, visuals: &egui::Visuals) -> egui::Color32 {

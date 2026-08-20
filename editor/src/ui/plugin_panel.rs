@@ -33,6 +33,17 @@ use eframe::egui;
 #[derive(Default)]
 pub struct PanelCache {
     built: std::collections::HashMap<String, (u64, Vec<Widget>)>,
+    /// Every widget's current value per panel, by action name.
+    ///
+    /// **The host owns this, not the plugin.** A fresh JS runtime is built per
+    /// call so a plugin cannot hold state across an undo — which also means a
+    /// handler writing `this.name = value` finds it gone next call. The first
+    /// plugin written against this API did exactly that and created nine bones
+    /// all named `new_bone`.
+    ///
+    /// Kept in `Session` with the rest of the cache: a half-typed field is not
+    /// part of the rig and has no business in a save file.
+    state: std::collections::HashMap<String, serde_json::Map<String, serde_json::Value>>,
 }
 
 impl PanelCache {
@@ -42,6 +53,9 @@ impl PanelCache {
     /// document still changed what the panel should show — a mode the plugin
     /// tracks itself, for instance.
     pub fn invalidate(&mut self, id: &str) {
+        // The widget list goes; the values stay. A panel rebuilt after a click
+        // that dropped what the user had typed would be a form that clears
+        // itself every time it is used.
         self.built.remove(id);
     }
 }
@@ -88,7 +102,20 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plu
         }
     }
 
-    if let Some(action) = touched {
+    if let Some(mut action) = touched {
+        // Remembered before the handler runs, so a plugin reading `state.name`
+        // sees what the user just typed rather than the value from last time.
+        let state_for_panel = state
+            .session
+            .panels
+            .state
+            .entry(id.to_string())
+            .or_default();
+        if !action.value.is_null() {
+            state_for_panel.insert(action.action.clone(), action.value.clone());
+        }
+        action.state = state_for_panel.clone();
+
         let host = Host::new();
         let mut edit = borrow_document(state);
         let outcome = host.panel_action(&source, id, &action, &mut edit);
@@ -202,6 +229,7 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             response.clicked().then(|| PanelAction {
                 action: on.clone(),
                 value: serde_json::Value::Null,
+                ..Default::default()
             })
         }
         Widget::Checkbox {
@@ -222,6 +250,7 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             response.changed().then(|| PanelAction {
                 action: on.clone(),
                 value: serde_json::Value::Bool(current),
+                ..Default::default()
             })
         }
         Widget::Number {
@@ -254,6 +283,7 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             changed.then(|| PanelAction {
                 action: on.clone(),
                 value: serde_json::json!(current),
+                ..Default::default()
             })
         }
         Widget::Text_ {
@@ -278,6 +308,7 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             done.then(|| PanelAction {
                 action: on.clone(),
                 value: serde_json::Value::String(current),
+                ..Default::default()
             })
         }
         Widget::Choice {
@@ -289,6 +320,7 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
         } => dropdown(ui, choice, value, options, tooltip.as_deref()).map(|picked| PanelAction {
             action: on.clone(),
             value: serde_json::Value::String(picked),
+            ..Default::default()
         }),
         Widget::Pick {
             pick,
@@ -304,6 +336,7 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             dropdown(ui, pick, value, &options, tooltip.as_deref()).map(|picked| PanelAction {
                 action: on.clone(),
                 value: serde_json::Value::String(picked),
+                ..Default::default()
             })
         }
         Widget::List {
@@ -327,6 +360,7 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             picked.map(|index| PanelAction {
                 action: on.clone(),
                 value: serde_json::json!(index),
+                ..Default::default()
             })
         }
         Widget::Thumbnails {
@@ -352,6 +386,7 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             picked.map(|name| PanelAction {
                 action: on.clone(),
                 value: serde_json::Value::String(name),
+                ..Default::default()
             })
         }
     }
