@@ -66,6 +66,11 @@ impl IdRemap {
         self.bones.push((from, to));
     }
 
+    /// Fold another remap into this one, for a command that groups others.
+    pub fn extend(&mut self, other: IdRemap) {
+        self.bones.extend(other.bones);
+    }
+
     /// The id `bone` has become, or `bone` itself.
     pub fn bone(&self, bone: BoneId) -> BoneId {
         self.bones
@@ -114,6 +119,90 @@ pub trait EditCommand {
 
     /// Type-erased downcast support, so `merge` can inspect a concrete successor.
     fn as_any(&self) -> &dyn std::any::Any;
+}
+
+/// Several commands that undo as one step.
+///
+/// The case this exists for is a plugin: one click of a panel button can invoke
+/// five verbs, and five presses of Ctrl-Z to take back one click is not undo, it
+/// is a puzzle. The same is true of any caller that produces a batch from a
+/// single gesture.
+///
+/// Built from commands that are **already applied** — the plugin ran against a
+/// real document and the edits are in it. `apply` therefore re-applies, which is
+/// what redo needs, and the group is pushed with [`History::push_applied`] so it
+/// is not applied twice on the way in.
+pub struct Group {
+    /// In the order they were applied. Undone in reverse.
+    commands: Vec<Box<dyn EditCommand>>,
+    label: String,
+}
+
+impl Group {
+    pub fn new(commands: Vec<Box<dyn EditCommand>>, label: impl Into<String>) -> Self {
+        Self {
+            commands,
+            label: label.into(),
+        }
+    }
+
+    /// Is there anything in it?
+    ///
+    /// A caller with nothing to group should push nothing: an undo step that
+    /// undoes nothing is a keypress the user spends finding out it did nothing.
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
+}
+
+impl EditCommand for Group {
+    fn apply(&mut self, doc: &mut Document) {
+        for command in &mut self.commands {
+            command.apply(doc);
+        }
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        // Reverse order. A command that created a bone and a command that moved
+        // it undo the other way round, or the move is reverted against a bone
+        // that is already gone.
+        for command in self.commands.iter_mut().rev() {
+            command.revert(doc);
+        }
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn requires_mode(&self) -> Option<crate::WorkMode> {
+        // The mode was checked per command as each was dispatched. Asking again
+        // for the group would refuse a batch that legitimately spans both — a
+        // plugin that adds a bone and keys it does structural work and animation
+        // work in one click.
+        None
+    }
+
+    fn take_remap(&mut self) -> IdRemap {
+        // Collected across the whole group: a caller re-creating an entity has
+        // to tell every other command in the history, and which member of the
+        // group did it is not their concern.
+        let mut remap = IdRemap::default();
+        for command in &mut self.commands {
+            remap.extend(command.take_remap());
+        }
+        remap
+    }
+
+    fn apply_remap(&mut self, remap: &IdRemap) {
+        for command in &mut self.commands {
+            command.apply_remap(remap);
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// Bounded undo/redo stacks.
@@ -190,6 +279,20 @@ impl History {
         if self.undo.len() > self.cap {
             self.undo.remove(0);
         }
+    }
+
+    /// Take every applied command out, leaving the history empty.
+    ///
+    /// For a caller that ran commands against a throwaway `Edit` and now wants
+    /// them on its own stack — a plugin panel, an importer. The commands are
+    /// already applied to the document that travelled with them, so the caller
+    /// pushes them with [`Self::push_applied`] rather than dispatching again.
+    ///
+    /// Redo is dropped, not returned: a throwaway history has nothing on it that
+    /// the caller's own redo stack should inherit.
+    pub fn take_applied(&mut self) -> Vec<Box<dyn EditCommand>> {
+        self.redo.clear();
+        std::mem::take(&mut self.undo)
     }
 
     pub fn undo(&mut self, doc: &mut Document) -> bool {
@@ -441,5 +544,96 @@ mod tests {
             doc.skeleton.bones[restored].local_transform.position.x, 0.0,
             "transform-undo followed the remapped id"
         );
+    }
+
+    #[test]
+    fn a_group_undoes_as_one_step() {
+        // The case it exists for: one click of a plugin panel button can invoke
+        // five verbs, and five presses of Ctrl-Z to take back one click is not
+        // undo, it is a puzzle.
+        let mut doc = Document::new();
+        let mut history = History::default();
+
+        // Applied against a throwaway document first, the way a plugin's are.
+        let mut side = Document::new();
+        let mut made: Vec<Box<dyn EditCommand>> = Vec::new();
+        for name in ["a", "b", "c"] {
+            let mut cmd = bone_cmds::CreateBone::new(ankhimate_core::skeleton::Bone {
+                name: name.into(),
+                parent: None,
+                length: 10.0,
+                local_transform: Default::default(),
+                inherit: Default::default(),
+                color: ankhimate_core::skeleton::Bone::default_color(),
+            });
+            cmd.apply(&mut side);
+            made.push(Box::new(cmd));
+        }
+        doc = side;
+        assert_eq!(doc.skeleton.bones.len(), 3);
+
+        history.push_applied(Box::new(Group::new(made, "three bones")));
+        assert_eq!(history.undo_depth(), 1, "one step, not three");
+
+        history.undo(&mut doc);
+        assert_eq!(doc.skeleton.bones.len(), 0, "and it took all three back");
+
+        history.redo(&mut doc);
+        assert_eq!(doc.skeleton.bones.len(), 3, "redo put them all back");
+    }
+
+    #[test]
+    fn a_group_undoes_in_reverse_order() {
+        // Order is observable through the *name*: create-then-rename undone
+        // forwards puts the bone back as `arm` and then reverts a rename that
+        // never happened to it, leaving the wrong name. Undone backwards the
+        // rename goes first and the bone comes back out entirely.
+        //
+        // Checked on a group of two renames rather than a create, because a
+        // create's revert removes the bone and every later revert then finds
+        // nothing to do — which hides the order rather than testing it.
+        let mut doc = Document::new();
+        let mut create = bone_cmds::CreateBone::new(ankhimate_core::skeleton::Bone {
+            name: "a".into(),
+            parent: None,
+            length: 10.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: ankhimate_core::skeleton::Bone::default_color(),
+        });
+        create.apply(&mut doc);
+        let bone = doc
+            .skeleton
+            .bones
+            .iter()
+            .next()
+            .map(|(id, _)| id)
+            .expect("the bone");
+
+        let mut first = bone_cmds::RenameBone::new(bone, "b");
+        first.apply(&mut doc);
+        let mut second = bone_cmds::RenameBone::new(bone, "c");
+        second.apply(&mut doc);
+        assert_eq!(doc.skeleton.bones[bone].name, "c");
+
+        let mut history = History::default();
+        history.push_applied(Box::new(Group::new(
+            vec![Box::new(first), Box::new(second)],
+            "two renames",
+        )));
+        history.undo(&mut doc);
+
+        assert_eq!(
+            doc.skeleton.bones[bone].name, "a",
+            "reverting `c`→`b` first and then `b`→`a` gets back to the start;              the other order lands on `b`"
+        );
+    }
+
+    #[test]
+    fn an_empty_group_is_recognisable_as_one() {
+        // A caller with nothing to group should push nothing: an undo step that
+        // undoes nothing is a keypress the user spends finding out it did
+        // nothing.
+        assert!(Group::new(Vec::new(), "nothing").is_empty());
     }
 }

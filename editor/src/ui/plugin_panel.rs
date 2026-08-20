@@ -16,6 +16,13 @@
 //! panel showing stale numbers after an edit is the failure this has to avoid,
 //! and the revision is the one counter that already means "something changed".
 //!
+//! # Undo
+//!
+//! A plugin's commands are applied to a throwaway `Edit`, taken off its history
+//! and pushed onto the editor's as **one** `Group`. One click of a panel button
+//! can invoke five verbs, and five presses of Ctrl-Z to take back one click is
+//! not undo, it is a puzzle.
+//!
 //! # The document round trip
 //!
 //! `Host::build_panel` wants an `Edit`, which owns its `Document`; `AppState`
@@ -119,7 +126,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plu
         let host = Host::new();
         let mut edit = borrow_document(state);
         let outcome = host.panel_action(&source, id, &action, &mut edit);
-        return_document(state, edit);
+        return_document(state, edit, &format!("{id}: {}", action.action));
 
         if let Err(e) = outcome {
             state.session.set_status(format!("`{id}`: {e}"));
@@ -148,7 +155,9 @@ fn rebuild_if_stale(
     let host = Host::new();
     let mut edit = borrow_document(state);
     let built = host.build_panel(source, id, &mut edit);
-    return_document(state, edit);
+    // A build should not edit, but a plugin that does anyway must not have its
+    // change vanish — the label says where it came from.
+    return_document(state, edit, &format!("{id}: build"));
 
     let widgets = built?;
     state
@@ -176,20 +185,19 @@ fn borrow_document(state: &mut AppState) -> ankhimate_document::Edit {
 }
 
 /// Put it back, and fold anything the plugin did into the editor's own history.
-fn return_document(state: &mut AppState, edit: ankhimate_document::Edit) {
-    let changed = edit.history.can_undo();
+fn return_document(state: &mut AppState, mut edit: ankhimate_document::Edit, label: &str) {
+    // The plugin's commands are already applied to the document that is coming
+    // back, so they are pushed as applied rather than dispatched again.
+    //
+    // Grouped, because one click of a panel button can invoke five verbs and
+    // five presses of Ctrl-Z to take back one click is not undo, it is a
+    // puzzle.
+    let applied = edit.history.take_applied();
     state.doc = edit.doc;
-    if changed {
-        // The plugin's commands went onto the `Edit`'s own history, which is
-        // discarded here. Bumping the revision is what tells the rest of the
-        // editor — and every other panel — that the rig moved.
-        //
-        // **Undo does not reach these yet.** A plugin's edits are visible and
-        // saveable and Ctrl-Z will not take them back, which is a real gap and
-        // named here rather than left to be discovered: merging two histories
-        // is its own piece of work.
-        state.revision = state.revision.wrapping_add(1);
-        state.refresh_pose();
+
+    if !applied.is_empty() {
+        let group = ankhimate_document::commands::Group::new(applied, label.to_string());
+        state.dispatch_applied(Box::new(group));
     }
 }
 
