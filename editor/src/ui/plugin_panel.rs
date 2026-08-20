@@ -345,14 +345,33 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             selected,
             rows,
         } => {
-            let row_height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+            // A row is the text plus the button padding either side of it —
+            // `text_style_height` alone is the glyphs, and a height computed
+            // from it shows seven rows in the space eight were asked for.
+            let row_height = ui.text_style_height(&egui::TextStyle::Body)
+                + ui.spacing().button_padding.y * 2.0
+                + ui.spacing().item_spacing.y;
+            let wanted = wanted_rows(*rows, list.len());
             let mut picked = None;
+
             egui::ScrollArea::vertical()
                 .id_salt(("plugin_list", on))
-                .max_height(rows.unwrap_or(8) as f32 * row_height)
+                // `auto_shrink` off across the width, or the area is only as
+                // wide as its longest row and a list of short names sits in a
+                // narrow column against the left edge of a wide panel.
+                .auto_shrink([false, true])
+                .max_height(wanted as f32 * row_height)
                 .show(ui, |ui| {
+                    // And the rows fill it. A `selectable_label` sizes to its
+                    // text, so without this the highlight is a ragged edge
+                    // rather than a row.
+                    ui.set_min_width(ui.available_width());
                     for (index, row) in list.iter().enumerate() {
-                        if ui.selectable_label(*selected == Some(index), row).clicked() {
+                        let response = ui.add_sized(
+                            [ui.available_width(), row_height],
+                            egui::SelectableLabel::new(*selected == Some(index), row),
+                        );
+                        if response.clicked() {
                             picked = Some(index);
                         }
                     }
@@ -373,6 +392,7 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             let mut picked = None;
             egui::ScrollArea::horizontal()
                 .id_salt(("plugin_thumbs", on))
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for name in thumbnails {
@@ -390,6 +410,16 @@ fn draw(ui: &mut egui::Ui, state: &AppState, widget: &Widget) -> Option<PanelAct
             })
         }
     }
+}
+
+/// How many rows of height a list should reserve.
+///
+/// Capped at what is actually there — eight rows of blank under three names is
+/// a panel that looks broken — and floored at one, because a zero-height scroll
+/// area is invisible and an empty list nobody can see reads as a widget that
+/// failed rather than one with nothing in it.
+fn wanted_rows(rows: Option<usize>, count: usize) -> usize {
+    rows.unwrap_or(8).min(count.max(1))
 }
 
 /// A labelled dropdown. Returns the newly picked option, if it changed.
@@ -489,4 +519,30 @@ fn thumbnail(ui: &mut egui::Ui, _state: &AppState, name: &str, side: f32, select
         );
     }
     response.on_hover_text(name).clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_short_list_does_not_reserve_space_for_rows_it_does_not_have() {
+        // Eight rows of blank under three names is a panel that looks broken.
+        assert_eq!(wanted_rows(Some(8), 3), 3);
+    }
+
+    #[test]
+    fn a_long_list_stops_at_the_row_count_it_was_given() {
+        // The point of `rows`: a rig with sixty bones must not push everything
+        // below it off the panel.
+        assert_eq!(wanted_rows(Some(8), 60), 8);
+    }
+
+    #[test]
+    fn an_empty_list_still_has_a_row_of_height() {
+        // A zero-height scroll area is invisible, and an empty list that cannot
+        // be seen reads as a widget that failed rather than one with nothing in
+        // it.
+        assert_eq!(wanted_rows(Some(8), 0), 1);
+    }
 }
