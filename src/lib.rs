@@ -226,11 +226,12 @@ impl Host {
                 json_string(id)
             ),
             Some(action) => format!(
-                "__ankhimate_panel_action({}, {}, {});\n\
+                "__ankhimate_panel_action({}, {}, {}, {});\n\
                  globalThis.__ankhimate_panel_result = \"null\";",
                 json_string(id),
                 json_string(&action.action),
                 action.value,
+                serde_json::Value::Object(action.state.clone()),
             ),
         };
         let read = "globalThis.__ankhimate_panel_result";
@@ -665,10 +666,15 @@ impl Host {
                   if (!panel) throw new Error(`no panel registered as \`${id}\``);
                   return JSON.stringify(panel.build() ?? []);
                 };
-                globalThis.__ankhimate_panel_action = (id, action, value) => {
+                globalThis.__ankhimate_panel_action = (id, action, value, state) => {
                   const panel = __panels[id];
                   if (!panel) throw new Error(`no panel registered as \`${id}\``);
-                  if (typeof panel.on === "function") panel.on(action, value);
+                  // `state` is every widget's current value, tracked by the
+                  // host. A fresh runtime is built per call, so anything a
+                  // handler stored on `this` is already gone — reading it back
+                  // is how a panel ends up seeing `undefined` for a field the
+                  // user filled in.
+                  if (typeof panel.on === "function") panel.on(action, value, state ?? {});
                 };
 
                 let __exporters = {};
