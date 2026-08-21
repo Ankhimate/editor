@@ -733,6 +733,15 @@ key hides a slot at frame 10 and back at 20 with no interpolation artifacts; rou
 **Accept:** exported sheet of the sample walk matches the viewport (golden image diff, small
 tolerance); runs headless in CI; a 60-frame export of the sample completes in a documented budget.
 
+> **Foundation landed, export remains open.** `ankhimate-render` is a reusable,
+> transport-free CPU renderer over `Document` + core `Pose`. It renders regions,
+> rigid/weighted/linked meshes, FFD, animated visibility/draw order/attachments,
+> clipping, tint/two-color tint and all slot blend modes to deterministic PNG.
+> MCP frame and contact-sheet previews consume it, and contact sheets use one
+> union camera. Sequence/spritesheet files, trim/global-bounds controls, JSON
+> sidecars, export UI, physics stepping at export FPS, performance budget, and
+> viewport golden comparison have not landed, so T-601 is not marked complete.
+
 ### T-602 Video export via ffmpeg *(was T-502)*
 **Deps:** T-601 · **Refs:** PLAN §0, §5 F-9
 - Locate `ffmpeg` (config setting → PATH auto-detect → friendly error with a download link; never
@@ -1213,6 +1222,40 @@ an attachment sharing a name stay distinguishable; a mesh vertex reports its inf
 no label is drawn during a drag; the whole thing can be switched off.
 
 ---
+
+## Phase 10 — Extensions and automation
+
+### ✅ T-1001 Plugin host and declarative panels
+**Deps:** T-701, T-603 · **Refs:** [plugin plan](plugin-plan.md), [plugin API](plugin-api.md)
+- The framework-free `document` crate owns undoable edits, named verbs, their
+  schemas, and the shared read surface.
+- Sandboxed QuickJS plugins can contribute importers, exporters, and declarative
+  panels. The editor loads them from its platform config directory.
+- Plugins never receive filesystem/network/clock access, never mutate a
+  document directly, and never run inside `evaluate()`.
+**Accept:** a plugin can add a panel, import and export through the shared
+registries, and one panel action is one editor undo step.
+
+### ✅ T-1002 MCP stdio server
+**Deps:** T-1001 · **Refs:** [plugin plan](plugin-plan.md) step 8
+- `ankhimate-mcp` keeps one rig open across calls and exposes nine coarse tools:
+  `open_rig`, `new_rig`, `describe_rig`, `list_verbs`, `run_script`, `save_rig`,
+  `export_rig`, `render_frame`, and `render_contact_sheet`.
+- The transport uses the official Rust MCP SDK over stdio; tool definitions are
+  adapted from the transport-free catalogue rather than duplicated.
+- Native `.ankh` is registered beside Spine, DragonBones, and PSD, so save/open
+  round trips use the same format registry as every other caller.
+- Saving over the opened source is refused. Export uses the existing confined,
+  all-or-nothing, never-delete plan.
+**Accept:** the stdio initialize + `tools/list` exchange succeeds; a rig can be
+created, scripted, described, saved, reopened, and exported in one session;
+tool failures are visible MCP tool results rather than opaque protocol errors.
+
+The two render tools return actual MCP `image/png` content. They share the
+transport-free `ankhimate-render` layer intended for T-601, support fixed or
+automatic framing and per-call focus/diagnostics, and never mutate document or
+session selection state. See [MCP server](mcp.md) for the focus contract and
+deliberate omissions.
 
 ## Dependency overview
 

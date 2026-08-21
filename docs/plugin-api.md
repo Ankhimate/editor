@@ -448,11 +448,18 @@ A plugin runs on a gesture or an import, never inside `evaluate()`. That is the
 boundary the whole design protects: script in the pose loop would take
 determinism (PLAN §2.6) with it.
 
-## Still to come
+## Other consumers of this API
 
-- **A UI surface** — panels and menu entries a plugin can add
-  (`docs/plugin-plan.md` step 7).
-- **An MCP server** — the same verbs and the same read surface over a transport
-  (step 8).
+Both remaining consumers have landed:
 
-Neither adds a vocabulary. They are consumers of this one.
+- Plugin panels return a declarative widget list which the editor draws. Panel
+  actions call the same verbs and the host folds their edits into one undo step.
+- `ankhimate-mcp` exposes a small task-shaped tool list over stdio. Its
+  `run_script` tool reaches these verbs, while `describe_rig` returns this same
+  read surface. The server keeps one rig in memory across calls and refuses to
+  save over the file it opened. `render_frame` and `render_contact_sheet` are
+  read-only visual consumers: their per-call focus arguments filter the
+  evaluated picture without adding document verbs or selection state. See
+  [MCP server](mcp.md).
+
+Neither adds a vocabulary. They consume this one.

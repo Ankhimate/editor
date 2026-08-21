@@ -33,9 +33,10 @@ fn write(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn both_built_ins_register_and_are_listed() {
+fn built_ins_register_and_are_listed() {
     let importers = Importers::builtin();
     let ids: Vec<&str> = importers.ids().collect();
+    assert!(ids.contains(&"import.ankh"), "{ids:?}");
     assert!(ids.contains(&"import.spine"), "{ids:?}");
     assert!(ids.contains(&"import.dragonbones"), "{ids:?}");
 }

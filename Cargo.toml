@@ -5,6 +5,8 @@ members = [
     "formats",
     "plugins",
     "editor",
+    "render",
+    "mcp",
     "export",
     "runtime",
 ]

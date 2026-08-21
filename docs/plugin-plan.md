@@ -1,7 +1,7 @@
 # Plugins, and the headless surface underneath them
 
-Status: stages 1–3 landed (see `docs/TASKS.md` T-701). This is the sequence for
-the rest, and the reasoning that fixed the order.
+Status: all eight stages landed. This document retains the sequence and the
+reasoning that fixed the order; `docs/plugin-api.md` is the public contract.
 
 ## The thesis
 
@@ -167,6 +167,14 @@ plugin problem: attachment timelines already exist, and onion skinning,
 image-sequence import and the hotkeys are core editor work.
 
 ### 8. MCP server
+
+**Landed:** `ankhimate-mcp` is an rmcp-based stdio server. It deliberately
+advertises nine coarse tools: open/new, describe, list verbs, run a sandboxed
+script, save, export, render a frame, and render a contact sheet. Render results
+are MCP image content, backed by the reusable `ankhimate-render` layer rather
+than protocol code. The rig stays open across calls. Native `.ankh`, Spine,
+DragonBones, and PSD all enter through the shared importer registry. The full
+render/focus contract is in [mcp.md](mcp.md).
 
 A new binary over `core` + `formats` + `export` and the document operators. No
 winit, no UI thread, no `&mut AppState`.

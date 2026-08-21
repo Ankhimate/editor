@@ -50,7 +50,9 @@ no runtime licence to buy, no copyleft to inherit.
 
 **Rendered output**: image sequence, spritesheet and video export are unwritten.
 The data pipeline works — a rig and its atlas can leave for an engine — but
-Ankhimate cannot yet hand you a PNG sequence or an MP4 of a clip.
+Ankhimate cannot yet hand you a PNG sequence or an MP4 of a clip. A reusable
+headless renderer now powers MCP frame/contact-sheet previews, but the T-601
+file-export iteration, UI, physics stepping and metadata are still open.
 
 The runtime crate has no worked example yet — `macroquad_player` and
 `docs/runtime-guide.md` are the next task.
@@ -63,8 +65,12 @@ second viewport in its own window (other panels tear off; the canvas does not).
 | Crate | Description |
 |---|---|
 | `core` (`ankhimate-core`) | Framework-free data model + `evaluate()`. The single runtime contract used by the editor, exporters, and games. `#![forbid(unsafe_code)]`, compiles for native + `wasm32`. |
+| `document` (`ankhimate-document`) | Headless document, undo, named verbs, and the shared plugin/MCP read surface. |
 | `editor` (`ankhimate-editor`) | egui/wgpu desktop application. |
 | `formats` (`ankhimate-formats`) | `.ankh` read/write, importers, version migration. |
+| `plugins` (`ankhimate-plugins`) | Sandboxed QuickJS plugins: operators, importers, exporters, and declarative panels. |
+| `render` (`ankhimate-render`) | Transport-free headless PNG renderer shared by MCP previews and future rendered exports. |
+| `mcp` (`ankhimate-mcp`) | Stdio MCP server over the same headless verbs and format/export registries. |
 | `export` (`ankhimate-export`) | Atlas bake + the template engine presets are written against. Headless. |
 | `runtime` (`ankhimate-runtime`) | Playback for games: load, crossfade, events, draw batches. No wgpu. |
 
@@ -75,6 +81,7 @@ GPU with Vulkan, Metal, DX12, or GL support.
 
 ```bash
 cargo run -p ankhimate-editor   # launch the editor
+cargo run -p ankhimate-mcp      # start the MCP stdio server
 cargo test --workspace          # run all tests
 cargo fmt --check               # check formatting
 cargo clippy --workspace -- -D warnings   # lint
