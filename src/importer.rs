@@ -23,6 +23,37 @@
 use crate::convert::Loaded;
 use std::path::Path;
 
+/// The application's own portable project container.
+///
+/// Native projects still go through the registry: callers that accept any rig
+/// format should not need a special branch for the format Ankhimate writes.
+pub struct AnkhImporter;
+
+impl Importer for AnkhImporter {
+    fn id(&self) -> &str {
+        "import.ankh"
+    }
+
+    fn label(&self) -> &str {
+        "Ankhimate"
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["ankh"]
+    }
+
+    fn read(&self, path: &Path) -> Result<Loaded, ImportError> {
+        crate::load(path)
+            .map(|(loaded, _)| loaded)
+            .map_err(|error| match error {
+                crate::Error::Container(crate::container::ContainerError::Io(error)) => {
+                    ImportError::Io(error.to_string())
+                }
+                other => ImportError::Malformed(other.to_string()),
+            })
+    }
+}
+
 /// The images an import draws attachments from.
 ///
 /// Both shipped readers need exactly these three cases: a packed atlas, loose
@@ -159,6 +190,7 @@ impl Importers {
     /// Every built-in importer, registered through the same door a plugin uses.
     pub fn builtin() -> Self {
         let mut importers = Self::new();
+        importers.register(Box::new(AnkhImporter));
         importers.register(Box::new(crate::spine::SpineImporter));
         importers.register(Box::new(crate::dragonbones::DragonBonesImporter));
         importers.register(Box::new(crate::psd::PsdImporter));
