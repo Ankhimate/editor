@@ -1,0 +1,24 @@
+[package]
+name = "ankhimate-plugins"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Ankhimate/plugins"
+authors = ["Ankhimate Contributors"]
+description = "JavaScript plugin host: the document API, bound to QuickJS."
+
+[dependencies]
+ankhimate-core = { version = "0.1.0", git = "https://github.com/Ankhimate/core", rev = "82d4490d08e2f56298abdf1b4692bb8593c048f9" }
+ankhimate-document = { version = "0.1.0", git = "https://github.com/Ankhimate/document", rev = "9c1920909747d66ac5cb7702cf0b308ea1654f8f" }
+ankhimate-formats = { version = "0.1.0", git = "https://github.com/Ankhimate/formats", rev = "97cf02ee6a4f2246c6f3ea7fe4575fca4f84b5a4" }
+ankhimate-export = { version = "0.1.0", git = "https://github.com/Ankhimate/export", rev = "f7ee43c7138e5452f5bf87c0a880f58612093b93" }
+rquickjs = { version = "0.12.2", features = ["bindgen"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+log = "0.4.32"
+directories = "6.0.0"
+
+[dev-dependencies]
+tempfile = "3"
+glam = "0.33.1"
