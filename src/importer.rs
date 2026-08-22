@@ -5,20 +5,12 @@
 //! a format editor. This is the import half: a registry a built-in and a plugin
 //! register into through the same door.
 //!
-//! # Extracted from two, not guessed from one
+//! # One registry for first-party and community formats
 //!
-//! The Spine and DragonBones readers were written months apart and converged
-//! independently on the same signature: `read(json, images, name) -> Loaded`,
-//! the same three-way [`Images`], the same `declared_version`. A trait fitted to
-//! one of them would have encoded that one's accidents; this one describes what
-//! both already did.
-//!
-//! What they *disagree* on is the interesting part, and it is why this trait
-//! owns file discovery rather than only parsing. Spine scans a directory for
-//! `*.atlas`; DragonBones pairs `walk_ske.json` with `walk_tex.json`, and
-//! cannot scan for an extension because both of its files are `.json`. An
-//! importer knows how its own format is laid out on disk, and nothing above it
-//! does.
+//! An importer owns its file discovery because only the format knows which
+//! sidecars belong to one primary file. Native `.ankh`/PSD readers and
+//! discovered JavaScript readers therefore enter through the same trait; the
+//! editor and MCP do not branch on where a format was implemented.
 
 use crate::convert::Loaded;
 use std::path::Path;
