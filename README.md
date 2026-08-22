@@ -67,8 +67,8 @@ second viewport in its own window (other panels tear off; the canvas does not).
 | `core` (`ankhimate-core`) | Framework-free data model + `evaluate()`. The single runtime contract used by the editor, exporters, and games. `#![forbid(unsafe_code)]`, compiles for native + `wasm32`. |
 | `document` (`ankhimate-document`) | Headless document, undo, named verbs, and the shared plugin/MCP read surface. |
 | `editor` (`ankhimate-editor`) | egui/wgpu desktop application. |
-| `formats` (`ankhimate-formats`) | `.ankh` read/write, importers, version migration. |
-| `plugins` (`ankhimate-plugins`) | Sandboxed QuickJS plugins: operators, importers, exporters, and declarative panels. |
+| `formats` (`ankhimate-formats`) | `.ankh` read/write, PSD import, version migration, and the shared importer contract. |
+| `plugins` (`ankhimate-plugins`) | Sandboxed QuickJS host plus feature-gated Spine/DragonBones import plugins. |
 | `render` (`ankhimate-render`) | Transport-free headless PNG renderer shared by MCP previews and future rendered exports. |
 | `mcp` (`ankhimate-mcp`) | Stdio MCP server over the same headless verbs and format/export registries. |
 | `export` (`ankhimate-export`) | Atlas bake + the template engine presets are written against. Headless. |

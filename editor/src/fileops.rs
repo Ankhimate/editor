@@ -114,7 +114,9 @@ pub fn open_path(state: &mut AppState, path: &Path) -> FileOutcome {
 /// Built once per call rather than held on the app: registration is cheap, and
 /// a plugin host will want to add to it per session rather than at startup.
 pub fn importers() -> ankhimate_formats::Importers {
-    ankhimate_formats::Importers::builtin()
+    let mut importers = ankhimate_formats::Importers::builtin();
+    ankhimate_plugins::bundled::register_importers(&mut importers);
+    importers
 }
 
 /// The built-ins plus whatever the loaded plugins add.

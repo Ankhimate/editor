@@ -417,15 +417,16 @@ end-to-end validated by hand against grouped, nested, offset and negative-bounds
 Three file-format traps are documented in `docs/psd-import.md`: group order is not parent-first, the
 visibility flag is inverted, and negative layer bounds panic `psd 0.3.5` (caught, layer skipped).
 
-### ❌ T-303 — foreign armature importer *(removed)*
-Built and then deleted. Ankhimate's format is `.ankh`; carrying an importer for another editor's
-container meant maintaining a second format, its sample fixtures, and its licence questions for a
-migration path nobody had asked for. The document model and the import-summary plumbing it exercised
-are kept and reused by T-302.
+### ✅ T-303 — foreign armature importer plugins
+Spine and DragonBones are bundled Rust import plugins, not native format support. Their parsers,
+examples, and fixtures live under `plugins/`; `formats` retains only the shared importer contract,
+native `.ankh`, and PSD. The stable public ids remain `import.spine` and `import.dragonbones`.
 
-If a foreign importer is ever wanted again, it belongs behind a feature flag with its own fixtures,
-and the clean-room rule from ADR 005 applies: formats are read from sample **data files**, never from
-another tool's source.
+Each reader has its own Cargo feature (`import-spine`, `import-dragonbones`). Both are enabled in the
+shipped editor and MCP server, while a headless plugin host can disable default features and carry
+neither. They register through the same `Importers` door as JavaScript import plugins. The clean-room
+rule from ADR 005 still applies: formats are read from sample **data files**, never from another
+tool's source.
 
 ### ✅ T-304 ∥ ★ Startup window (part of F-15)
 **Deps:** T-108 · **Refs:** PLAN §5 F-15
@@ -1243,8 +1244,9 @@ registries, and one panel action is one editor undo step.
   `export_rig`, `render_frame`, and `render_contact_sheet`.
 - The transport uses the official Rust MCP SDK over stdio; tool definitions are
   adapted from the transport-free catalogue rather than duplicated.
-- Native `.ankh` is registered beside Spine, DragonBones, and PSD, so save/open
-  round trips use the same format registry as every other caller.
+- Native `.ankh` and PSD are registered by `formats`; the bundled Spine and
+  DragonBones plugins join them, so save/open round trips use the same format
+  registry as every other caller.
 - Saving over the opened source is refused. Export uses the existing confined,
   all-or-nothing, never-delete plan.
 **Accept:** the stdio initialize + `tools/list` exchange succeeds; a rig can be

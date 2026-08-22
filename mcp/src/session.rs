@@ -103,7 +103,8 @@ impl Session {
     /// registry answers by extension and a model naming a file should not have
     /// to know which reader we happen to have.
     pub fn open_rig(&mut self, path: &Path) -> Result<(), Error> {
-        let importers = ankhimate_formats::Importers::builtin();
+        let mut importers = ankhimate_formats::Importers::builtin();
+        ankhimate_plugins::bundled::register_importers(&mut importers);
         let (_, loaded) = importers
             .read_any(path)
             .map_err(|e| Error::Format(format!("{}: {e}", path.display())))?;
@@ -261,6 +262,28 @@ mod tests {
         let session = Session::new();
         let message = session.summary().unwrap_err().to_string();
         assert!(message.contains("open_rig"), "{message}");
+    }
+
+    #[test]
+    fn open_rig_composes_the_bundled_import_plugins() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hero.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "skeleton": { "spine": "4.2.00" },
+                "bones": [{ "name": "root" }, { "name": "arm", "parent": "root" }],
+                "slots": [],
+                "animations": {}
+            }"#,
+        )
+        .unwrap();
+
+        let mut session = Session::new();
+        session
+            .open_rig(&path)
+            .expect("the bundled Spine plugin reads it");
+        assert_eq!(session.doc().unwrap().skeleton.bones.len(), 2);
     }
 
     #[test]

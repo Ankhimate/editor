@@ -5,13 +5,13 @@
 //! bug found in this repo so far was found this way.
 //!
 //! ```text
-//! cargo run -p ankhimate-formats --example import_dragonbones -- <dir> [out.ankh]
+//! cargo run -p ankhimate-plugins --example import_dragonbones -- <dir> [out.ankh]
 //! ```
 //!
 //! `<dir>` holds `<name>_ske.json` and optionally `<name>_tex.json` +
 //! `<name>_tex.png`.
 
-use ankhimate_formats::dragonbones::{self, Images};
+use ankhimate_plugins::bundled::dragonbones::{self, Images};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

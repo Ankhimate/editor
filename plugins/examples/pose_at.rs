@@ -3,7 +3,7 @@
 //! For comparing an import against the editor it came from: a screenshot shows
 //! that two rigs differ, and this says by how much and where.
 
-use ankhimate_formats::dragonbones::{self, Images};
+use ankhimate_plugins::bundled::dragonbones::{self, Images};
 use std::path::PathBuf;
 
 fn main() {

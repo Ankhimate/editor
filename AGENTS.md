@@ -14,7 +14,7 @@ it on a timeline, export a runtime format. MIT OR Apache-2.0.
 | `document` | Headless `Document`, undoable `Edit`, named document operators, argument schemas, and the shared read surface. This is the mutation boundary used by the editor, plugins, and MCP. |
 | `editor` | egui + wgpu desktop app. |
 | `formats` | `.ankh` read/write, PSD/atlas import, version migration. |
-| `plugins` | Sandboxed QuickJS host, importer/exporter bindings, and the declarative panel vocabulary. No filesystem, network, or clock is exposed to scripts. |
+| `plugins` | Sandboxed QuickJS host, importer/exporter bindings, declarative panels, and feature-gated bundled Spine/DragonBones import plugins. No filesystem, network, or clock is exposed to scripts. |
 | `render` | Reusable transport-free CPU renderer over `Document` + core `Pose`; powers MCP PNG previews and is the foundation for T-601. |
 | `mcp` | rmcp-based stdio server with a headless rig session, coarse editing/export tools, and PNG frame/contact-sheet image tools. |
 | `export` | Atlas bake + the Handlebars template engine every export format is written in. Headless — no egui, no wgpu. |
@@ -183,6 +183,9 @@ code; for the dirty working tree, trust `git status`, tests, and this handoff.
   runs inside `evaluate()`.
 - Plugin exporter output goes through the existing export plan, retaining path
   confinement, all-or-nothing writes, and never-delete behavior.
+- Spine and DragonBones readers live under `plugins/src/bundled/`, behind their
+  own Cargo features. `formats` owns only the importer contract and native
+  readers; the editor and MCP compose the bundled plugins explicitly.
 
 `docs/plugin-api.md` and `docs/plugin-plan.md` now record the completed plugin
 UI and MCP consumers.
@@ -206,7 +209,7 @@ The MCP implementation is complete:
 - native `.ankh` is now registered in `Importers::builtin()`, fixing registry
   save/reopen round trips.
 
-Current proof: all 20 `ankhimate-mcp` tests and all five `ankhimate-render`
+Current proof: all 21 `ankhimate-mcp` tests and all five `ankhimate-render`
 tests pass. A real stdio initialize/initialized/`tools/list` + `tools/call`
 exchange advertises all nine tools and returns valid `image/png` content from
 `render_frame`. The full workspace test and clippy commands exit successfully;

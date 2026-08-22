@@ -54,7 +54,6 @@
 //! default rather than a sibling's value — the bug that cost real time in the
 //! Spine importer, where an absent `mixY` picked up `mixX`.
 
-use crate::convert::{LoadReport, Loaded};
 use ankhimate_core::animation::{self as anim, Axis, Interp, Key, Timeline};
 use ankhimate_core::assets::{AssetDb, ImageAsset};
 use ankhimate_core::attachment::{Attachment, Rect, RegionAttachment};
@@ -63,6 +62,7 @@ use ankhimate_core::math::Transform;
 use ankhimate_core::skeleton::{Bone, Skeleton};
 use ankhimate_core::slot::Slot;
 use ankhimate_core::slotmap::SlotMap;
+use ankhimate_formats::convert::{LoadReport, Loaded};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -1963,7 +1963,7 @@ mod tests {
 /// time. That rule is why an importer owns its own file discovery.
 pub struct DragonBonesImporter;
 
-impl crate::importer::Importer for DragonBonesImporter {
+impl ankhimate_formats::importer::Importer for DragonBonesImporter {
     fn id(&self) -> &str {
         "import.dragonbones"
     }
@@ -1980,8 +1980,8 @@ impl crate::importer::Importer for DragonBonesImporter {
         declared_version(&std::fs::read_to_string(path).ok()?)
     }
 
-    fn read(&self, path: &std::path::Path) -> Result<Loaded, crate::importer::ImportError> {
-        use crate::importer::ImportError;
+    fn read(&self, path: &std::path::Path) -> Result<Loaded, ankhimate_formats::ImportError> {
+        use ankhimate_formats::ImportError;
 
         let json = std::fs::read_to_string(path)
             .map_err(|e| ImportError::Io(format!("could not read {}: {e}", path.display())))?;

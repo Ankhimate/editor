@@ -20,7 +20,6 @@
 //! Clean-room (PLAN §0): written against the published JSON format and against
 //! files, never against Spine's runtime source, which is proprietary.
 
-use crate::convert::{LoadReport, Loaded};
 use ankhimate_core::animation::Interp;
 use ankhimate_core::animation::{Animation, Axis, EventKey, Key, Timeline};
 use ankhimate_core::assets::{AssetDb, ImageAsset};
@@ -35,6 +34,7 @@ use ankhimate_core::skeleton::{Bone, Skeleton};
 use ankhimate_core::slot::Slot;
 use ankhimate_core::slotmap::SlotMap;
 use ankhimate_core::transforms::Inherit;
+use ankhimate_formats::convert::{LoadReport, Loaded};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -1276,7 +1276,7 @@ fn convert(doc: &Value, images: Images<'_>, name: &str, report: &mut LoadReport)
 /// loose `images/` directory. Only this reader knows that.
 pub struct SpineImporter;
 
-impl crate::importer::Importer for SpineImporter {
+impl ankhimate_formats::importer::Importer for SpineImporter {
     fn id(&self) -> &str {
         "import.spine"
     }
@@ -1293,8 +1293,8 @@ impl crate::importer::Importer for SpineImporter {
         declared_version(&std::fs::read_to_string(path).ok()?)
     }
 
-    fn read(&self, path: &std::path::Path) -> Result<Loaded, crate::importer::ImportError> {
-        use crate::importer::ImportError;
+    fn read(&self, path: &std::path::Path) -> Result<Loaded, ankhimate_formats::ImportError> {
+        use ankhimate_formats::ImportError;
 
         let json = std::fs::read_to_string(path)
             .map_err(|e| ImportError::Io(format!("could not read {}: {e}", path.display())))?;

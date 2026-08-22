@@ -133,11 +133,10 @@ deliberate step; everything else is mechanical by comparison.
 
 ### 5. Format registry
 
-Importers and exporters by name, built-ins registered through the same door.
-Exporters are already half-way there — `presets/mod.rs:74` `builtin()` is the
-shape. Importers are a hardcoded call at `fileops.rs:112`.
-
-**Blocked on a second importer.** See step 3's ordering note.
+**Landed.** Importers and exporters are named registries. Native `.ankh` and
+PSD readers live in `formats`; bundled Spine and DragonBones import plugins and
+user JavaScript importers register through that same door. The foreign readers
+are feature-gated in `ankhimate-plugins` and keep their fixtures with them.
 
 ### 6. JS host
 
@@ -172,8 +171,9 @@ image-sequence import and the hotkeys are core editor work.
 advertises nine coarse tools: open/new, describe, list verbs, run a sandboxed
 script, save, export, render a frame, and render a contact sheet. Render results
 are MCP image content, backed by the reusable `ankhimate-render` layer rather
-than protocol code. The rig stays open across calls. Native `.ankh`, Spine,
-DragonBones, and PSD all enter through the shared importer registry. The full
+than protocol code. The rig stays open across calls. Native `.ankh` and PSD
+come from `ankhimate-formats`; feature-gated Spine and DragonBones plugins join
+them through the shared importer registry. The full
 render/focus contract is in [mcp.md](mcp.md).
 
 A new binary over `core` + `formats` + `export` and the document operators. No

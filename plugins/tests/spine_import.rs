@@ -6,7 +6,9 @@
 //! *reported* rather than dropped. A silent drop is the expensive kind: the rig
 //! opens, looks right, and plays back wrong.
 
-use ankhimate_formats::spine::{self, Images};
+#![cfg(feature = "import-spine")]
+
+use ankhimate_plugins::bundled::spine::{self, Images};
 
 /// A minimal 4.x skeleton: two bones, one transform constraint, one animation.
 fn skeleton_4x() -> String {
