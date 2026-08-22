@@ -1,15 +1,15 @@
 [package]
 name = "ankhimate-render"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-authors.workspace = true
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Ankhimate/render"
+authors = ["Ankhimate Contributors"]
 description = "Reusable headless renderer for Ankhimate rigs"
 
 [dependencies]
-ankhimate-core = { version = "0.1.0", path = "../core" }
-ankhimate-document = { version = "0.1.0", path = "../document" }
+ankhimate-core = { version = "0.1.0", git = "https://github.com/Ankhimate/core", rev = "82d4490d08e2f56298abdf1b4692bb8593c048f9" }
+ankhimate-document = { version = "0.1.0", git = "https://github.com/Ankhimate/document", rev = "9c1920909747d66ac5cb7702cf0b308ea1654f8f" }
 glam = "0.33.1"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 serde = { version = "1.0.228", features = ["derive"] }
