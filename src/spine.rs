@@ -1285,8 +1285,8 @@ impl crate::importer::Importer for SpineImporter {
         "Spine JSON"
     }
 
-    fn extensions(&self) -> &[&str] {
-        &["json"]
+    fn extensions(&self) -> Vec<&str> {
+        vec!["json"]
     }
 
     fn declared_version(&self, path: &std::path::Path) -> Option<String> {

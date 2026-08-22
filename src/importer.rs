@@ -38,8 +38,8 @@ impl Importer for AnkhImporter {
         "Ankhimate"
     }
 
-    fn extensions(&self) -> &[&str] {
-        &["ankh"]
+    fn extensions(&self) -> Vec<&str> {
+        vec!["ankh"]
     }
 
     fn read(&self, path: &Path) -> Result<Loaded, ImportError> {
@@ -113,7 +113,7 @@ pub trait Importer: Send + Sync {
     fn label(&self) -> &str;
 
     /// Extensions a file dialog should offer, without the dot.
-    fn extensions(&self) -> &[&str];
+    fn extensions(&self) -> Vec<&str>;
 
     /// Could this importer plausibly read `path`?
     ///

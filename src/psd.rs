@@ -1626,8 +1626,8 @@ impl crate::importer::Importer for PsdImporter {
         "Photoshop PSD"
     }
 
-    fn extensions(&self) -> &[&str] {
-        &["psd"]
+    fn extensions(&self) -> Vec<&str> {
+        vec!["psd"]
     }
 
     fn options_schema(&self) -> serde_json::Value {
