@@ -60,19 +60,20 @@ The runtime crate has no worked example yet — `macroquad_player` and
 Also missing: onion skinning, autosave and crash recovery, localization, and a
 second viewport in its own window (other panels tear off; the canvas does not).
 
-## Crates
+## Repositories
 
 | Crate | Description |
 |---|---|
-| `core` (`ankhimate-core`) | Framework-free data model + `evaluate()`. The single runtime contract used by the editor, exporters, and games. `#![forbid(unsafe_code)]`, compiles for native + `wasm32`. |
-| `document` (`ankhimate-document`) | Headless document, undo, named verbs, and the shared plugin/MCP read surface. |
-| `editor` (`ankhimate-editor`) | egui/wgpu desktop application. |
-| `formats` (`ankhimate-formats`) | `.ankh` read/write, importers, version migration. |
-| `plugins` (`ankhimate-plugins`) | Sandboxed QuickJS plugins: operators, importers, exporters, and declarative panels. |
-| `render` (`ankhimate-render`) | Transport-free headless PNG renderer shared by MCP previews and future rendered exports. |
-| `mcp` (`ankhimate-mcp`) | Stdio MCP server over the same headless verbs and format/export registries. |
-| `export` (`ankhimate-export`) | Atlas bake + the template engine presets are written against. Headless. |
-| `runtime` (`ankhimate-runtime`) | Playback for games: load, crossfade, events, draw batches. No wgpu. |
+| [`core`](https://github.com/Ankhimate/core) (`ankhimate-core`) | Framework-free data model + `evaluate()`. The single runtime contract used by the editor, exporters, and games. `#![forbid(unsafe_code)]`, compiles for native + `wasm32`. |
+| [`document`](https://github.com/Ankhimate/document) (`ankhimate-document`) | Headless document, undo, named verbs, and the shared plugin/MCP read surface. |
+| [`editor`](https://github.com/Ankhimate/editor) (`ankhimate-editor`) | This repository: the egui/wgpu desktop application. |
+| [`formats`](https://github.com/Ankhimate/formats) (`ankhimate-formats`) | `.ankh` read/write, importers, version migration. |
+| [`plugins`](https://github.com/Ankhimate/plugins) (`ankhimate-plugins`) | Sandboxed QuickJS plugins: operators, importers, exporters, and declarative panels. |
+| [`render`](https://github.com/Ankhimate/render) (`ankhimate-render`) | Transport-free headless PNG renderer shared by MCP previews and future rendered exports. |
+| [`mcp`](https://github.com/Ankhimate/mcp) (`ankhimate-mcp`) | Stdio MCP server over the same headless verbs and format/export registries. |
+| [`export`](https://github.com/Ankhimate/export) (`ankhimate-export`) | Atlas bake + the template engine presets are written against. Headless. |
+| [`runtime`](https://github.com/Ankhimate/runtime) (`ankhimate-runtime`) | Playback for games: load, crossfade, events, draw batches. No wgpu. |
+| [`community-plugins`](https://github.com/Ankhimate/community-plugins) | Repository-backed plugin marketplace. The editor fetches its catalog and packages at runtime. |
 
 ## Build & run
 
@@ -80,9 +81,8 @@ Requirements: a recent stable Rust toolchain (see `rust-toolchain.toml`) and a
 GPU with Vulkan, Metal, DX12, or GL support.
 
 ```bash
-cargo run -p ankhimate-editor   # launch the editor
-cargo run -p ankhimate-mcp      # start the MCP stdio server
-cargo test --workspace          # run all tests
+cargo run                # launch the editor
+cargo test --all-targets # run all editor tests
 cargo fmt --check               # check formatting
 cargo clippy --workspace -- -D warnings   # lint
 ```

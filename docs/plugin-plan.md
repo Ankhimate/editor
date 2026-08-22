@@ -203,6 +203,9 @@ The ordinary JavaScript packages under `community-plugins/` now own Spine
 import/export and DragonBones import. The former native Spine regression suite
 now runs against the JS package, with focused DragonBones package regressions
 covering its format decisions. Neither format is registered without its package.
+The editor discovers installable packages from that repository's remote
+`marketplace.json`; package names and bytes are not part of the editor binary,
+so publishing a package does not require an editor release.
 Editor and MCP share one package/resource discovery implementation, and MCP can
 run plugin exporters as well as plugin importers. The Rust parser modules and
 the first-party copy of the Spine preset have been removed.

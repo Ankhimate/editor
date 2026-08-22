@@ -457,6 +457,20 @@ Package resources are separate: a directory named `<plugin>/plugin.js` may
 bundle templates or data beneath that directory. `resource`/`resourceBytes`
 read only that load-time map. Flat `.js` plugins have no package resources.
 
+### Marketplace installation
+
+The editor fetches `marketplace.json` from the
+[`Ankhimate/community-plugins`](https://github.com/Ankhimate/community-plugins)
+repository. The index supplies package metadata and the complete file list; no
+community package id or source is compiled into the editor. Downloads are
+staged and renamed into the plugin directory only after every declared file
+arrives. Existing packages are never overwritten, and unsafe relative paths are
+rejected before a download is written.
+
+Installation gives the package no new capability. Its JavaScript is loaded by
+the same sandboxed discovery path as a manually copied package and still has no
+filesystem, network, or clock access.
+
 A failed verb **throws** rather than returning nothing, so a plugin can `try`
 around it and a mistake does not continue silently over an edit that never
 happened.

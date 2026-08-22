@@ -6,9 +6,14 @@ it on a timeline, export a runtime format. MIT OR Apache-2.0.
 > The `AGENTS.md` one directory up describes an older Tauri/React/PixiJS
 > prototype. **This workspace is the project**; ignore that file.
 
-## Workspace
+## Repository boundaries
 
-| Crate | What it is |
+This repository now contains only the desktop editor. Its Rust dependencies are
+separate repositories pinned in `Cargo.toml`. Community packages are discovered
+and downloaded from the `community-plugins` repository at runtime; its submodule
+checkout exists only for format integration tests.
+
+| Repository | What it is |
 |---|---|
 | `core` | Framework-free model + `evaluate()`. No egui, no wgpu, no I/O. `#![forbid(unsafe_code)]`, compiles for `wasm32`. |
 | `document` | Headless `Document`, undoable `Edit`, named document operators, argument schemas, and the shared read surface. This is the mutation boundary used by the editor, plugins, and MCP. |
@@ -65,9 +70,9 @@ it on a timeline, export a runtime format. MIT OR Apache-2.0.
 
 ```bash
 cargo run -p ankhimate-editor
-cargo test --workspace
+cargo test --all-targets
 cargo fmt --all
-cargo clippy --workspace --all-targets
+cargo clippy --all-targets
 ```
 
 The editor holds its own binary while running — `cargo build` fails with
@@ -80,7 +85,7 @@ that would pass with the bug still present is worse than none — several in thi
 repo say so in their doc comment when they are weaker than they look (see
 `a_grouped_bone_is_drawn_once`).
 
-`cargo test --workspace` is the gate. Formatting and clippy must be clean before
+`cargo test --all-targets` is the gate. Formatting and clippy must be clean before
 a commit.
 
 ## egui gotchas that have cost real time here
