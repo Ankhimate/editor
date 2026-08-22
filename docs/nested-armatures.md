@@ -3,7 +3,7 @@
 A slot draws another rig, animating on its own timeline.
 
 Status: **not implemented.** The DragonBones importer flattens the cases its
-sample files use and reports the rest (`plugins/src/bundled/dragonbones.rs`). This is the
+sample files use and reports the rest (`formats/src/dragonbones.rs`). This is the
 plan for the real feature.
 
 ## Why
@@ -24,7 +24,7 @@ Three things nesting buys that a flat model cannot:
 The importer already shows why the flat version is fragile. `we_bl_4` folds into
 a `Sequence`, and it only reads correctly because the host shows it for exactly
 as many frames as the sequence is long — see the `Loop`-not-`Once` note in
-the bundled DragonBones plugin. A rig where those two differ imports wrong, and nothing in the
+`dragonbones.rs`. A rig where those two differ imports wrong, and nothing in the
 model can express the fix.
 
 **Observed, not hypothetical.** `mecha_1004d`'s `skill_05` plays its flash close
@@ -77,7 +77,7 @@ way physics owns its accumulator.
   `Document.armatures: SlotMap<ArmatureId, Skeleton>` plus a root id.
 - `core/src/pose.rs` — `evaluate` recurses. `Pose` gains child poses, keyed by
   the slot that hosts them, since a child's bones are not the host's.
-- `formats/` — `.ankh` grows an armature list; the bundled DragonBones plugin stops
+- `formats/` — `.ankh` grows an armature list; the DragonBones reader stops
   flattening and the report loses its nested-armature entries.
 - `editor/` — the hierarchy shows children, and the timeline needs a way to say
   which armature a clip belongs to.

@@ -1,7 +1,7 @@
 //! Import a Spine export into `.ankh`, headlessly.
 //!
 //! ```text
-//! cargo run -p ankhimate-plugins --example import_spine -- <dir> <out.ankh>
+//! cargo run -p ankhimate-formats --example import_spine -- <dir> <out.ankh>
 //! ```
 //!
 //! `dir` holds the skeleton `.json`, and either an `.atlas` with its page images
@@ -10,7 +10,7 @@
 //! does not.
 
 use ankhimate_formats::convert::ProjectRef;
-use ankhimate_plugins::bundled::spine::{self, Images};
+use ankhimate_formats::spine::{self, Images};
 use std::path::{Path, PathBuf};
 
 fn main() {

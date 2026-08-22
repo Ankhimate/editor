@@ -1,10 +1,30 @@
 //! The importer registry, against files rather than assumptions.
 //!
-//! Native importer registry behavior. Foreign-format readers are bundled by
-//! `ankhimate-plugins` and tested there.
+//! The case that matters: both shipped readers claim `.json`, so a caller with
+//! a file and no idea which format it is has to be able to find out. That is
+//! what `read_any` exists for, and it is only interesting when two importers
+//! disagree about the same extension.
 
 use ankhimate_formats::Importers;
 use std::path::Path;
+
+/// A minimal Spine skeleton — enough to be recognised, not to be complete.
+const SPINE: &str = r#"{
+    "skeleton": { "spine": "4.2.00" },
+    "bones": [{ "name": "root" }, { "name": "arm", "parent": "root", "length": 30 }],
+    "slots": [],
+    "animations": {}
+}"#;
+
+/// A minimal DragonBones armature.
+const DRAGONBONES: &str = r#"{
+    "name": "golem", "frameRate": 24, "version": "5.5",
+    "armature": [{
+        "name": "golem",
+        "bone": [{ "name": "root" }, { "name": "arm", "parent": "root", "length": 30 }],
+        "slot": [], "skin": [], "animation": []
+    }]
+}"#;
 
 fn write(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.join(name);
@@ -17,12 +37,8 @@ fn built_ins_register_and_are_listed() {
     let importers = Importers::builtin();
     let ids: Vec<&str> = importers.ids().collect();
     assert!(ids.contains(&"import.ankh"), "{ids:?}");
-    assert!(ids.contains(&"import.psd"), "{ids:?}");
-    assert!(!ids.contains(&"import.spine"), "foreign reader leaked in");
-    assert!(
-        !ids.contains(&"import.dragonbones"),
-        "foreign reader leaked in"
-    );
+    assert!(ids.contains(&"import.spine"), "{ids:?}");
+    assert!(ids.contains(&"import.dragonbones"), "{ids:?}");
 }
 
 #[test]
@@ -46,10 +62,87 @@ fn ids_are_dotted_and_labels_are_human() {
 }
 
 #[test]
+fn a_spine_rig_is_read_by_the_spine_importer() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "hero.json", SPINE);
+
+    let importers = Importers::builtin();
+    let (id, loaded) = importers.read_any(&path).expect("some importer reads it");
+
+    assert_eq!(id, "import.spine");
+    assert_eq!(loaded.skeleton.bones.len(), 2);
+    assert!(loaded.skeleton.bones.values().any(|b| b.name == "arm"));
+}
+
+#[test]
+fn a_dragonbones_rig_is_read_by_the_dragonbones_importer() {
+    // The point of `read_any`: this file and the one above share an extension,
+    // and nothing but trying them apart tells them apart.
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "golem_ske.json", DRAGONBONES);
+
+    let importers = Importers::builtin();
+    let (id, loaded) = importers.read_any(&path).expect("some importer reads it");
+
+    assert_eq!(id, "import.dragonbones");
+    assert_eq!(loaded.skeleton.bones.len(), 2);
+    assert_eq!(loaded.name, "golem", "its own name, not the file stem");
+}
+
+#[test]
+fn a_json_that_is_neither_is_refused_rather_than_mangled() {
+    // Every importer claims `.json`, so "no importer accepted this" has to be a
+    // real answer rather than whichever one ran first pretending.
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "notes.json", r#"{"hello": "world"}"#);
+
+    let importers = Importers::builtin();
+    assert!(importers.read_any(&path).is_err());
+}
+
+#[test]
 fn an_extension_nobody_claims_narrows_to_nothing() {
     let importers = Importers::builtin();
     let path = Path::new("rig.blend");
     assert_eq!(importers.claiming(path).count(), 0);
+}
+
+#[test]
+fn a_named_importer_can_be_asked_for_directly() {
+    // What File▸Import▸DragonBones does: the user already said which format,
+    // so guessing would be worse than obeying.
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "golem_ske.json", DRAGONBONES);
+
+    let importers = Importers::builtin();
+    let importer = importers.get("import.dragonbones").expect("registered");
+    let loaded = importer.read(&path).expect("reads");
+    assert_eq!(loaded.name, "golem");
+}
+
+#[test]
+fn a_declared_version_is_reported_when_the_file_carries_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = write(dir.path(), "golem_ske.json", DRAGONBONES);
+    let spine = write(dir.path(), "hero.json", SPINE);
+
+    let importers = Importers::builtin();
+    assert_eq!(
+        importers
+            .get("import.dragonbones")
+            .unwrap()
+            .declared_version(&db)
+            .as_deref(),
+        Some("5.5")
+    );
+    assert_eq!(
+        importers
+            .get("import.spine")
+            .unwrap()
+            .declared_version(&spine)
+            .as_deref(),
+        Some("4.2.00")
+    );
 }
 
 #[test]
@@ -115,12 +208,12 @@ fn an_importer_with_options_describes_them() {
 
 #[test]
 fn an_importer_without_options_says_so() {
-    // Ankhimate takes none, and `Null` is how that reads — an empty object would
+    // Spine takes none, and `Null` is how that reads — an empty object would
     // suggest options nobody can pass.
     let importers = Importers::builtin();
     assert!(
         importers
-            .get("import.ankh")
+            .get("import.spine")
             .unwrap()
             .options_schema()
             .is_null(),

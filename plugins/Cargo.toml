@@ -5,19 +5,13 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Plugin host, bundled import extensions, and the QuickJS document API."
-
-[features]
-default = ["import-spine", "import-dragonbones"]
-import-spine = []
-import-dragonbones = []
+description = "JavaScript plugin host: the document API, bound to QuickJS."
 
 [dependencies]
 ankhimate-core = { version = "0.1.0", path = "../core" }
 ankhimate-document = { version = "0.1.0", path = "../document" }
 ankhimate-formats = { version = "0.1.0", path = "../formats" }
 ankhimate-export = { version = "0.1.0", path = "../export" }
-glam = { version = "0.33.1", features = ["serde"] }
 rquickjs = { version = "0.12.2", features = ["bindgen"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
@@ -26,18 +20,3 @@ log = "0.4.32"
 
 [dev-dependencies]
 tempfile = "3"
-
-[[example]]
-name = "import_spine"
-path = "examples/import_spine.rs"
-required-features = ["import-spine"]
-
-[[example]]
-name = "import_dragonbones"
-path = "examples/import_dragonbones.rs"
-required-features = ["import-dragonbones"]
-
-[[example]]
-name = "pose_at"
-path = "examples/pose_at.rs"
-required-features = ["import-dragonbones"]

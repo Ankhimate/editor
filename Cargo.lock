@@ -307,7 +307,6 @@ dependencies = [
  "ankhimate-document",
  "ankhimate-export",
  "ankhimate-formats",
- "glam",
  "image",
  "log",
  "rquickjs",

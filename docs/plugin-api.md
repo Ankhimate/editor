@@ -355,7 +355,7 @@ ankhimate.registerImporter({
 ```
 
 It builds the rig by calling verbs rather than constructing a document — which
-gives it a property the bundled Rust importer plugins do not have: **the import is a run
+gives it a property the built-in Rust readers do not have: **the import is a run
 of commands, so it undoes.** Those replace the document wholesale and cannot.
 
 `import.report` is what keeps a plugin honest. An import that drops half a file
@@ -416,7 +416,7 @@ notice is half-written.
 ### Importers can take options
 
 An importer declares `options_schema()` the way an operator declares `schema()`.
-Most take none — the bundled Spine and DragonBones plugins read what the file says. PSD takes four:
+Most take none — Spine and DragonBones read what the file says. PSD takes four:
 `scale`, `skip_hidden`, `include` and `flatten`.
 
 The distinction that matters is **parameters, not a conversation**. Every option
