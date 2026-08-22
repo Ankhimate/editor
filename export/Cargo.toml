@@ -1,0 +1,19 @@
+[package]
+name = "ankhimate-export"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Ankhimate/export"
+authors = ["Ankhimate Contributors"]
+
+[dependencies]
+ankhimate-core = { version = "0.1.0", git = "https://github.com/Ankhimate/core", rev = "82d4490d08e2f56298abdf1b4692bb8593c048f9" }
+ankhimate-formats = { version = "0.1.0", git = "https://github.com/Ankhimate/formats", rev = "97cf02ee6a4f2246c6f3ea7fe4575fca4f84b5a4" }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+handlebars = "6.4.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+glam = "0.33.1"
+
+[dev-dependencies]
+tempfile = "3"
