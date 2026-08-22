@@ -1,24 +1,32 @@
 [package]
-name = "ankhimate-plugins"
+name = "ankhimate-editor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "JavaScript plugin host: the document API, bound to QuickJS."
 
 [dependencies]
 ankhimate-core = { version = "0.1.0", path = "../core" }
 ankhimate-document = { version = "0.1.0", path = "../document" }
 ankhimate-formats = { version = "0.1.0", path = "../formats" }
 ankhimate-export = { version = "0.1.0", path = "../export" }
-rquickjs = { version = "0.12.2", features = ["bindgen"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+ankhimate-plugins = { version = "0.1.0", path = "../plugins" }
+rfd = "0.15"
+eframe = "0.34.3"
+env_logger = "0.11.10"
 log = "0.4.32"
+wgpu = "29.0.3"
+egui_tiles = "0.15.0"
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = "0.33.1"
+serde_json = "1.0.150"
+serde = { version = "1.0.228", features = ["derive"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 directories = "6.0.0"
+spade = "2.15.1"
+resvg = { version = "0.48", default-features = false }
+ureq = "2.12"
 
 [dev-dependencies]
 tempfile = "3"
-glam = "0.33.1"

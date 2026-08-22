@@ -291,20 +291,24 @@ pub enum Interp {
 ankhimate-rs/
   core/         ankhimate-core     — data model + evaluate(). Deps: glam, slotmap, serde. NO I/O,
                                      no image decoding, no egui/wgpu. #![forbid(unsafe_code)].
+  document/     ankhimate-document — undoable document, named operators, shared read surface.
   formats/      ankhimate-formats  — .ankh read/write, atlas descriptors, importers (PSD, images),
                                      version migration.                                   [NEW]
-  runtime/      ankhimate-runtime  — thin playback API for games: load + AnimationState
-                                     (queue/mix/loop) over core::evaluate. Renderer-agnostic:
-                                     emits sorted textured-triangle batches.               [NEW]
-  editor/       ankhimate-editor   — egui/wgpu app. Depends on core, formats, export.
-  export/       ankhimate-export   — atlas packing, spritesheet/sequence render, ffmpeg driver,
-                                     runtime-format bake (IK baking etc.).
+  export/       ankhimate-export   — atlas packing and strict user-authored format templates.
+  plugins/      ankhimate-plugins  — sandboxed QuickJS host over document operators.
+  render/       ankhimate-render   — transport-free headless CPU renderer.
+  editor/       ankhimate-editor   — egui/wgpu desktop app.
+  mcp/          ankhimate-mcp      — stdio MCP consumer of document/plugins/render.
   xtask/                           — cargo xtask: CI checks, packaging, sample generation. [NEW]
 ```
 
-Dependency rule (enforced by a graph check in `xtask`):
-`core ← {formats, runtime, export, editor}`; `formats ← {editor, export, runtime}`; editor never
-appears in anyone's deps. `core` and `runtime` must compile for `wasm32-unknown-unknown`
+Game runtimes live in their own multi-language repository. Its Rust reference
+implementation consumes the public `core` and `formats` crates; JavaScript,
+Phaser, Unity and future implementations consume the same exported format and
+shared conformance fixtures.
+
+Dependency rule: `core` is the leaf contract; editor never appears in another
+crate's dependencies. `core` must compile for `wasm32-unknown-unknown`
 (comparable tools ship web builds — we keep that door open; the editor targets native first).
 
 ### 3.2 Editor internal architecture

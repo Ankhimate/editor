@@ -223,7 +223,7 @@ mod tests {
 
     fn community_plugins() -> crate::plugins::Plugins {
         crate::plugins::Plugins::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("community-plugins"),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../community-plugins"),
         )
     }
 

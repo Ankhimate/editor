@@ -819,7 +819,7 @@ survive save/load. **Not verified in the running editor** — see the note below
 
 ### ✅ T-604 `ankhimate-runtime` crate
 **Deps:** T-603c · **Refs:** PLAN §3.1, §6.2
-- Crate `runtime/`: `Rig` (load), `AnimationState` (play / loop / crossfade / speed, event
+- External runtimes repository, Rust reference package: `Rig` (load), `AnimationState` (play / loop / crossfade / speed, event
   dispatch, physics ownership), `build_batches` → `Vec<DrawBatch>` in draw order. No wgpu.
 - **Deliberately thin.** Crossfade is `evaluate()`'s existing alpha mixing, event windowing is
   core's `events_in_window`, and skinning is `Pose::skinned_vertex` — which was *moved into core*
@@ -829,8 +829,8 @@ survive save/load. **Not verified in the running editor** — see the note below
 rotating a bone never moves its own origin); a crossfade lands between its two clips and drops the
 outgoing one; an event fires exactly once across a loop boundary and once per lap; the same `dt`
 sequence gives the same pose.
-- `wasm32-unknown-unknown` verified locally (`cargo check -p ankhimate-runtime --target
-  wasm32-unknown-unknown`); **not yet wired into CI**.
+- `wasm32-unknown-unknown` was verified in the original Rust package; its CI now
+  belongs to the external runtimes repository.
 - **Deferred:** the `macroquad_player` example and `docs/runtime-guide.md`. The crate is tested
   headlessly and its API is documented in place; a worked example wants a real exported rig to load,
   which is the natural first task of the next session rather than a stub written blind.

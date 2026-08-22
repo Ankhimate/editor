@@ -290,7 +290,7 @@ pub fn sample_projects() -> Vec<PathBuf> {
     }
     roots.push(PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/samples"
+        "/../samples"
     )));
 
     for root in roots {

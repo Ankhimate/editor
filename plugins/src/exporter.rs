@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn a_javascript_exporter_can_reuse_a_strict_export_preset() {
-        let preset_json = include_str!("../community-plugins/spine/spine_json.json");
+        let preset_json = include_str!("../../community-plugins/spine/spine_json.json");
         let source = format!(
             r#"
             const preset = {preset_json};

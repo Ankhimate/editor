@@ -43,8 +43,8 @@ no runtime licence to buy, no copyleft to inherit.
   own runtime format ships as one of those templates, so nothing is reachable to
   us that is not reachable to you. See
   [`docs/export-context.md`](docs/export-context.md).
-- **A runtime crate** — `ankhimate-runtime` loads an export and plays it:
-  crossfade, events, physics, draw batches. No wgpu, no window.
+- **A Rust reference runtime** — maintained in the separate runtimes repository,
+  it loads an export and plays it: crossfade, events, physics, and draw batches.
 
 ## Not there yet
 
@@ -60,20 +60,24 @@ The runtime crate has no worked example yet — `macroquad_player` and
 Also missing: onion skinning, autosave and crash recovery, localization, and a
 second viewport in its own window (other panels tear off; the canvas does not).
 
-## Repositories
+## Workspace
 
 | Crate | Description |
 |---|---|
-| [`core`](https://github.com/Ankhimate/core) (`ankhimate-core`) | Framework-free data model + `evaluate()`. The single runtime contract used by the editor, exporters, and games. `#![forbid(unsafe_code)]`, compiles for native + `wasm32`. |
-| [`document`](https://github.com/Ankhimate/document) (`ankhimate-document`) | Headless document, undo, named verbs, and the shared plugin/MCP read surface. |
-| [`editor`](https://github.com/Ankhimate/editor) (`ankhimate-editor`) | This repository: the egui/wgpu desktop application. |
-| [`formats`](https://github.com/Ankhimate/formats) (`ankhimate-formats`) | `.ankh` read/write, importers, version migration. |
-| [`plugins`](https://github.com/Ankhimate/plugins) (`ankhimate-plugins`) | Sandboxed QuickJS plugins: operators, importers, exporters, and declarative panels. |
-| [`render`](https://github.com/Ankhimate/render) (`ankhimate-render`) | Transport-free headless PNG renderer shared by MCP previews and future rendered exports. |
-| [`mcp`](https://github.com/Ankhimate/mcp) (`ankhimate-mcp`) | Stdio MCP server over the same headless verbs and format/export registries. |
-| [`export`](https://github.com/Ankhimate/export) (`ankhimate-export`) | Atlas bake + the template engine presets are written against. Headless. |
-| [`runtime`](https://github.com/Ankhimate/runtime) (`ankhimate-runtime`) | Playback for games: load, crossfade, events, draw batches. No wgpu. |
-| [`community-plugins`](https://github.com/Ankhimate/community-plugins) | Repository-backed plugin marketplace. The editor fetches its catalog and packages at runtime. |
+| [`core`](core) (`ankhimate-core`) | Framework-free data model + `evaluate()`. The single runtime contract used by the editor, exporters, and games. `#![forbid(unsafe_code)]`, compiles for native + `wasm32`. |
+| [`document`](document) (`ankhimate-document`) | Headless document, undo, named verbs, and the shared plugin/MCP read surface. |
+| [`editor`](editor) (`ankhimate-editor`) | The egui/wgpu desktop application. |
+| [`formats`](formats) (`ankhimate-formats`) | `.ankh` read/write, importers, version migration. |
+| [`plugins`](plugins) (`ankhimate-plugins`) | Sandboxed QuickJS plugins: operators, importers, exporters, and declarative panels. |
+| [`render`](render) (`ankhimate-render`) | Transport-free headless PNG renderer shared by MCP previews and future rendered exports. |
+| [`mcp`](mcp) (`ankhimate-mcp`) | Stdio MCP server over the same headless verbs and format/export registries. |
+| [`export`](export) (`ankhimate-export`) | Atlas bake + the template engine presets are written against. Headless. |
+
+Game-side runtimes remain in the separate
+[`runtime`](https://github.com/Ankhimate/runtime) repository, intended to grow
+into a multi-runtime home for Rust, JavaScript, Phaser, Unity, and other engines.
+The [`community-plugins`](https://github.com/Ankhimate/community-plugins)
+repository is the remotely fetched plugin marketplace.
 
 ## Build & run
 
@@ -81,10 +85,11 @@ Requirements: a recent stable Rust toolchain (see `rust-toolchain.toml`) and a
 GPU with Vulkan, Metal, DX12, or GL support.
 
 ```bash
-cargo run                # launch the editor
-cargo test --all-targets # run all editor tests
-cargo fmt --check               # check formatting
-cargo clippy --workspace -- -D warnings   # lint
+cargo run -p ankhimate-editor             # launch the editor
+cargo run -p ankhimate-mcp                # start the MCP stdio server
+cargo test --workspace --all-targets      # run all workspace tests
+cargo fmt --all --check                   # check formatting
+cargo clippy --workspace --all-targets    # lint
 ```
 
 ## Try it

@@ -21,10 +21,10 @@ mod spine {
         let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
         let path = dir.path().join(format!("{name}.json"));
         std::fs::write(&path, json).map_err(|error| error.to_string())?;
-        let source = include_str!("../community-plugins/spine/plugin.js");
+        let source = include_str!("../../community-plugins/spine/plugin.js");
         let resources = std::collections::BTreeMap::from([(
             "spine_json.json".to_string(),
-            include_bytes!("../community-plugins/spine/spine_json.json").to_vec(),
+            include_bytes!("../../community-plugins/spine/spine_json.json").to_vec(),
         )]);
         let importer = ankhimate_plugins::Host::new()
             .with_resources(resources)
