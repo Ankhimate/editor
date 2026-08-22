@@ -403,4 +403,3 @@ The following gates define the outcome:
 - [Spine skeletons](https://en.esotericsoftware.com/spine-skeletons)
 - [Spine export](https://us.esotericsoftware.com/spine-export/)
 - [Spine command-line interface](https://en.esotericsoftware.com/spine-command-line-interface)
-
