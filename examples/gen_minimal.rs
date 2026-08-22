@@ -35,7 +35,7 @@ fn main() {
     value["editor_note"] = serde_json::json!("hand-added unknown field; must survive round-trips");
     let json = serde_json::to_string_pretty(&value).unwrap();
 
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../samples/minimal.ankh");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/minimal.ankh");
     ankhimate_formats::container::write(std::path::Path::new(path), &json, &[]).unwrap();
     println!("wrote {path}");
 }

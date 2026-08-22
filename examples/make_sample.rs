@@ -485,11 +485,7 @@ fn main() {
     });
 
     // ── Write it ─────────────────────────────────────────────────────────
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("the workspace root")
-        .join("samples")
-        .join("walker.ankh");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("walker.ankh");
     ankhimate_formats::save(
         &path,
         &ProjectRef {

@@ -544,7 +544,7 @@ mod tests {
     }
 
     /// The checked-in golden. Regenerate with the `gen_minimal` example.
-    const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../samples/minimal.ankh");
+    const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/minimal.ankh");
 
     #[test]
     fn golden_load_save_load_is_value_equal() {
@@ -595,7 +595,7 @@ mod tests {
     }
 
     /// The N-bone IK sample. Regenerate with the `gen_tentacle` example.
-    const TENTACLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../samples/tentacle.ankh");
+    const TENTACLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tentacle.ankh");
 
     /// The shipped sample really does carry a chain longer than two bones, and
     /// the chain really does reach (T-908).

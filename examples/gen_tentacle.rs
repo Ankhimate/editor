@@ -51,7 +51,7 @@ fn main() {
     })
     .unwrap();
 
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../samples/tentacle.ankh");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tentacle.ankh");
     ankhimate_formats::container::write(std::path::Path::new(path), &json, &[]).unwrap();
     println!("wrote {path}");
 }
