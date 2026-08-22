@@ -26,6 +26,7 @@
 //! change goes through a command and stays undoable. That is `CLAUDE.md`'s rule
 //! for panels, extended to script.
 
+pub mod bundled;
 pub mod exporter;
 pub mod importer;
 pub mod panel;
