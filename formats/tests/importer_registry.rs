@@ -48,8 +48,8 @@ fn a_community_importer_registers_through_the_same_door() {
         fn label(&self) -> &str {
             "Pretend Format"
         }
-        fn extensions(&self) -> &[&str] {
-            &["pretend"]
+        fn extensions(&self) -> Vec<&str> {
+            vec!["pretend"]
         }
         fn read(&self, _path: &Path) -> Result<ankhimate_formats::Loaded, ImportError> {
             Err(ImportError::NotThisFormat)

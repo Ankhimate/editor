@@ -191,12 +191,8 @@ impl ankhimate_formats::importer::Importer for JsImporter {
         &self.label
     }
 
-    fn extensions(&self) -> &[&str] {
-        // The trait wants borrowed strs and a plugin's extensions are owned, so
-        // this cannot borrow them. Claiming is done by `claims` below instead,
-        // which is what actually decides whether a file is offered — the list
-        // is for the file dialog's filter.
-        &[]
+    fn extensions(&self) -> Vec<&str> {
+        self.extensions.iter().map(String::as_str).collect()
     }
 
     fn claims(&self, path: &std::path::Path) -> bool {

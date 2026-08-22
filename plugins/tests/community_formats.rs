@@ -36,6 +36,12 @@ fn community_packages_restore_the_external_format_registries() {
         "{importer_ids:?}"
     );
     assert!(exporter_ids.contains(&"export.spine"), "{exporter_ids:?}");
+    assert!(
+        plugins
+            .iter()
+            .flat_map(|plugin| &plugin.importers)
+            .all(|importer| ankhimate_formats::Importer::extensions(importer) == ["json"])
+    );
 }
 
 fn spine_import(json: &str) -> ankhimate_formats::Loaded {

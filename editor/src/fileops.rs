@@ -142,7 +142,7 @@ pub fn import_with(
         return FileOutcome::Error(format!("no importer named `{id}`"));
     };
     let Some(path) = rfd::FileDialog::new()
-        .add_filter(importer.label(), importer.extensions())
+        .add_filter(importer.label(), &importer.extensions())
         .set_title(format!("Import {}", importer.label()))
         .pick_file()
     else {
