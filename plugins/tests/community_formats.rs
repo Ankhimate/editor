@@ -266,8 +266,13 @@ fn dragonbones_50_combined_frames_become_real_timelines() {
           "armature":[{
             "name":"rig",
             "bone":[{"name":"root"},{"name":"arm","parent":"root"}],
-            "slot":[{"name":"glow","parent":"arm","displayIndex":-1}],
-            "skin":[{"name":"default","slot":[{"name":"glow","display":[]}]}],
+            "slot":[
+              {"name":"body","parent":"root","displayIndex":-1},
+              {"name":"glow","parent":"arm","displayIndex":-1}
+            ],
+            "skin":[{"name":"default","slot":[
+              {"name":"body","display":[]},{"name":"glow","display":[]}
+            ]}],
             "animation":[{
               "name":"cast", "duration":10, "playTimes":0,
               "bone":[{"name":"arm","frame":[
@@ -277,7 +282,11 @@ fn dragonbones_50_combined_frames_become_real_timelines() {
               "slot":[{"name":"glow","frame":[
                 {"duration":4,"displayIndex":-1,"color":{"aM":0}},
                 {"duration":6,"displayIndex":-1,"color":{"aM":100}}
-              ]}]
+              ]}],
+              "zOrder":{"frame":[
+                {"duration":4,"zOrder":[]},
+                {"duration":6,"zOrder":[1,-1]}
+              ]}
             }]
           }]
         }"#,
@@ -306,6 +315,13 @@ fn dragonbones_50_combined_frames_become_real_timelines() {
     assert_eq!(color["keys"][0]["value"][3], 0.0);
     assert_eq!(color["keys"][1]["time"], 0.4);
     assert_eq!(color["keys"][1]["value"][3], 1.0);
+    let draw_order = find("draw_order", None);
+    assert_eq!(draw_order["keys"][0]["offsets"], serde_json::json!([]));
+    assert_eq!(draw_order["keys"][1]["time"], 0.4);
+    assert_eq!(
+        draw_order["keys"][1]["offsets"],
+        serde_json::json!([["glow", -1]])
+    );
 }
 
 #[test]

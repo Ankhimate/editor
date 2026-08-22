@@ -381,11 +381,19 @@ fn fetch_bytes(url: &str, limit: u64) -> Result<Vec<u8>, String> {
 
 fn install_marketplace_into(root: &Path, plugin: &MarketplacePlugin) -> Result<PathBuf, String> {
     install_marketplace_into_with(root, plugin, |file| {
-        fetch_bytes(
-            &format!("{MARKETPLACE_FILES_URL}/{}/{file}", plugin.id),
-            MAX_PLUGIN_FILE_BYTES,
-        )
+        fetch_bytes(&marketplace_file_url(plugin, file), MAX_PLUGIN_FILE_BYTES)
     })
+}
+
+fn marketplace_file_url(plugin: &MarketplacePlugin, file: &str) -> String {
+    // The package path points at `main`, so its URL otherwise never changes and
+    // a CDN may serve the previous package after the marketplace index has
+    // already announced a new version. The catalog version is a cache key, not
+    // an API argument; raw.githubusercontent.com ignores it when serving bytes.
+    format!(
+        "{MARKETPLACE_FILES_URL}/{}/{file}?version={}",
+        plugin.id, plugin.version
+    )
 }
 
 fn install_marketplace_into_with(
@@ -477,6 +485,22 @@ mod tests {
 
         let plugins = Plugins::load(dir.path());
         assert!(plugins.has_importer("import.remote"));
+    }
+
+    #[test]
+    fn marketplace_file_urls_change_with_the_package_version() {
+        let mut plugin = MarketplacePlugin {
+            id: "dragonbones".into(),
+            name: "DragonBones".into(),
+            version: "0.2.0".into(),
+            description: String::new(),
+            files: vec!["plugin.js".into()],
+        };
+        let old = marketplace_file_url(&plugin, "plugin.js");
+        plugin.version = "0.2.1".into();
+        let new = marketplace_file_url(&plugin, "plugin.js");
+        assert_ne!(old, new);
+        assert!(new.ends_with("?version=0.2.1"));
     }
 
     #[test]
