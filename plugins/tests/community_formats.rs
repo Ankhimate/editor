@@ -259,6 +259,56 @@ fn dragonbones_plugin_converts_axes_duration_and_slot_switches() {
 }
 
 #[test]
+fn dragonbones_50_combined_frames_become_real_timelines() {
+    let loaded = dragonbones_import(
+        r#"{
+          "version":"5.0", "name":"legacy", "frameRate":10,
+          "armature":[{
+            "name":"rig",
+            "bone":[{"name":"root"},{"name":"arm","parent":"root"}],
+            "slot":[{"name":"glow","parent":"arm","displayIndex":-1}],
+            "skin":[{"name":"default","slot":[{"name":"glow","display":[]}]}],
+            "animation":[{
+              "name":"cast", "duration":10, "playTimes":0,
+              "bone":[{"name":"arm","frame":[
+                {"duration":4,"tweenEasing":0,"transform":{}},
+                {"duration":6,"transform":{"x":5,"y":7,"skX":30,"skY":30,"scX":2,"scY":0.5}}
+              ]}],
+              "slot":[{"name":"glow","frame":[
+                {"duration":4,"displayIndex":-1,"color":{"aM":0}},
+                {"duration":6,"displayIndex":-1,"color":{"aM":100}}
+              ]}]
+            }]
+          }]
+        }"#,
+    )
+    .expect("DragonBones 5.0 imports");
+    let project = project_value(&loaded);
+    let animation = &project["animations"][0];
+    assert_eq!(animation["duration"], 1.0);
+    assert_eq!(animation["looping"], true);
+    let timelines = animation["timelines"].as_array().expect("timelines");
+
+    let find = |kind: &str, axis: Option<&str>| {
+        timelines
+            .iter()
+            .find(|timeline| {
+                timeline["kind"] == kind && axis.is_none_or(|axis| timeline["axis"] == axis)
+            })
+            .unwrap_or_else(|| panic!("missing {kind} {axis:?}: {timelines:?}"))
+    };
+    assert_eq!(find("bone_translate", Some("x"))["keys"][1]["value"], 5.0);
+    assert_eq!(find("bone_translate", Some("y"))["keys"][1]["value"], -7.0);
+    assert_eq!(find("bone_rotate", None)["keys"][1]["value"], -30.0);
+    assert_eq!(find("bone_scale", Some("x"))["keys"][1]["value"], 2.0);
+    assert_eq!(find("bone_scale", Some("y"))["keys"][1]["value"], 0.5);
+    let color = find("slot_color", None);
+    assert_eq!(color["keys"][0]["value"][3], 0.0);
+    assert_eq!(color["keys"][1]["time"], 0.4);
+    assert_eq!(color["keys"][1]["value"][3], 1.0);
+}
+
+#[test]
 fn dragonbones_plugin_folds_referenced_sprite_armatures_into_sequences() {
     let dir = tempfile::tempdir().expect("temp");
     for name in ["flash1", "flash2"] {
