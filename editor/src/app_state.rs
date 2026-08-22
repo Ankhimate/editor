@@ -21,7 +21,7 @@ use ankhimate_document::commands::{EditCommand, History};
 use ankhimate_document::doc::Document;
 
 /// Every key time on a timeline, for prev/next-key navigation.
-fn key_times(timeline: &ankhimate_core::animation::Timeline) -> Vec<f32> {
+pub(crate) fn key_times(timeline: &ankhimate_core::animation::Timeline) -> Vec<f32> {
     use ankhimate_core::animation::Timeline as T;
     macro_rules! times {
         ($keys:expr) => {

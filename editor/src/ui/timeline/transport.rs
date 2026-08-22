@@ -112,6 +112,35 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         state.key_pending_pose();
     }
 
+    let onion_available = state.session.is_animating()
+        && state
+            .session
+            .active_animation
+            .is_some_and(|id| state.doc.animations.contains_key(id));
+    let onion = state.session.onion_skin.enabled;
+    let onion_resp = ui
+        .add_enabled(
+            onion_available,
+            egui::Button::selectable(onion, icon::ONION_SKIN),
+        )
+        .on_hover_text(if onion_available {
+            "Onion skin (right-click for settings)"
+        } else {
+            "Onion skin is available in Animate mode with an active animation"
+        });
+    if onion_resp.clicked() {
+        state.session.onion_skin.enabled = !onion;
+    }
+    onion_resp.context_menu(|ui| {
+        ui.label("Onion skin");
+        ui.add(egui::Slider::new(&mut state.session.onion_skin.frames, 1..=5).text("steps"));
+        ui.checkbox(&mut state.session.onion_skin.key_steps, "Step between keys");
+        ui.checkbox(
+            &mut state.session.onion_skin.selected_only,
+            "Selected bones only",
+        );
+    });
+
     ui.separator();
 
     // FPS spinbox.

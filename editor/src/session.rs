@@ -147,6 +147,27 @@ impl Default for WeightPaintSettings {
     }
 }
 
+/// View-only onion-skin settings (T-703).
+#[derive(Debug, Clone, Copy)]
+pub struct OnionSkinSettings {
+    pub enabled: bool,
+    pub frames: u8,
+    pub selected_only: bool,
+    /// Step through authored key times instead of evenly spaced frames.
+    pub key_steps: bool,
+}
+
+impl Default for OnionSkinSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            frames: 1,
+            selected_only: false,
+            key_steps: false,
+        }
+    }
+}
+
 /// UI and interaction state for one open editor window.
 pub struct Session {
     pub camera: crate::ui::canvas::camera::Camera2D,
@@ -228,6 +249,7 @@ pub struct Session {
     pub playhead: f32,
     pub playing: bool,
     pub looping: bool,
+    pub onion_skin: OnionSkinSettings,
     /// Write keys when posing (T-202). Only consulted in Animate mode, where it
     /// defaults to on; turning it off holds edits as a *pending pose* until the
     /// user presses `K`.
@@ -446,6 +468,7 @@ impl Session {
             playhead: 0.0,
             playing: false,
             looping: true,
+            onion_skin: OnionSkinSettings::default(),
             auto_key: true,
             pending_pose: Vec::new(),
             locked_bones: SecondaryMap::new(),

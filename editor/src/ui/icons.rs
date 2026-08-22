@@ -141,6 +141,7 @@ pub const PAUSE: &str = f::PAUSE;
 /// do now is being written down".
 pub const RECORD: &str = f::CIRCLE_DOT;
 pub const KEY: &str = f::DIAMOND;
+pub const ONION_SKIN: &str = f::GHOST;
 
 // ── Chevrons ────────────────────────────────────────────────────────────────
 pub const CARET_DOWN: &str = f::CHEVRON_DOWN;

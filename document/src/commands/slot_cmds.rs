@@ -290,6 +290,189 @@ impl EditCommand for SetDrawOrder {
     }
 }
 
+/// Move a slot to another bone while keeping its setup artwork fixed in world
+/// space. The attachment coordinates are rewritten because they live in the
+/// owning bone's local frame.
+pub struct SetSlotBone {
+    slot: SlotId,
+    bone: BoneId,
+    local_map: ankhimate_core::transforms::Affine2,
+    before_bone: Option<BoneId>,
+    before_attachments: Option<
+        Vec<(
+            ankhimate_core::ids::SkinId,
+            String,
+            ankhimate_core::attachment::Attachment,
+        )>,
+    >,
+    order: Option<Vec<SlotId>>,
+    before_order: Option<Vec<SlotId>>,
+}
+
+impl SetSlotBone {
+    pub fn keeping_world(
+        skeleton: &ankhimate_core::skeleton::Skeleton,
+        slot: SlotId,
+        bone: BoneId,
+    ) -> Self {
+        let old_world = skeleton
+            .slots
+            .get(slot)
+            .map(|slot| skeleton.setup_world(slot.bone))
+            .unwrap_or_default();
+        let local_map = skeleton
+            .setup_world(bone)
+            .invert()
+            .unwrap_or_default()
+            .mul(&old_world);
+        Self {
+            slot,
+            bone,
+            local_map,
+            before_bone: None,
+            before_attachments: None,
+            order: None,
+            before_order: None,
+        }
+    }
+
+    /// Also place the slot at a particular draw-order position as part of the
+    /// same drag gesture and undo step.
+    pub fn with_order(mut self, order: Vec<SlotId>) -> Self {
+        self.order = Some(order);
+        self
+    }
+}
+
+fn map_attachment(
+    attachment: &mut ankhimate_core::attachment::Attachment,
+    map: &ankhimate_core::transforms::Affine2,
+) {
+    use ankhimate_core::attachment::Attachment;
+    match attachment {
+        Attachment::Region(region) => {
+            let local = ankhimate_core::math::Transform {
+                position: region.local_offset,
+                rotation: region.local_rotation,
+                scale: region.local_scale,
+                shear: glam::Vec2::ZERO,
+            };
+            let transformed = map.mul(&local.to_affine()).decompose();
+            region.local_offset = transformed.position;
+            region.local_rotation = transformed.rotation;
+            region.local_scale = transformed.scale;
+        }
+        Attachment::Mesh(mesh) if mesh.weights.is_empty() && mesh.linked.is_none() => {
+            for vertex in &mut mesh.setup_vertices {
+                *vertex = map.transform_point(*vertex);
+            }
+        }
+        Attachment::Clipping(clip) => {
+            for vertex in &mut clip.vertices {
+                *vertex = map.transform_point(*vertex);
+            }
+        }
+        Attachment::Path(path) => {
+            for vertex in &mut path.vertices {
+                *vertex = map.transform_point(*vertex);
+            }
+        }
+        Attachment::BoundingBox(bounds) if bounds.weights.is_empty() => {
+            for vertex in &mut bounds.vertices {
+                *vertex = map.transform_point(*vertex);
+            }
+        }
+        Attachment::Point(point) => {
+            point.position = map.transform_point(point.position);
+            point.rotation = map
+                .transform_vector(glam::Vec2::from_angle(point.rotation))
+                .to_angle();
+        }
+        // Weighted and linked geometry already resolves through its own bones or
+        // source mesh, so changing the slot's fallback bone must not rewrite it.
+        Attachment::Mesh(_) | Attachment::BoundingBox(_) => {}
+    }
+}
+
+impl EditCommand for SetSlotBone {
+    fn apply(&mut self, doc: &mut Document) {
+        if !doc.skeleton.bones.contains_key(self.bone) {
+            return;
+        }
+        let Some(slot) = doc.skeleton.slots.get_mut(self.slot) else {
+            return;
+        };
+        let changes_bone = slot.bone != self.bone;
+        if !changes_bone && self.order.is_none() {
+            return;
+        }
+        if changes_bone && self.before_bone.is_none() {
+            let slot_id = self.slot;
+            self.before_bone = Some(slot.bone);
+            self.before_attachments = Some(
+                doc.skeleton
+                    .skins
+                    .iter()
+                    .flat_map(|(skin_id, skin)| {
+                        skin.names_for_slot(slot_id).filter_map(move |name| {
+                            skin.get(slot_id, name)
+                                .cloned()
+                                .map(|attachment| (skin_id, name.to_string(), attachment))
+                        })
+                    })
+                    .collect(),
+            );
+        }
+        if changes_bone {
+            slot.bone = self.bone;
+            for (_, skin) in doc.skeleton.skins.iter_mut() {
+                let names: Vec<String> =
+                    skin.names_for_slot(self.slot).map(str::to_string).collect();
+                for name in names {
+                    if let Some(attachment) = skin.entries.get_mut(&(self.slot, name)) {
+                        map_attachment(attachment, &self.local_map);
+                    }
+                }
+            }
+        }
+        if let Some(order) = &self.order {
+            self.before_order
+                .get_or_insert_with(|| doc.skeleton.draw_order.clone());
+            doc.skeleton.draw_order = order.clone();
+        }
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        if let (Some(before), Some(slot)) =
+            (self.before_bone, doc.skeleton.slots.get_mut(self.slot))
+        {
+            slot.bone = before;
+        }
+        if let Some(attachments) = &self.before_attachments {
+            for (skin, name, attachment) in attachments {
+                if let Some(skin) = doc.skeleton.skins.get_mut(*skin) {
+                    skin.set(self.slot, name, attachment.clone());
+                }
+            }
+        }
+        if let Some(before) = &self.before_order {
+            doc.skeleton.draw_order = before.clone();
+        }
+    }
+
+    fn label(&self) -> &str {
+        "Move Slot"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Everything about how a slot composites, as one value (T-505).
 #[derive(Clone, Copy, PartialEq)]
 pub struct SlotPresentation {
@@ -495,5 +678,54 @@ mod tests {
 
         history.undo(&mut doc);
         assert_eq!(doc.skeleton.draw_order, vec![a, b]);
+    }
+
+    #[test]
+    fn moving_a_slot_to_another_bone_keeps_region_world_position() {
+        let (mut doc, root) = doc_with_bone();
+        let child = doc.skeleton.add_bone(Bone {
+            name: "child".into(),
+            parent: Some(root),
+            length: 10.0,
+            local_transform: Transform {
+                position: glam::vec2(25.0, 8.0),
+                rotation: 0.4,
+                ..Transform::default()
+            },
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let slot = doc.skeleton.add_slot(Slot {
+            attachment: Some("art".into()),
+            ..Slot::new("art".into(), root)
+        });
+        let skin = doc.skeleton.default_skin;
+        doc.skeleton.skins[skin].set(slot, "art", region("art"));
+        let before = match doc.skeleton.skins[skin].get(slot, "art").unwrap() {
+            Attachment::Region(region) => doc
+                .skeleton
+                .setup_world(root)
+                .transform_point(region.local_offset),
+            _ => unreachable!(),
+        };
+        let mut history = History::default();
+
+        history.push(
+            Box::new(SetSlotBone::keeping_world(&doc.skeleton, slot, child)),
+            &mut doc,
+        );
+
+        assert_eq!(doc.skeleton.slots[slot].bone, child);
+        let after = match doc.skeleton.skins[skin].get(slot, "art").unwrap() {
+            Attachment::Region(region) => doc
+                .skeleton
+                .setup_world(child)
+                .transform_point(region.local_offset),
+            _ => unreachable!(),
+        };
+        assert!(before.distance(after) < 1e-4, "{before:?} != {after:?}");
+
+        history.undo(&mut doc);
+        assert_eq!(doc.skeleton.slots[slot].bone, root);
     }
 }

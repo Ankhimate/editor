@@ -5,6 +5,26 @@ use ankhimate_core::constraints::Constraint;
 use ankhimate_core::ids::{BoneId, ConstraintId, SlotId};
 use eframe::egui;
 
+#[derive(Clone, Copy, Debug)]
+struct SlotDrag(SlotId);
+
+#[derive(Clone, Copy, Debug)]
+struct BoneDrag(BoneId);
+
+fn reordered_slots(order: &[SlotId], source: SlotId, target: SlotId, before: bool) -> Vec<SlotId> {
+    let mut next: Vec<_> = order
+        .iter()
+        .copied()
+        .filter(|slot| *slot != source)
+        .collect();
+    let Some(target_index) = next.iter().position(|slot| *slot == target) else {
+        return order.to_vec();
+    };
+    let insert = target_index + usize::from(!before);
+    next.insert(insert, source);
+    next
+}
+
 /// Is any ancestor of this bone filed into a folder?
 ///
 /// A grouped bone brings its subtree with it, so a descendant is already drawn
@@ -633,7 +653,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
 
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), row_height),
-        egui::Sense::click(),
+        egui::Sense::click_and_drag(),
     );
     let is_selected = state.session.is_bone_selected(bone_id);
 
@@ -680,6 +700,63 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
             (true, _) => state.session.toggle_bone(bone_id),
             (false, true) => extend_selection_to(state, bone_id),
             _ => state.session.select_bone(Some(bone_id)),
+        }
+    }
+
+    if state.session.can_edit_structure() {
+        response.dnd_set_drag_payload(BoneDrag(bone_id));
+        let accepts_asset = response
+            .dnd_hover_payload::<crate::ui::assets::AssetDrag>()
+            .is_some();
+        let accepts_slot = response.dnd_hover_payload::<SlotDrag>().is_some();
+        let accepts_bone = response
+            .dnd_hover_payload::<BoneDrag>()
+            .is_some_and(|source| source.0 != bone_id);
+        if accepts_asset || accepts_slot || accepts_bone {
+            ui.painter().rect_stroke(
+                rect.shrink(1.0),
+                3.0,
+                egui::Stroke::new(1.5, ui.visuals().selection.bg_fill),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if let Some(asset) = response.dnd_release_payload::<crate::ui::assets::AssetDrag>() {
+            crate::ui::canvas::attach_asset(state, asset.0, bone_id, glam::Vec2::ZERO);
+        }
+        if let Some(slot) = response.dnd_release_payload::<SlotDrag>() {
+            state.dispatch(Box::new(
+                ankhimate_document::commands::slot_cmds::SetSlotBone::keeping_world(
+                    &state.doc.skeleton,
+                    slot.0,
+                    bone_id,
+                ),
+            ));
+        }
+        if let Some(source) = response.dnd_release_payload::<BoneDrag>()
+            && source.0 != bone_id
+        {
+            // Top half means "beside this bone"; bottom half means "under it".
+            let sibling = ui
+                .ctx()
+                .pointer_interact_pos()
+                .is_some_and(|pointer| pointer.y < rect.center().y);
+            let parent = if sibling {
+                state
+                    .doc
+                    .skeleton
+                    .bones
+                    .get(bone_id)
+                    .and_then(|bone| bone.parent)
+            } else {
+                Some(bone_id)
+            };
+            state.dispatch(Box::new(
+                ankhimate_document::commands::bone_cmds::SetBoneParent::keeping_world(
+                    &state.doc.skeleton,
+                    source.0,
+                    parent,
+                ),
+            ));
         }
     }
 
@@ -888,13 +965,15 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
         let slots: Vec<(SlotId, String, Option<String>)> = state
             .doc
             .skeleton
-            .slots
+            .draw_order
             .iter()
-            .filter(|(_, s)| s.bone == bone_id)
-            .map(|(id, s)| (id, s.name.clone(), s.attachment.clone()))
+            .filter_map(|id| {
+                let slot = state.doc.skeleton.slots.get(*id)?;
+                (slot.bone == bone_id).then(|| (*id, slot.name.clone(), slot.attachment.clone()))
+            })
             .collect();
         for (slot_id, slot_name, active) in slots {
-            let clicked = selectable_row(
+            let response = selectable_row(
                 ui,
                 state,
                 Row {
@@ -906,9 +985,51 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
                     detail: String::new(),
                     toggle: Some(VisibilityToggle::Slot(slot_id)),
                 },
-            )
-            .clicked();
-            if clicked {
+            );
+            if state.session.can_edit_structure() {
+                response.dnd_set_drag_payload(SlotDrag(slot_id));
+                if response.dnd_hover_payload::<SlotDrag>().is_some() {
+                    let before = ui
+                        .ctx()
+                        .pointer_interact_pos()
+                        .is_none_or(|pointer| pointer.y <= response.rect.center().y);
+                    let y = if before {
+                        response.rect.top()
+                    } else {
+                        response.rect.bottom()
+                    };
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(response.rect.left(), y),
+                            egui::pos2(response.rect.right(), y),
+                        ],
+                        egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+                    );
+                }
+                if let Some(source) = response.dnd_release_payload::<SlotDrag>()
+                    && source.0 != slot_id
+                {
+                    let before = ui
+                        .ctx()
+                        .pointer_interact_pos()
+                        .is_none_or(|pointer| pointer.y <= response.rect.center().y);
+                    let order =
+                        reordered_slots(&state.doc.skeleton.draw_order, source.0, slot_id, before);
+                    let command =
+                        ankhimate_document::commands::slot_cmds::SetSlotBone::keeping_world(
+                            &state.doc.skeleton,
+                            source.0,
+                            bone_id,
+                        )
+                        .with_order(order);
+                    state.dispatch(Box::new(command));
+                }
+                if let Some(asset) = response.dnd_release_payload::<crate::ui::assets::AssetDrag>()
+                {
+                    crate::ui::canvas::attach_asset(state, asset.0, bone_id, glam::Vec2::ZERO);
+                }
+            }
+            if response.clicked() {
                 state.session.select_slot(Some(slot_id));
             }
 
@@ -1128,7 +1249,7 @@ fn selectable_row(ui: &mut egui::Ui, state: &mut AppState, row: Row<'_>) -> egui
     let height = 21.0;
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
-        egui::Sense::click(),
+        egui::Sense::click_and_drag(),
     );
     let selected = state.session.selection.as_ref() == Some(&row.selection);
 
@@ -1573,6 +1694,26 @@ mod tests {
         assert!(subtree_matches(&state, root, "arm"));
         // The caller lowercases the needle; the haystack is lowercased here.
         assert!(subtree_matches(&state, root, "front-upper"));
+    }
+
+    #[test]
+    fn dropping_a_slot_above_another_reorders_draw_order() {
+        let mut state = rig();
+        let bone = bone_by_name(&state, "front-upper-arm");
+        let first = state.doc.skeleton.draw_order[0];
+        let second = state
+            .doc
+            .skeleton
+            .add_slot(Slot::new("shield".into(), bone));
+
+        assert_eq!(
+            reordered_slots(&state.doc.skeleton.draw_order, second, first, true),
+            vec![second, first]
+        );
+        assert_eq!(
+            reordered_slots(&state.doc.skeleton.draw_order, first, second, false),
+            vec![second, first]
+        );
     }
 }
 

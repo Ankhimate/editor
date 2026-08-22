@@ -11,11 +11,15 @@
 use crate::app_state::AppState;
 use ankhimate_core::ids::AssetId;
 use ankhimate_document::commands::asset_cmds::{
-    DeleteAsset, ImportImage, RenameAsset, ReplaceAssetPixels,
+    AttachAsset, DeleteAsset, RenameAsset, ReplaceAssetPixels,
 };
 use eframe::egui;
 
 const THUMB: f32 = 64.0;
+
+/// Internal drag payload shared by the Assets panel, hierarchy, and canvas.
+#[derive(Clone, Copy, Debug)]
+pub struct AssetDrag(pub AssetId);
 
 /// What the asset's original file looks like right now (T-306).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -146,10 +150,10 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         let texture = thumbnail(ui.ctx(), state, id);
 
         ui.horizontal(|ui| {
-            match texture {
+            let draw_thumbnail = |ui: &mut egui::Ui| match &texture {
                 Some(handle) => {
                     ui.add(
-                        egui::Image::new(&handle)
+                        egui::Image::new(handle)
                             .fit_to_exact_size(egui::vec2(THUMB, THUMB))
                             .maintain_aspect_ratio(true),
                     );
@@ -170,6 +174,17 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                         ui.visuals().weak_text_color(),
                     );
                 }
+            };
+            if setup {
+                ui.dnd_drag_source(
+                    ui.make_persistent_id(("asset_drag", id)),
+                    AssetDrag(id),
+                    |ui| draw_thumbnail(ui),
+                )
+                .response
+                .on_hover_text("Drag onto a bone in the hierarchy or viewport");
+            } else {
+                draw_thumbnail(ui);
             }
 
             ui.vertical(|ui| {
@@ -271,16 +286,11 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     }
     if let Some(id) = attach
         && let Some(bone) = state.session.active_bone()
-        && let Some(asset) = state.doc.assets.get(id).cloned()
+        && state.doc.assets.get(id).is_some()
+        && state.dispatch(Box::new(AttachAsset::new(id, bone, glam::Vec2::ZERO)))
+        && let Some(&slot) = state.doc.skeleton.draw_order.last()
     {
-        // Attaching re-imports the same pixels under a uniquified name rather
-        // than sharing the asset: sharing needs an attachment that references an
-        // asset id, which arrives with the mesh work (T-401).
-        if state.dispatch(Box::new(ImportImage::new(asset, bone, glam::Vec2::ZERO)))
-            && let Some(&slot) = state.doc.skeleton.draw_order.last()
-        {
-            state.session.select_slot(Some(slot));
-        }
+        state.session.select_slot(Some(slot));
     }
     if let Some(id) = reload {
         let path = state
@@ -582,13 +592,11 @@ fn import_dialog(state: &mut AppState) {
                 .is_some_and(|b| b.parent.is_none())
         })
     });
-    let Some(bone) = bone else {
-        state
-            .session
-            .set_status("Create a bone first, then import an image onto it");
-        return;
-    };
     for path in paths {
-        crate::ui::canvas::import_image_file(state, &path, bone, glam::Vec2::ZERO);
+        if let Some(bone) = bone {
+            crate::ui::canvas::import_image_file(state, &path, bone, glam::Vec2::ZERO);
+        } else {
+            crate::ui::canvas::add_image_file(state, &path);
+        }
     }
 }

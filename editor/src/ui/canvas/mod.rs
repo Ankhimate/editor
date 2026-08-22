@@ -85,7 +85,10 @@ pub fn ui(
         }
     }
 
-    // 2b. Image drop-import (T-301).
+    // 2b. Image drop/import (T-301). Internal asset drags target the bone under
+    // the pointer; operating-system file drops may also populate an empty
+    // library before the first bone exists.
+    handle_asset_drop(ui, &response, rect, state);
     handle_dropped_files(ui, rect, state);
 
     // 3. Draw Grid
@@ -133,9 +136,10 @@ fn handle_dropped_files(ui: &egui::Ui, rect: egui::Rect, state: &mut AppState) {
         return;
     }
 
-    // Attach to the selected bone, else the first root — a rig always has
-    // somewhere to hang art, and silently doing nothing would be worse.
-    let Some(bone) = state.session.active_bone().or_else(|| {
+    // Attach to the selected bone, else the first root. With no skeleton yet,
+    // keep the images in the library so importing can be the first workflow
+    // step rather than something gated behind bone creation.
+    let bone = state.session.active_bone().or_else(|| {
         state.doc.skeleton.update_order.iter().copied().find(|&id| {
             state
                 .doc
@@ -144,12 +148,7 @@ fn handle_dropped_files(ui: &egui::Ui, rect: egui::Rect, state: &mut AppState) {
                 .get(id)
                 .is_some_and(|b| b.parent.is_none())
         })
-    }) else {
-        state
-            .session
-            .set_status("Create a bone first, then drop an image onto it");
-        return;
-    };
+    });
 
     // Drop point in world space, expressed relative to the target bone so the
     // image lands under the cursor rather than at the bone's origin.
@@ -157,19 +156,70 @@ fn handle_dropped_files(ui: &egui::Ui, rect: egui::Rect, state: &mut AppState) {
     let world = pointer
         .map(|p| camera::screen_to_world(p, rect, state))
         .unwrap_or_default();
-    let local = state
-        .pose
-        .worlds
-        .get(bone)
-        .and_then(|w| w.invert())
-        .map(|inv| inv.transform_point(world))
-        .unwrap_or(glam::Vec2::ZERO);
-
     for file in dropped {
         let Some(path) = file.path.clone() else {
             continue;
         };
-        import_image_file(state, &path, bone, local);
+        if let Some(bone) = bone {
+            let local = state
+                .pose
+                .worlds
+                .get(bone)
+                .and_then(|w| w.invert())
+                .map(|inv| inv.transform_point(world))
+                .unwrap_or(glam::Vec2::ZERO);
+            import_image_file(state, &path, bone, local);
+        } else {
+            add_image_file(state, &path);
+        }
+    }
+}
+
+fn handle_asset_drop(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    rect: egui::Rect,
+    state: &mut AppState,
+) {
+    use crate::ui::assets::AssetDrag;
+    let Some(payload) = response.dnd_release_payload::<AssetDrag>() else {
+        return;
+    };
+    if !state.session.can_edit_structure() {
+        state
+            .session
+            .set_status("Switch to Setup mode to attach images (Tab)");
+        return;
+    }
+    let Some(bone) = state.session.hovered_bone else {
+        state.session.set_status("Drop the asset onto a bone");
+        return;
+    };
+    let pointer = ui.ctx().input(|i| i.pointer.interact_pos());
+    let world = pointer
+        .map(|point| camera::screen_to_world(point, rect, state))
+        .unwrap_or_else(|| state.pose.world_position(bone));
+    let local = state
+        .pose
+        .worlds
+        .get(bone)
+        .and_then(|world| world.invert())
+        .map(|inverse| inverse.transform_point(world))
+        .unwrap_or_default();
+    attach_asset(state, payload.0, bone, local);
+}
+
+pub fn attach_asset(
+    state: &mut AppState,
+    asset: ankhimate_core::ids::AssetId,
+    bone: ankhimate_core::ids::BoneId,
+    offset: glam::Vec2,
+) {
+    let command = ankhimate_document::commands::asset_cmds::AttachAsset::new(asset, bone, offset);
+    if state.dispatch(Box::new(command))
+        && let Some(&slot) = state.doc.skeleton.draw_order.last()
+    {
+        state.session.select_slot(Some(slot));
     }
 }
 
@@ -187,6 +237,39 @@ pub fn import_image_file(
             .session
             .set_status(format!("Could not read {}: {e}", path.display())),
     }
+}
+
+/// Read an image into the library without requiring a skeleton yet.
+pub fn add_image_file(state: &mut AppState, path: &std::path::Path) {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            state
+                .session
+                .set_status(format!("Could not read {}: {error}", path.display()));
+            return;
+        }
+    };
+    let (width, height) = match image::load_from_memory(&bytes) {
+        Ok(image) => (image.width(), image.height()),
+        Err(error) => {
+            state.session.set_status(format!(
+                "{} is not a supported image: {error}",
+                path.display()
+            ));
+            return;
+        }
+    };
+    let name = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("image")
+        .to_string();
+    let mut asset = ankhimate_core::assets::ImageAsset::new(name, bytes, width, height);
+    asset.source_path = Some(path.to_string_lossy().into_owned());
+    state.dispatch(Box::new(
+        ankhimate_document::commands::asset_cmds::AddAsset::new(asset),
+    ));
 }
 
 /// Decode enough of an image to know its size, then import it as one command.

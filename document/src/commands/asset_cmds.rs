@@ -126,6 +126,95 @@ impl EditCommand for ImportImage {
     }
 }
 
+/// Hang an image that is already in the asset library from a bone.
+///
+/// Unlike [`ImportImage`], this creates only the slot and attachment. Reusing
+/// the existing asset keeps one source of pixels and makes dragging from the
+/// Assets panel a true attach operation rather than a hidden duplicate import.
+pub struct AttachAsset {
+    asset: AssetId,
+    bone: BoneId,
+    offset: glam::Vec2,
+    created: Option<SlotId>,
+}
+
+impl AttachAsset {
+    pub fn new(asset: AssetId, bone: BoneId, offset: glam::Vec2) -> Self {
+        Self {
+            asset,
+            bone,
+            offset,
+            created: None,
+        }
+    }
+
+    pub fn created_slot(&self) -> Option<SlotId> {
+        self.created
+    }
+}
+
+impl EditCommand for AttachAsset {
+    fn apply(&mut self, doc: &mut Document) {
+        if !doc.skeleton.bones.contains_key(self.bone) {
+            return;
+        }
+        let Some(asset) = doc.assets.get(self.asset) else {
+            return;
+        };
+        let (name, size) = (asset.name.clone(), asset.size());
+        let slot = doc.skeleton.add_slot(Slot {
+            attachment: Some(name.clone()),
+            ..Slot::new(name.clone(), self.bone)
+        });
+        doc.skeleton.skins[doc.skeleton.default_skin].set(
+            slot,
+            &name,
+            Attachment::Region(RegionAttachment {
+                texture: name.clone(),
+                local_offset: self.offset,
+                local_rotation: 0.0,
+                local_scale: glam::Vec2::ONE,
+                width: size.x,
+                height: size.y,
+                uv_rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 1.0,
+                },
+                pivot: glam::Vec2::splat(0.5),
+                sequence: None,
+            }),
+        );
+        self.created = Some(slot);
+    }
+
+    fn revert(&mut self, doc: &mut Document) {
+        let Some(slot) = self.created.take() else {
+            return;
+        };
+        doc.skeleton.slots.remove(slot);
+        doc.skeleton
+            .draw_order
+            .retain(|candidate| *candidate != slot);
+        for (_, skin) in doc.skeleton.skins.iter_mut() {
+            skin.remove_slot(slot);
+        }
+    }
+
+    fn label(&self) -> &str {
+        "Attach Asset"
+    }
+
+    fn requires_mode(&self) -> Option<WorkMode> {
+        Some(WorkMode::Setup)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Import an image into the library without attaching it anywhere.
 pub struct AddAsset {
     asset: ImageAsset,
@@ -531,6 +620,33 @@ mod tests {
             textures.contains(&"arm_2".to_string()),
             "second attachment points at the uniquified asset, not the first image"
         );
+    }
+
+    #[test]
+    fn attaching_a_library_asset_reuses_pixels_and_undoes_as_one_slot() {
+        let (mut doc, bone) = doc_with_bone();
+        let asset = doc.assets.add(png("arm"));
+        let mut history = History::default();
+
+        history.push(
+            Box::new(AttachAsset::new(asset, bone, glam::vec2(3.0, 4.0))),
+            &mut doc,
+        );
+
+        assert_eq!(doc.assets.len(), 1, "dragging does not duplicate the image");
+        assert_eq!(doc.skeleton.slots.len(), 1);
+        let slot = doc.skeleton.draw_order[0];
+        match doc.skeleton.skins[doc.skeleton.default_skin].get(slot, "arm") {
+            Some(Attachment::Region(region)) => {
+                assert_eq!(region.texture, "arm");
+                assert_eq!(region.local_offset, glam::vec2(3.0, 4.0));
+            }
+            other => panic!("expected attached region, got {other:?}"),
+        }
+
+        history.undo(&mut doc);
+        assert_eq!(doc.assets.len(), 1, "library asset remains");
+        assert!(doc.skeleton.slots.is_empty());
     }
 
     #[test]

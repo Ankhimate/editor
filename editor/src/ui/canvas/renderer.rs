@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::renderer::{CustomCallback, MeshVertex, SpriteDraw, SpriteUpload};
 use ankhimate_core::attachment::{Attachment, RegionAttachment};
 use ankhimate_core::ids::SlotId;
+use ankhimate_core::pose::Pose;
 use eframe::egui;
 
 pub const BONE_WIDTH_RATIO: f32 = 0.015;
@@ -226,14 +227,19 @@ fn region_corners(
 }
 
 /// The animated deform offsets for a slot's attachment, if the clip has any.
-fn mesh_deform(state: &AppState, slot: SlotId) -> Option<&Vec<glam::Vec2>> {
-    let name = state.pose.attachment_name(&state.doc.skeleton, slot)?;
-    state.pose.deforms.get(&(slot, name.to_string()))
+fn mesh_deform<'a>(state: &AppState, pose: &'a Pose, slot: SlotId) -> Option<&'a Vec<glam::Vec2>> {
+    let name = pose.attachment_name(&state.doc.skeleton, slot)?;
+    pose.deforms.get(&(slot, name.to_string()))
 }
 
 /// Build the textured draw for a slot — a quad for a region, a triangle list for
 /// a mesh — or `None` if anything it needs is missing.
-fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
+fn sprite_for_slot(
+    state: &AppState,
+    pose: &Pose,
+    slot_id: SlotId,
+    ghost_tint: Option<[f32; 4]>,
+) -> Option<SpriteDraw> {
     if !state.session.show_artwork {
         return None;
     }
@@ -245,11 +251,11 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
         state
             .doc
             .skeleton
-            .resolve_posed(&state.session.skin_stack(), &state.pose, slot_id)?;
+            .resolve_posed(&state.session.skin_stack(), pose, slot_id)?;
 
     // Hidden slots draw nothing at all (T-505) — distinct from alpha 0, which
     // still costs a draw call and still blends.
-    if state.pose.slot_visible.get(slot_id) == Some(&false) {
+    if pose.slot_visible.get(slot_id) == Some(&false) {
         return None;
     }
     // Hidden from the tree's visibility column: a way of looking, not a property
@@ -258,13 +264,8 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
         return None;
     }
 
-    let bone_world = state.pose.worlds.get(slot.bone)?;
-    let mut color = state
-        .pose
-        .slot_colors
-        .get(slot_id)
-        .copied()
-        .unwrap_or(slot.color);
+    let bone_world = pose.worlds.get(slot.bone)?;
+    let mut color = pose.slot_colors.get(slot_id).copied().unwrap_or(slot.color);
     // Art outside an isolation dims rather than disappears (T-903), the opposite
     // of what the bones do. A bone outside the isolation is clutter, but the art
     // is the silhouette — posing a limb against a character that has vanished is
@@ -272,10 +273,15 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
     if !state.session.is_isolated_in(slot.bone) {
         color[3] *= ISOLATION_GHOST;
     }
+    if let Some(tint) = ghost_tint {
+        color[0] *= tint[0];
+        color[1] *= tint[1];
+        color[2] *= tint[2];
+        color[3] *= tint[3];
+    }
     // `dark.a` is the amount, so an absent two-color tint is all zeroes and the
     // shader's second term vanishes without a branch.
-    let dark = state
-        .pose
+    let dark = pose
         .slot_dark_colors
         .get(slot_id)
         .copied()
@@ -288,7 +294,7 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
     // instead of drawing nothing.
     let sequence_frame = |sequence: &Option<ankhimate_core::attachment::Sequence>| {
         let sequence = sequence.as_ref()?;
-        let index = state.pose.slot_sequence_frames.get(slot_id).copied()?;
+        let index = pose.slot_sequence_frames.get(slot_id).copied()?;
         sequence.frame(index).cloned()
     };
 
@@ -326,7 +332,7 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
             // No rigid/skinned branch here: `skin_vertex_with_ffd` falls back to
             // `bone_world` per vertex, so a mesh with no weights and a vertex
             // with no weights are handled by the same path.
-            let deform = mesh_deform(state, slot_id);
+            let deform = mesh_deform(state, pose, slot_id);
             let weighted = !mesh.weights.is_empty();
             let vertices = (0..mesh.setup_vertices.len())
                 .map(|i| {
@@ -339,7 +345,7 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
                         Some(d) => vec![d.get(i).copied().unwrap_or_default()],
                         None => Vec::new(),
                     };
-                    let world = mesh.skin_vertex_with_deform(i, &offsets, &state.pose, bone_world);
+                    let world = mesh.skin_vertex_with_deform(i, &offsets, pose, bone_world);
                     let uv = mesh.uvs.get(i).copied().unwrap_or(glam::Vec2::ZERO);
                     MeshVertex {
                         position: [world.x, world.y],
@@ -381,6 +387,185 @@ fn sprite_for_slot(state: &AppState, slot_id: SlotId) -> Option<SpriteDraw> {
         dark,
     });
     Some(SpriteDraw::quad(key, vertices, slot.blend_mode))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OnionSide {
+    Past,
+    Future,
+}
+
+fn frame_onion_times(now: f32, duration: f32, fps: u32, steps: u8) -> Vec<(f32, OnionSide, u8)> {
+    let frame = 1.0 / fps.max(1) as f32;
+    let mut times = Vec::new();
+    for step in 1..=steps {
+        let delta = frame * step as f32;
+        if now - delta >= 0.0 {
+            times.push((now - delta, OnionSide::Past, step));
+        }
+        if now + delta <= duration {
+            times.push((now + delta, OnionSide::Future, step));
+        }
+    }
+    times
+}
+
+fn key_onion_times(
+    now: f32,
+    animation: &ankhimate_core::animation::Animation,
+    steps: u8,
+) -> Vec<(f32, OnionSide, u8)> {
+    let mut keys: Vec<f32> = animation
+        .timelines
+        .iter()
+        .flat_map(crate::app_state::key_times)
+        .filter(|time| time.is_finite())
+        .collect();
+    keys.sort_by(f32::total_cmp);
+    keys.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
+
+    let past: Vec<f32> = keys
+        .iter()
+        .copied()
+        .filter(|time| *time < now - 1e-5)
+        .collect();
+    let future: Vec<f32> = keys
+        .iter()
+        .copied()
+        .filter(|time| *time > now + 1e-5)
+        .collect();
+    let mut times = Vec::new();
+    for (index, time) in past.iter().rev().take(steps as usize).enumerate() {
+        times.push((*time, OnionSide::Past, index as u8 + 1));
+    }
+    for (index, time) in future.iter().take(steps as usize).enumerate() {
+        times.push((*time, OnionSide::Future, index as u8 + 1));
+    }
+    times
+}
+
+fn onion_poses(state: &AppState) -> Vec<(Pose, [f32; 4])> {
+    let settings = state.session.onion_skin;
+    if !settings.enabled || !state.session.is_animating() || !state.session.show_artwork {
+        return Vec::new();
+    }
+    let Some(animation_id) = state.session.active_animation else {
+        return Vec::new();
+    };
+    let Some(animation) = state.doc.animations.get(animation_id) else {
+        return Vec::new();
+    };
+    let times = if settings.key_steps {
+        key_onion_times(state.session.playhead, animation, settings.frames)
+    } else {
+        frame_onion_times(
+            state.session.playhead,
+            animation.duration,
+            state.doc.meta.fps,
+            settings.frames,
+        )
+    };
+
+    times
+        .into_iter()
+        .map(|(time, side, step)| {
+            let mut pose = Pose::new();
+            ankhimate_core::pose::evaluate(
+                &state.doc.skeleton,
+                &[(animation, time, 1.0)],
+                &mut pose,
+            );
+            let alpha = 0.32 / (step as f32).sqrt();
+            let tint = match side {
+                OnionSide::Past => [1.0, 0.35, 0.35, alpha],
+                OnionSide::Future => [0.35, 1.0, 0.45, alpha],
+            };
+            (pose, tint)
+        })
+        .collect()
+}
+
+fn append_pose_sprites(
+    state: &AppState,
+    pose: &Pose,
+    tint: Option<[f32; 4]>,
+    selected_only: bool,
+    sprite_draws: &mut Vec<SpriteDraw>,
+) {
+    let mut clip: Option<(Vec<glam::Vec2>, Option<SlotId>)> = None;
+    for &slot_id in &pose.draw_order {
+        let slot_bone = state.doc.skeleton.slots.get(slot_id).map(|slot| slot.bone);
+        if let Some(Attachment::Clipping(clip_attachment)) =
+            state
+                .doc
+                .skeleton
+                .resolve_posed(&state.session.skin_stack(), pose, slot_id)
+        {
+            let end = clip_attachment.end_slot.as_ref().and_then(|name| {
+                state
+                    .doc
+                    .skeleton
+                    .slots
+                    .iter()
+                    .find(|(_, slot)| &slot.name == name)
+                    .map(|(id, _)| id)
+            });
+            let world = slot_bone.and_then(|bone| pose.worlds.get(bone));
+            if let Some(world) = world {
+                clip = Some((
+                    clip_attachment
+                        .vertices
+                        .iter()
+                        .map(|vertex| world.transform_point(*vertex))
+                        .collect(),
+                    end,
+                ));
+            }
+            continue;
+        }
+
+        let included =
+            !selected_only || slot_bone.is_some_and(|bone| state.session.is_bone_selected(bone));
+        if included && let Some(mut draw) = sprite_for_slot(state, pose, slot_id, tint) {
+            if let Some((polygon, _)) = &clip
+                && polygon.len() >= 3
+            {
+                let subject: Vec<ankhimate_core::clipping::ClipVertex> = draw
+                    .vertices
+                    .iter()
+                    .map(|vertex| ankhimate_core::clipping::ClipVertex {
+                        position: glam::vec2(vertex.position[0], vertex.position[1]),
+                        uv: glam::vec2(vertex.uv[0], vertex.uv[1]),
+                    })
+                    .collect();
+                let color = draw.vertices.first().map(|v| v.color).unwrap_or([1.0; 4]);
+                let dark = draw.vertices.first().map(|v| v.dark).unwrap_or([0.0; 4]);
+                let (clipped, indices) =
+                    ankhimate_core::clipping::clip_triangles(&subject, &draw.indices, polygon);
+                if !indices.is_empty() {
+                    draw.vertices = clipped
+                        .into_iter()
+                        .map(|vertex| MeshVertex {
+                            position: [vertex.position.x, vertex.position.y],
+                            uv: [vertex.uv.x, vertex.uv.y],
+                            color,
+                            dark,
+                        })
+                        .collect();
+                    draw.indices = indices;
+                    sprite_draws.push(draw);
+                }
+            } else {
+                sprite_draws.push(draw);
+            }
+        }
+
+        if let Some((_, Some(end))) = &clip
+            && *end == slot_id
+        {
+            clip = None;
+        }
+    }
 }
 
 // ── Shear gizmo geometry ─────────────────────────────────────────────────────
@@ -1681,7 +1866,7 @@ pub fn render_bones(
             continue;
         };
         if !state.doc.skeleton.bones.contains_key(slot.bone)
-            || sprite_for_slot(state, slot_id).is_some()
+            || sprite_for_slot(state, &state.pose, slot_id, None).is_some()
             || state
                 .doc
                 .skeleton
@@ -1721,86 +1906,17 @@ pub fn render_bones(
     // The polygon is carried in **world** space. It is authored in its own
     // bone's local space, and the slots it masks are on other bones; converting
     // once here is the only place both spaces are in hand.
-    let mut clip: Option<(Vec<glam::Vec2>, Option<SlotId>)> = None;
     let mut sprite_draws: Vec<SpriteDraw> = Vec::new();
-    for &slot_id in &state.pose.draw_order {
-        // A clip starts here and runs until its end slot.
-        if let Some(Attachment::Clipping(c)) =
-            state
-                .doc
-                .skeleton
-                .resolve_posed(&state.session.skin_stack(), &state.pose, slot_id)
-        {
-            let end = c.end_slot.as_ref().and_then(|name| {
-                state
-                    .doc
-                    .skeleton
-                    .slots
-                    .iter()
-                    .find(|(_, s)| &s.name == name)
-                    .map(|(id, _)| id)
-            });
-            let world = state
-                .doc
-                .skeleton
-                .slots
-                .get(slot_id)
-                .and_then(|s| state.pose.worlds.get(s.bone));
-            if let Some(world) = world {
-                let polygon: Vec<glam::Vec2> = c
-                    .vertices
-                    .iter()
-                    .map(|v| world.transform_point(*v))
-                    .collect();
-                clip = Some((polygon, end));
-            }
-            continue;
-        }
-
-        if let Some(mut draw) = sprite_for_slot(state, slot_id) {
-            if let Some((polygon, _)) = &clip
-                && polygon.len() >= 3
-            {
-                let subject: Vec<ankhimate_core::clipping::ClipVertex> = draw
-                    .vertices
-                    .iter()
-                    .map(|v| ankhimate_core::clipping::ClipVertex {
-                        position: glam::vec2(v.position[0], v.position[1]),
-                        uv: glam::vec2(v.uv[0], v.uv[1]),
-                    })
-                    .collect();
-                // Colour is per-slot here, so the first vertex's is every
-                // vertex's; a clipped triangle inherits it unchanged.
-                let color = draw.vertices.first().map(|v| v.color).unwrap_or([1.0; 4]);
-                let dark = draw.vertices.first().map(|v| v.dark).unwrap_or([0.0; 4]);
-                let (clipped, indices) =
-                    ankhimate_core::clipping::clip_triangles(&subject, &draw.indices, polygon);
-                if indices.is_empty() {
-                    // Entirely masked: skip the draw call rather than submit an
-                    // empty one.
-                    continue;
-                }
-                draw.vertices = clipped
-                    .into_iter()
-                    .map(|v| MeshVertex {
-                        position: [v.position.x, v.position.y],
-                        uv: [v.uv.x, v.uv.y],
-                        color,
-                        dark,
-                    })
-                    .collect();
-                draw.indices = indices;
-            }
-            sprite_draws.push(draw);
-        }
-
-        // Past the end slot, the clip stops applying.
-        if let Some((_, Some(end))) = &clip
-            && *end == slot_id
-        {
-            clip = None;
-        }
+    for (pose, tint) in onion_poses(state) {
+        append_pose_sprites(
+            state,
+            &pose,
+            Some(tint),
+            state.session.onion_skin.selected_only,
+            &mut sprite_draws,
+        );
     }
+    append_pose_sprites(state, &state.pose, None, false, &mut sprite_draws);
 
     let custom_callback = CustomCallback {
         view_proj: state.session.camera.view_proj_matrix(viewport_size),
@@ -1815,4 +1931,24 @@ pub fn render_bones(
         artwork_slot,
         eframe::egui_wgpu::Callback::new_paint_callback(rect, custom_callback),
     );
+}
+
+#[cfg(test)]
+mod onion_tests {
+    use super::*;
+
+    #[test]
+    fn disabled_onion_skin_does_not_evaluate_extra_poses() {
+        let state = AppState::default();
+        assert!(onion_poses(&state).is_empty());
+    }
+
+    #[test]
+    fn frame_samples_stop_at_animation_boundaries() {
+        let samples = frame_onion_times(0.1, 0.2, 10, 5);
+        assert_eq!(
+            samples,
+            vec![(0.0, OnionSide::Past, 1), (0.2, OnionSide::Future, 1)]
+        );
+    }
 }
