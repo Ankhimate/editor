@@ -849,6 +849,8 @@ fixture migrates and round-trips; CI fails if `CURRENT_VERSION` changes without 
 ## Phase 7 — Production polish
 
 > All ∥. None of these are optional for a 1.0 that competes with Spine/Spriter.
+> The cross-cutting interaction order, workbench layout, and measurable UX gates
+> are specified in [`ux-workbench-plan.md`](ux-workbench-plan.md).
 
 ### T-701 Settings, keymap, autosave *(was T-505)*
 **Deps:** T-108 · **Refs:** PLAN §5 F-15
