@@ -26,6 +26,7 @@
 //! change goes through a command and stays undoable. That is `CLAUDE.md`'s rule
 //! for panels, extended to script.
 
+pub mod discovery;
 pub mod exporter;
 pub mod importer;
 pub mod panel;
@@ -81,6 +82,7 @@ struct Sinks {
 
 pub struct Host {
     ops: DocOps,
+    resources: std::sync::Arc<std::collections::BTreeMap<String, Vec<u8>>>,
     /// Files a script may open: those beside the one being imported, or none.
     ///
     /// Absent for an ordinary plugin run. An importer is the only thing that
@@ -99,6 +101,7 @@ impl Host {
     pub fn new() -> Self {
         Self {
             ops: DocOps::builtin(),
+            resources: Default::default(),
             sidecars: None,
         }
     }
@@ -122,6 +125,7 @@ impl Host {
                 id,
                 label,
                 source: script.to_string(),
+                resources: self.resources.clone(),
             })
             .collect())
     }
@@ -266,6 +270,15 @@ impl Host {
         self
     }
 
+    /// Give a plugin package its own read-only named resources.
+    pub fn with_resources(
+        mut self,
+        resources: std::collections::BTreeMap<String, Vec<u8>>,
+    ) -> Self {
+        self.resources = std::sync::Arc::new(resources);
+        self
+    }
+
     /// Read the importers a script registers, without running an import.
     ///
     /// What a host does at load time: run the file, collect what it declared,
@@ -282,6 +295,7 @@ impl Host {
                 label,
                 extensions,
                 source: script.to_string(),
+                resources: self.resources.clone(),
             })
             .collect())
     }
@@ -506,6 +520,26 @@ impl Host {
                 })?,
             )?;
 
+            let text_resources = self.resources.clone();
+            ank.set(
+                "resource",
+                Function::new(ctx.clone(), move |name: String| {
+                    text_resources
+                        .get(&name)
+                        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                        .map(str::to_string)
+                })?,
+            )?;
+            let byte_resources = self.resources.clone();
+            ank.set(
+                "resourceBytes",
+                Function::new(ctx.clone(), move |name: String| {
+                    byte_resources
+                        .get(&name)
+                        .map(|bytes| importer::encode_base64(bytes))
+                })?,
+            )?;
+
             // A complete name-keyed project is the lossless importer boundary.
             // Fine-grained verbs remain useful for small formats, but making a
             // Spine or DragonBones importer replay hundreds of commands would
@@ -539,6 +573,21 @@ impl Host {
                         crop_image(&base64, &options_json)
                     },
                 )?,
+            )?;
+            ank.set(
+                "imageInfo",
+                Function::new(ctx.clone(), move |base64: String| -> String {
+                    let Some(bytes) = decode_base64(&base64) else {
+                        return error_json("that image is not valid base64");
+                    };
+                    match image::load_from_memory(&bytes) {
+                        Ok(image) => serde_json::json!({
+                            "width": image.width(), "height": image.height()
+                        })
+                        .to_string(),
+                        Err(error) => error_json(&format!("could not decode image: {error}")),
+                    }
+                })?,
             )?;
 
             // ── Exporters ────────────────────────────────────────────────
@@ -703,11 +752,14 @@ impl Host {
                   sidecar: (name) => __ankhimate.sidecar(name),
                   sidecarBytes: (name) => __ankhimate.sidecarBytes(name),
                   sidecars: () => __ankhimate.sidecars(),
+                  resource: (name) => __ankhimate.resource(name),
+                  resourceBytes: (name) => __ankhimate.resourceBytes(name),
                   importProject: (project, images = {}, report = {}) =>
                     __unwrap(__ankhimate.importProject(
                       JSON.stringify(project), JSON.stringify(images), JSON.stringify(report))),
                   cropImage: (base64, options) =>
                     __unwrap(__ankhimate.cropImage(base64, JSON.stringify(options ?? {}))),
+                  imageInfo: (base64) => __unwrap(__ankhimate.imageInfo(base64)),
 
                   // Structure reading. Each throws on failure rather than
                   // returning an error object: a plugin that ignored a returned
@@ -752,16 +804,18 @@ impl Host {
                 globalThis.bakeAtlas = (settings) =>
                   JSON.parse(__ankhimate.bakeAtlas(JSON.stringify(settings ?? {})));
                 globalThis.emitBytes = (path, base64) => __ankhimate.emitBytes(path, base64);
-                globalThis.__ankhimate_run_export = () => {
-                  const ids = Object.keys(__exporters);
-                  if (!ids.length) throw new Error("this plugin registered no exporter");
-                  __exporters[ids[0]].write();
+                globalThis.__ankhimate_run_export = (id) => {
+                  const exporter = __exporters[id];
+                  if (!exporter) throw new Error(`no exporter registered as \`${id}\``);
+                  exporter.write();
                 };
 
-                globalThis.__ankhimate_run_import = (text, fileName) => {
-                  const ids = Object.keys(__importers);
-                  if (!ids.length) throw new Error("this plugin registered no importer");
-                  __importers[ids[0]].read(text, fileName);
+                globalThis.__ankhimate_run_import = (id, text, fileName) => {
+                  const importer = __importers[id];
+                  if (!importer) throw new Error(`no importer registered as \`${id}\``);
+                  if (typeof importer.canRead === "function" && !importer.canRead(text, fileName))
+                    throw new Error("__ANKHIMATE_NOT_THIS_FORMAT__");
+                  importer.read(text, fileName);
                 };
                 "#,
             )?;
@@ -1167,7 +1221,15 @@ fn import_project(
     for (_, asset) in loaded.assets.images.iter_mut() {
         match images.remove(&asset.name) {
             Some(encoded) => match decode_base64(&encoded) {
-                Some(bytes) => asset.bytes = bytes,
+                Some(bytes) => {
+                    if (asset.width == 0 || asset.height == 0)
+                        && let Ok(image) = image::load_from_memory(&bytes)
+                    {
+                        asset.width = image.width();
+                        asset.height = image.height();
+                    }
+                    asset.bytes = bytes;
+                }
                 None => return error_json(&format!("image `{}` is not valid base64", asset.name)),
             },
             None => loaded.report.dangling("asset image", &asset.name),
@@ -1254,14 +1316,23 @@ fn crop_image(base64: &str, options_json: &str) -> String {
         return error_json("crop rectangle is outside the image");
     }
     let cropped = image::imageops::crop_imm(&image, x, y, width, height).to_image();
-    let cropped = if options
-        .get("rotate_clockwise")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        image::imageops::rotate90(&cropped)
-    } else {
-        cropped
+    let turns = options
+        .get("quarter_turns_clockwise")
+        .and_then(|v| v.as_u64())
+        .map(|v| v % 4)
+        .unwrap_or_else(|| {
+            u64::from(
+                options
+                    .get("rotate_clockwise")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            )
+        });
+    let cropped = match turns {
+        1 => image::imageops::rotate90(&cropped),
+        2 => image::imageops::rotate180(&cropped),
+        3 => image::imageops::rotate270(&cropped),
+        _ => cropped,
     };
     let mut png = Vec::new();
     if let Err(e) = image::DynamicImage::ImageRgba8(cropped)

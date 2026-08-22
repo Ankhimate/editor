@@ -38,6 +38,7 @@ pub struct JsExporter {
     /// a QuickJS value cannot outlive its runtime, and the host builds a fresh
     /// one per run so a plugin cannot hold state across an undo.
     pub source: String,
+    pub resources: std::sync::Arc<std::collections::BTreeMap<String, Vec<u8>>>,
 }
 
 impl JsExporter {
@@ -51,8 +52,12 @@ impl JsExporter {
     /// something to copy per export — so a caller that moved its only copy out
     /// and got an `Err` would lose the user's whole project to a plugin's typo.
     pub fn plan(&self, doc: Document) -> Result<(Plan, Document), (crate::PluginError, Document)> {
-        let host = crate::Host::new();
-        let script = format!("{}\n__ankhimate_run_export();", self.source);
+        let host = crate::Host::new().with_resources((*self.resources).clone());
+        let script = format!(
+            "{}\n__ankhimate_run_export({});",
+            self.source,
+            serde_json::Value::String(self.id.clone())
+        );
         let (emitted, doc) = host.run_export(&script, doc)?;
 
         Ok((
