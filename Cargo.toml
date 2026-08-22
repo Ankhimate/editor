@@ -1,19 +1,19 @@
 [package]
 name = "ankhimate-mcp"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-authors.workspace = true
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Ankhimate/mcp"
+authors = ["Ankhimate Contributors"]
 description = "Model Context Protocol server for Ankhimate rigs"
 
 [dependencies]
-ankhimate-core = { version = "0.1.0", path = "../core" }
-ankhimate-document = { version = "0.1.0", path = "../document" }
-ankhimate-formats = { version = "0.1.0", path = "../formats" }
-ankhimate-export = { version = "0.1.0", path = "../export" }
-ankhimate-plugins = { version = "0.1.0", path = "../plugins" }
-ankhimate-render = { version = "0.1.0", path = "../render" }
+ankhimate-core = { version = "0.1.0", git = "https://github.com/Ankhimate/core", rev = "82d4490d08e2f56298abdf1b4692bb8593c048f9" }
+ankhimate-document = { version = "0.1.0", git = "https://github.com/Ankhimate/document", rev = "9c1920909747d66ac5cb7702cf0b308ea1654f8f" }
+ankhimate-formats = { version = "0.1.0", git = "https://github.com/Ankhimate/formats", rev = "97cf02ee6a4f2246c6f3ea7fe4575fca4f84b5a4" }
+ankhimate-export = { version = "0.1.0", git = "https://github.com/Ankhimate/export", rev = "f7ee43c7138e5452f5bf87c0a880f58612093b93" }
+ankhimate-plugins = { version = "0.1.0", git = "https://github.com/Ankhimate/plugins", rev = "48568c9dd80435a0500935b698e4c6d3b3f21f8d" }
+ankhimate-render = { version = "0.1.0", git = "https://github.com/Ankhimate/render", rev = "36a740f3d9540e768c2e88acc6cdaaa81a514a4e" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 rmcp = { version = "3.1.4", features = ["server", "transport-io"] }

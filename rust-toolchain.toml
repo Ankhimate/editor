@@ -1,0 +1,7 @@
+[toolchain]
+channel = "1.95"
+components = ["rustfmt", "clippy"]
+# `core` must keep compiling for wasm (PLAN §3.1). The target belongs here, not
+# in CI: this file overrides whatever toolchain a workflow installs, so a target
+# added to "stable" by an action is not present on the toolchain that runs.
+targets = ["wasm32-unknown-unknown"]
