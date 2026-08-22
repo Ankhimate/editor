@@ -1,0 +1,1259 @@
+use crate::attachment::Attachment;
+use crate::constraints::Constraint;
+use crate::ids::{BoneId, ConstraintId, GroupId, SkinId, SlotId};
+use crate::math::Transform;
+use crate::skin::Skin;
+use crate::slot::Slot;
+use crate::transforms::Inherit;
+use serde::{Deserialize, Serialize};
+use slotmap::SlotMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bone {
+    pub name: String,
+    pub parent: Option<BoneId>,
+    pub length: f32,
+    pub local_transform: Transform,
+    /// Rotation/scale inheritance flags (PLAN §2.2, ADR 0002).
+    #[serde(default)]
+    pub inherit: Inherit,
+    /// RGBA color for rendering. Defaults to Spine-like teal.
+    #[serde(default = "Bone::default_color")]
+    pub color: [f32; 4],
+}
+
+impl Bone {
+    pub fn default_color() -> [f32; 4] {
+        [0.0, 0.80, 0.80, 0.85] // Teal with slight transparency
+    }
+
+    /// A distinct colour for a bone that has not been given one.
+    ///
+    /// Every bone teal makes a sixty-bone rig one undifferentiated mass: the
+    /// hierarchy, the viewport and the weight list all show the same swatch, so
+    /// none of them can tell you *which* bone you are looking at without reading
+    /// a name. Colour is the fastest way to answer that, and it costs nothing to
+    /// derive one.
+    ///
+    /// Derived rather than stored, so it needs no field, no migration, and no
+    /// rewrite of a rig imported from elsewhere — spineboy gets sixty distinct
+    /// colours the moment it loads.
+    ///
+    /// Keyed on the bone's **position**, not on its name. Hashing the name was
+    /// the first attempt and cannot work: a hash maps an unbounded set onto a
+    /// bounded one, so two bones landing on the same hue is a matter of luck, and
+    /// with sixteen bones on a colour wheel it is closer to a coin flip. `hip`
+    /// and `rear-lower-arm` came out the same red. Position is finite and known,
+    /// so the spread can be guaranteed instead of hoped for.
+    ///
+    /// The cost is that colours shift if the hierarchy is reordered. Worth it:
+    /// the colour means "not that other bone", which is a statement about the
+    /// rig as it is now, and nobody memorises that the shin is teal.
+    ///
+    /// Hue carries the difference. Saturation and lightness stay in a band that
+    /// reads on a dark canvas and against artwork — free-running RGB produces
+    /// near-black and near-white bones that vanish into one or the other.
+    pub fn auto_color(index: usize) -> [f32; 4] {
+        // The golden-ratio conjugate: successive multiples land as far from each
+        // other as any sequence can, so the first two bones are opposite, the
+        // third splits the gap, and so on. Ordinary striding (`index / count`)
+        // needs the count up front and reshuffles every colour when it changes.
+        const PHI: f32 = 0.618_033_9;
+        let hue = (index as f32 * PHI).fract();
+        // A second axis, because hue alone runs out: the golden-ratio sequence
+        // puts its closest pairs at Fibonacci gaps — 13, 21, 34, 55 apart — and
+        // by sixty bones those pairs are a fortieth of the wheel from each other.
+        //
+        // The period is **4** for that reason. Every Fibonacci gap is odd or
+        // ≡2 (mod 4), so no two bones whose hues nearly collide can also land in
+        // the same weight band. Measured across 64 bones: hue alone bottoms out
+        // at 0.025 separation, a period of 3 at 0.027, this at 0.059.
+        let (saturation, lightness) = match index % 4 {
+            0 => (0.68, 0.62),
+            1 => (0.50, 0.74),
+            2 => (0.85, 0.48),
+            _ => (0.62, 0.58),
+        };
+        let [r, g, b] = hsl_to_rgb(hue, saturation, lightness);
+        [r, g, b, 0.85]
+    }
+
+    // World-space queries live on `Pose` (T-103): a `Bone` holds document data
+    // only, so it cannot know where it ended up. See `Pose::world_tip`.
+}
+
+/// HSL to RGB, all components 0..1.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h6 = h * 6.0;
+    let x = c * (1.0 - (h6 % 2.0 - 1.0).abs());
+    let (r, g, b) = match h6 as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    [r + m, g + m, b + m]
+}
+
+/// Make `name` unique against `taken` by appending `_2`, `_3`, … (ADR 0004).
+///
+/// Name-keyed serialization means duplicates silently lose data on save, so
+/// uniqueness is enforced at insert time rather than validated later.
+pub fn unique_name<'a>(name: &str, taken: impl Iterator<Item = &'a str>) -> String {
+    let existing: std::collections::HashSet<&str> = taken.collect();
+    if !existing.contains(name) {
+        return name.to_string();
+    }
+    // Start at _2: the unsuffixed name is conceptually the first.
+    (2..)
+        .map(|n| format!("{name}_{n}"))
+        .find(|candidate| !existing.contains(candidate.as_str()))
+        .expect("an unused suffix always exists")
+}
+
+/// Report of what [`Skeleton::remove_bone`] tore down alongside the bone.
+#[derive(Debug, Clone, Default)]
+pub struct RemoveBoneReport {
+    pub removed_bone_name: String,
+    /// Children that were re-parented to the removed bone's parent.
+    pub reparented_children: Vec<BoneId>,
+    /// Slots that referenced the removed bone (and thus were removed).
+    pub removed_slots: Vec<SlotId>,
+    /// Names of IK constraints that referenced the removed bone.
+    pub removed_constraints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Skeleton {
+    pub bones: SlotMap<BoneId, Bone>,
+    /// Topologically sorted bone ids (parents before children), rebuilt on
+    /// every hierarchy edit via [`Skeleton::rebuild_update_order`]. World
+    /// transforms are computed along this order — never insertion order.
+    #[serde(skip)]
+    pub update_order: Vec<BoneId>,
+    #[serde(default)]
+    pub constraints: SlotMap<ConstraintId, Constraint>,
+    /// Order in which constraints are applied after the FK pass (PLAN §2.5).
+    /// Explicit, because chained constraints are order-sensitive — never rely on
+    /// slotmap iteration order.
+    #[serde(default)]
+    pub constraint_order: Vec<ConstraintId>,
+    #[serde(default)]
+    pub slots: SlotMap<SlotId, Slot>,
+    #[serde(default)]
+    pub draw_order: Vec<SlotId>,
+    /// Attachment data, grouped into skins (PLAN §2.4, ADR 0003). Slots hold only
+    /// attachment *names*; the data lives here and is looked up via
+    /// [`Skeleton::resolve`].
+    #[serde(default)]
+    pub skins: SlotMap<SkinId, Skin>,
+    /// The skin every lookup falls back to. Created by [`Skeleton::new`].
+    #[serde(default)]
+    pub default_skin: SkinId,
+    /// Folders the hierarchy is filed into. Organisation only — see [`Group`].
+    #[serde(default)]
+    pub groups: SlotMap<GroupId, Group>,
+    /// The order groups are drawn in, so a rigger can arrange them.
+    #[serde(default)]
+    pub group_order: Vec<GroupId>,
+}
+
+/// One thing a [`Group`] can hold.
+///
+/// Attachments are addressed by `(slot, name)` rather than by an id because
+/// they have none — an attachment is a named entry inside a skin, and the same
+/// name in two skins is the same attachment wearing two costumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GroupMember {
+    Bone(BoneId),
+    Slot(SlotId),
+}
+
+/// A folder in the hierarchy — organisation, not rig structure.
+///
+/// A group is **not an entity**. It has no transform, nothing inherits from it,
+/// and removing one leaves every bone and slot exactly where it was. It exists
+/// so a sixty-bone rig can be filed into "front leg", "face", "props" and
+/// browsed at that level, which is a different problem from parenting and should
+/// not be solved by inventing bones nobody animates.
+///
+/// # Why membership is exclusive
+///
+/// One group per item, like folders rather than tags. A tree can draw an item
+/// once; showing the same bone under two groups means either drawing it twice —
+/// and then a click selects an ambiguous row — or the tree quietly not being a
+/// tree. Tags are a real alternative but they are a different feature, and
+/// [`SelectionSet`] already covers "these things belong together" without
+/// claiming to be where they live.
+///
+/// # What it does not touch
+///
+/// Bone parenting. A group changes only where a row is *drawn*; the skeleton's
+/// hierarchy, world transforms and evaluation order are untouched. Grouping a
+/// shin under "front leg" does not reparent it, and deleting the group does not
+/// orphan it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Group {
+    pub name: String,
+    /// RGBA, tinting the members' rows so a group reads at a glance.
+    #[serde(default = "default_group_color")]
+    pub color: [f32; 4],
+    pub members: Vec<GroupMember>,
+    /// Groups can nest, so "front leg" can sit inside "lower body".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<GroupId>,
+}
+
+fn default_group_color() -> [f32; 4] {
+    [0.55, 0.58, 0.65, 1.0]
+}
+
+impl Group {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            color: default_group_color(),
+            members: Vec::new(),
+            parent: None,
+        }
+    }
+}
+
+impl Skeleton {
+    /// A skeleton with an empty default skin.
+    ///
+    /// Prefer this over `Skeleton::default()`: the derived `Default` leaves
+    /// `default_skin` as the null key with no skin behind it, which only exists
+    /// so serde can deserialize into a fresh value before filling the fields.
+    pub fn new() -> Self {
+        let mut skel = Self::default();
+        skel.default_skin = skel.skins.insert(Skin::new("default"));
+        skel
+    }
+
+    /// Add a folder, returning its id.
+    pub fn add_group(&mut self, group: Group) -> GroupId {
+        let taken: Vec<String> = self.groups.values().map(|g| g.name.clone()).collect();
+        let mut group = group;
+        group.name = unique_name(&group.name, taken.iter().map(|s| s.as_str()));
+        let id = self.groups.insert(group);
+        self.group_order.push(id);
+        id
+    }
+
+    /// File `member` under `group`, taking it out of whatever held it before.
+    ///
+    /// Membership is exclusive, and enforced here rather than trusted: a caller
+    /// that forgot to remove the old entry would leave an item drawn in two
+    /// folders, and the tree would stop being a tree.
+    pub fn assign_to_group(&mut self, member: GroupMember, group: Option<GroupId>) {
+        for (_, existing) in self.groups.iter_mut() {
+            existing.members.retain(|m| *m != member);
+        }
+        if let Some(id) = group
+            && let Some(target) = self.groups.get_mut(id)
+        {
+            target.members.push(member);
+        }
+    }
+
+    /// Which folder holds this item, if any.
+    pub fn group_of(&self, member: GroupMember) -> Option<GroupId> {
+        self.groups
+            .iter()
+            .find(|(_, g)| g.members.contains(&member))
+            .map(|(id, _)| id)
+    }
+
+    /// The members of a group that should be transformed together.
+    ///
+    /// **Top-level only.** A folder holding a shoulder gets the shoulder, not
+    /// the elbow and wrist below it — those already follow through ordinary bone
+    /// parenting, and moving them again would move them twice. The same reason a
+    /// bone's attachments are left alone: they ride the bone.
+    ///
+    /// So a member is skipped when another member is its ancestor, which is what
+    /// makes "move this group" mean one displacement per limb rather than one
+    /// per bone in it.
+    pub fn group_transform_targets(&self, group: GroupId) -> Vec<BoneId> {
+        let Some(g) = self.groups.get(group) else {
+            return Vec::new();
+        };
+        let members: Vec<BoneId> = g
+            .members
+            .iter()
+            .filter_map(|m| match m {
+                GroupMember::Bone(b) => Some(*b),
+                GroupMember::Slot(_) => None,
+            })
+            .filter(|b| self.bones.contains_key(*b))
+            .collect();
+
+        members
+            .iter()
+            .copied()
+            .filter(|b| {
+                // Walk up: if any ancestor is also in the group, this bone is
+                // carried by it.
+                let mut current = self.bones.get(*b).and_then(|x| x.parent);
+                for _ in 0..64 {
+                    let Some(id) = current else { return true };
+                    if members.contains(&id) {
+                        return false;
+                    }
+                    current = self.bones.get(id).and_then(|x| x.parent);
+                }
+                true
+            })
+            .collect()
+    }
+
+    /// Delete a folder, leaving everything it held exactly where it was.
+    ///
+    /// A group is organisation, so removing one must not remove a bone — the
+    /// members simply return to the top level. Child groups are promoted to the
+    /// deleted group's parent rather than deleted with it, for the same reason:
+    /// nothing a user filed away should disappear because a folder above it did.
+    pub fn remove_group(&mut self, id: GroupId) -> Option<Group> {
+        let parent = self.groups.get(id)?.parent;
+        for (_, group) in self.groups.iter_mut() {
+            if group.parent == Some(id) {
+                group.parent = parent;
+            }
+        }
+        self.group_order.retain(|g| *g != id);
+        self.groups.remove(id)
+    }
+
+    /// Resolve the attachment a slot should show, honoring the active skin with a
+    /// fallback to the default skin (PLAN §2.4 — the **only** way renderers should
+    /// obtain an attachment).
+    pub fn resolve(&self, active: SkinId, slot: SlotId, name: &str) -> Option<&Attachment> {
+        self.resolve_many(&[active], slot, name)
+    }
+
+    /// Resolve against **several** active skins, first match winning (T-507).
+    ///
+    /// Composition rather than one global "style": a hat skin and an armor skin
+    /// should be wearable together, and a tool that can only have one active
+    /// forces every combination to exist as its own skin. Order is priority, so
+    /// the caller decides which layer wins a conflict, and the default skin is
+    /// always the last fallback — a slot the outfits say nothing about still
+    /// shows its base art rather than vanishing.
+    pub fn resolve_many(&self, active: &[SkinId], slot: SlotId, name: &str) -> Option<&Attachment> {
+        active
+            .iter()
+            .find_map(|id| self.skins.get(*id).and_then(|skin| skin.get(slot, name)))
+            .or_else(|| {
+                self.skins
+                    .get(self.default_skin)
+                    .and_then(|skin| skin.get(slot, name))
+            })
+    }
+
+    /// Resolve whatever the slot currently points at, if anything.
+    pub fn resolve_slot(&self, active: SkinId, slot: SlotId) -> Option<&Attachment> {
+        self.resolve_slot_many(&[active], slot)
+    }
+
+    /// The mesh whose geometry `mesh` actually uses, following a link if it has
+    /// one.
+    ///
+    /// A linked mesh keeps its own texture and its own name but borrows vertices,
+    /// UVs, triangles and weights from a source elsewhere. Callers that want to
+    /// *draw* a mesh want this; callers that want to edit one want the mesh they
+    /// were given, because editing through a link would silently rewrite the
+    /// source every other copy depends on.
+    ///
+    /// Returns `mesh` unchanged when it has no link, or when the link dangles —
+    /// a broken link should draw the mesh, not nothing at all.
+    pub fn resolve_linked_mesh<'a>(
+        &'a self,
+        active: &[SkinId],
+        mesh: &'a crate::attachment::MeshAttachment,
+    ) -> &'a crate::attachment::MeshAttachment {
+        let Some(link) = &mesh.linked else {
+            return mesh;
+        };
+        let Some((slot, _)) = self.slots.iter().find(|(_, s)| s.name == link.slot) else {
+            return mesh;
+        };
+        // An explicit skin name pins the source; without one it resolves the same
+        // way any other attachment does, so a link inside a skin finds that
+        // skin's version first.
+        let found = match &link.skin {
+            Some(name) => self
+                .skins
+                .iter()
+                .find(|(_, sk)| sk.name == *name)
+                .and_then(|(_, sk)| sk.get(slot, &link.attachment)),
+            None => self.resolve_many(active, slot, &link.attachment),
+        };
+        match found {
+            Some(Attachment::Mesh(source)) => source,
+            _ => mesh,
+        }
+    }
+
+    /// Bones and constraints that belong to a skin which is not active.
+    ///
+    /// Evaluation uses this to skip them outright: a cape's physics chain should
+    /// cost nothing while the cape is off.
+    pub fn inactive_skin_members(&self, active: &[SkinId]) -> (Vec<BoneId>, Vec<ConstraintId>) {
+        let (mut bones, mut constraints) = (Vec::new(), Vec::new());
+        for (id, skin) in self.skins.iter() {
+            if id == self.default_skin || active.contains(&id) {
+                continue;
+            }
+            bones.extend(skin.bones.iter().copied());
+            constraints.extend(skin.constraints.iter().copied());
+        }
+        // A bone or constraint listed by an active skin wins: two skins may share
+        // a chain, and one of them being off is not a reason to drop it.
+        let (keep_b, keep_c) = active.iter().filter_map(|id| self.skins.get(*id)).fold(
+            (Vec::new(), Vec::new()),
+            |mut acc, skin| {
+                acc.0.extend(skin.bones.iter().copied());
+                acc.1.extend(skin.constraints.iter().copied());
+                acc
+            },
+        );
+        bones.retain(|b| !keep_b.contains(b));
+        constraints.retain(|c| !keep_c.contains(c));
+        (bones, constraints)
+    }
+
+    /// [`Self::resolve_slot`] against several active skins (T-507).
+    pub fn resolve_slot_many(&self, active: &[SkinId], slot: SlotId) -> Option<&Attachment> {
+        let name = self.slots.get(slot)?.attachment.as_deref()?;
+        self.resolve_many(active, slot, name)
+    }
+
+    /// Resolve the attachment a slot is showing **in a pose**, so an attachment
+    /// timeline is honoured.
+    ///
+    /// [`Self::resolve_slot_many`] answers from the setup pose. That is the right
+    /// answer while authoring the rig and the wrong one while playing a clip, and
+    /// the two are easy to confuse because they agree until the first attachment
+    /// key.
+    pub fn resolve_posed(
+        &self,
+        active: &[SkinId],
+        pose: &crate::pose::Pose,
+        slot: SlotId,
+    ) -> Option<&Attachment> {
+        let name = pose.attachment_name(self, slot)?;
+        self.resolve_many(active, slot, name)
+    }
+
+    /// Insert a skin and return its id.
+    pub fn add_skin(&mut self, skin: Skin) -> SkinId {
+        self.skins.insert(skin)
+    }
+
+    /// Insert a bone, return its id, and rebuild the update order.
+    ///
+    /// The name is made unique first: `.ankh` serializes entities **by name**
+    /// (ADR 0004), so two bones sharing a name would collide on save.
+    pub fn add_bone(&mut self, mut bone: Bone) -> BoneId {
+        bone.name = unique_name(&bone.name, self.bones.values().map(|b| b.name.as_str()));
+        let id = self.bones.insert(bone);
+        self.rebuild_update_order();
+        id
+    }
+
+    /// Insert a slot with a unique name, appending it to the setup draw order.
+    pub fn add_slot(&mut self, mut slot: Slot) -> SlotId {
+        slot.name = unique_name(&slot.name, self.slots.values().map(|s| s.name.as_str()));
+        let id = self.slots.insert(slot);
+        self.draw_order.push(id);
+        id
+    }
+
+    /// Rename a bone, making the new name unique among the *other* bones.
+    /// Returns the name actually assigned.
+    pub fn rename_bone(&mut self, id: BoneId, name: &str) -> Option<String> {
+        let taken: Vec<String> = self
+            .bones
+            .iter()
+            .filter(|(other, _)| *other != id)
+            .map(|(_, b)| b.name.clone())
+            .collect();
+        let unique = unique_name(name, taken.iter().map(|s| s.as_str()));
+        let bone = self.bones.get_mut(id)?;
+        bone.name = unique.clone();
+        self.rebuild_update_order();
+        Some(unique)
+    }
+
+    /// The **setup** world affine of a bone: its local transform composed up the
+    /// parent chain, ignoring animation. Used by editor reparenting to keep a bone
+    /// visually fixed while its parent changes (T-206, ADR 0002).
+    pub fn setup_world(&self, id: BoneId) -> crate::transforms::Affine2 {
+        let Some(bone) = self.bones.get(id) else {
+            return crate::transforms::Affine2::IDENTITY;
+        };
+        match bone.parent {
+            Some(parent) => crate::transforms::Affine2::compose_child(
+                &self.setup_world(parent),
+                &bone.local_transform,
+                &bone.inherit,
+            ),
+            None => bone.local_transform.to_affine(),
+        }
+    }
+
+    /// Insert a constraint, appending it to the end of [`Self::constraint_order`].
+    pub fn add_constraint(&mut self, constraint: Constraint) -> ConstraintId {
+        let id = self.constraints.insert(constraint);
+        self.constraint_order.push(id);
+        id
+    }
+
+    /// Remove a constraint and drop it from the application order.
+    pub fn remove_constraint(&mut self, id: ConstraintId) -> Option<Constraint> {
+        self.constraint_order.retain(|&c| c != id);
+        self.constraints.remove(id)
+    }
+
+    /// Constraints in application order, skipping any dangling ids.
+    pub fn ordered_constraints(&self) -> impl Iterator<Item = (ConstraintId, &Constraint)> {
+        self.constraint_order
+            .iter()
+            .filter_map(|&id| self.constraints.get(id).map(|c| (id, c)))
+    }
+
+    /// Rebuild [`update_order`] via pre-order DFS, roots sorted by name and
+    /// each parent's children sorted by name. Deterministic regardless of
+    /// insertion order. See ADR 0001.
+    pub fn rebuild_update_order(&mut self) {
+        use std::collections::{HashMap, HashSet};
+
+        let mut children: HashMap<BoneId, Vec<BoneId>> = HashMap::new();
+        let mut roots: Vec<BoneId> = Vec::new();
+        for (id, bone) in self.bones.iter() {
+            match bone.parent {
+                Some(parent) => children.entry(parent).or_default().push(id),
+                None => roots.push(id),
+            }
+        }
+        for group in children.values_mut() {
+            group.sort_by(|&a, &b| self.bones[a].name.cmp(&self.bones[b].name));
+        }
+        roots.sort_by(|&a, &b| self.bones[a].name.cmp(&self.bones[b].name));
+
+        let mut order = Vec::with_capacity(self.bones.len());
+        let mut visited = HashSet::new();
+        // Iterative pre-order DFS. Push children reversed so the first child is
+        // popped (visited) first — matches the recursive name-sorted order.
+        let mut stack: Vec<BoneId> = roots;
+        stack.reverse();
+        while let Some(id) = stack.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            order.push(id);
+            if let Some(kids) = children.get(&id) {
+                for &kid in kids.iter().rev() {
+                    stack.push(kid);
+                }
+            }
+        }
+
+        // Defensive: if a malformed parent pointer left some bones unreached,
+        // append them so update_order still contains every bone.
+        if order.len() != self.bones.len() {
+            for (id, _) in self.bones.iter() {
+                if !visited.contains(&id) {
+                    order.push(id);
+                }
+            }
+        }
+
+        self.update_order = order;
+    }
+
+    /// Remove a bone, reparenting its children to the bone's parent and
+    /// tearing down any slots / constraints that depended on it. All other
+    /// entity ids stay valid. See ADR 0001 / defect D1.
+    pub fn remove_bone(&mut self, id: BoneId) -> Option<RemoveBoneReport> {
+        let bone = self.bones.get(id)?;
+        let parent = bone.parent;
+        let name = bone.name.clone();
+        let mut report = RemoveBoneReport {
+            removed_bone_name: name,
+            ..Default::default()
+        };
+
+        // Re-parent direct children to the removed bone's parent.
+        let children: Vec<BoneId> = self
+            .bones
+            .iter()
+            .filter(|(_, b)| b.parent == Some(id))
+            .map(|(cid, _)| cid)
+            .collect();
+        for &child in &children {
+            if let Some(cb) = self.bones.get_mut(child) {
+                cb.parent = parent;
+            }
+        }
+        report.reparented_children = children;
+
+        // Drop slots that reference this bone.
+        let removed_slots: Vec<SlotId> = self
+            .slots
+            .iter()
+            .filter(|(_, s)| s.bone == id)
+            .map(|(sid, _)| sid)
+            .collect();
+        for &sid in &removed_slots {
+            self.slots.remove(sid);
+            self.draw_order.retain(|&s| s != sid);
+            // Attachment data lives in the skins now, so every skin has to drop
+            // its entries for this slot or they leak (ADR 0003).
+            for (_, skin) in self.skins.iter_mut() {
+                skin.remove_slot(sid);
+            }
+        }
+        report.removed_slots = removed_slots;
+
+        // Drop constraints that reference this bone, as target or chain member.
+        let doomed: Vec<(ConstraintId, String)> = self
+            .constraints
+            .iter()
+            .filter(|(_, c)| match c {
+                Constraint::Ik(ik) => ik.target == id || ik.bones.contains(&id),
+                Constraint::Transform(tc) => tc.target == id || tc.bones.contains(&id),
+                Constraint::Physics(p) => p.bone == id,
+                Constraint::Path(p) => p.bones.contains(&id),
+            })
+            .map(|(cid, c)| (cid, c.name().to_string()))
+            .collect();
+        for (cid, name) in doomed {
+            self.remove_constraint(cid);
+            report.removed_constraints.push(name);
+        }
+
+        // Selection sets lose the bone too, and any set left empty goes with it
+        // (T-904). A set holding a dangling id would silently select fewer bones
+        // than it names, and an empty one is a row that does nothing — both are
+        // worse than the set being gone.
+        // Folders lose the bone and the slots that went with it, but the folder
+        // itself stays: an empty group is a place the user made and may be about
+        // to refill, unlike a selection set, which is only its contents.
+        for (_, group) in self.groups.iter_mut() {
+            group.members.retain(|m| match m {
+                GroupMember::Bone(b) => *b != id,
+                GroupMember::Slot(s) => !report.removed_slots.contains(s),
+            });
+        }
+
+        self.bones.remove(id);
+        self.rebuild_update_order();
+        Some(report)
+    }
+
+    /// `true` if `descendant` is anywhere below `ancestor` in the hierarchy.
+    pub fn is_descendant(&self, descendant: BoneId, ancestor: BoneId) -> bool {
+        let mut id = descendant;
+        while let Some(p) = self.bones.get(id).and_then(|b| b.parent) {
+            if p == ancestor {
+                return true;
+            }
+            id = p;
+        }
+        false
+    }
+
+    // The world pass lives in `crate::pose::evaluate` (T-103). A `Skeleton` is
+    // document data and holds no derived state, so there is deliberately no
+    // `update_world_transforms` here any more: call `evaluate` into a `Pose`.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attachment::{Rect, RegionAttachment};
+    use crate::constraints::IkConstraint;
+
+    fn region(texture: &str) -> Attachment {
+        Attachment::Region(RegionAttachment {
+            texture: texture.to_string(),
+            local_offset: glam::Vec2::ZERO,
+            local_rotation: 0.0,
+            local_scale: glam::Vec2::ONE,
+            width: 10.0,
+            height: 10.0,
+            uv_rect: Rect::default(),
+            pivot: glam::Vec2::splat(0.5),
+            sequence: None,
+        })
+    }
+
+    fn bone(name: &str, parent: Option<BoneId>) -> Bone {
+        Bone {
+            name: name.to_string(),
+            parent,
+            length: 10.0,
+            local_transform: Transform::default(),
+            inherit: Inherit::default(),
+            color: Bone::default_color(),
+        }
+    }
+
+    /// Filing an item into a folder takes it out of the one that held it.
+    ///
+    /// The invariant the whole feature rests on: a tree can draw an item once,
+    /// and an item in two folders is either drawn twice — so a click selects an
+    /// ambiguous row — or quietly not in a tree at all.
+    #[test]
+    fn group_membership_is_exclusive() {
+        let mut skel = Skeleton::new();
+        let arm = skel.add_bone(bone("arm", None));
+        let leg = skel.add_group(Group::new("leg"));
+        let torso = skel.add_group(Group::new("torso"));
+
+        skel.assign_to_group(GroupMember::Bone(arm), Some(leg));
+        assert_eq!(skel.group_of(GroupMember::Bone(arm)), Some(leg));
+
+        skel.assign_to_group(GroupMember::Bone(arm), Some(torso));
+        assert_eq!(skel.group_of(GroupMember::Bone(arm)), Some(torso));
+        assert!(
+            skel.groups[leg].members.is_empty(),
+            "the old folder let go of it"
+        );
+
+        // `None` files it back at the top level.
+        skel.assign_to_group(GroupMember::Bone(arm), None);
+        assert_eq!(skel.group_of(GroupMember::Bone(arm)), None);
+        assert!(skel.groups[torso].members.is_empty());
+    }
+
+    /// A group transform drives only the topmost member of each limb.
+    ///
+    /// Moving a folder that holds a shoulder *and* the elbow under it must move
+    /// the limb once. The elbow already follows the shoulder through ordinary
+    /// parenting, so writing to both would displace it twice.
+    #[test]
+    fn a_group_transform_skips_members_carried_by_other_members() {
+        let mut skel = Skeleton::new();
+        let shoulder = skel.add_bone(bone("shoulder", None));
+        let elbow = skel.add_bone(bone("elbow", Some(shoulder)));
+        let wrist = skel.add_bone(bone("wrist", Some(elbow)));
+        let unrelated = skel.add_bone(bone("head", None));
+
+        let group = skel.add_group(Group::new("arm"));
+        for b in [shoulder, elbow, wrist, unrelated] {
+            skel.assign_to_group(GroupMember::Bone(b), Some(group));
+        }
+
+        let targets = skel.group_transform_targets(group);
+        assert_eq!(targets.len(), 2, "one per limb, not one per bone");
+        assert!(targets.contains(&shoulder));
+        assert!(targets.contains(&unrelated), "a separate root still counts");
+        assert!(!targets.contains(&elbow), "carried by the shoulder");
+        assert!(!targets.contains(&wrist));
+    }
+
+    /// Deleting a folder is organisation, not demolition: everything it held
+    /// stays, and nested folders are promoted rather than deleted.
+    #[test]
+    fn removing_a_group_keeps_its_contents() {
+        let mut skel = Skeleton::new();
+        let arm = skel.add_bone(bone("arm", None));
+        let outer = skel.add_group(Group::new("upper body"));
+        let inner = skel.add_group(Group::new("left arm"));
+        skel.groups[inner].parent = Some(outer);
+        skel.assign_to_group(GroupMember::Bone(arm), Some(inner));
+
+        skel.remove_group(outer);
+
+        assert!(skel.bones.contains_key(arm), "the bone is untouched");
+        assert!(skel.groups.contains_key(inner), "the child folder survived");
+        assert_eq!(
+            skel.groups[inner].parent, None,
+            "and was promoted to where its parent was"
+        );
+        assert_eq!(skel.group_of(GroupMember::Bone(arm)), Some(inner));
+    }
+
+    /// Deleting a bone empties it out of its folder without taking the folder
+    /// with it — an empty group is a place the user made, unlike a selection set
+    /// which is only its contents.
+    #[test]
+    fn deleting_a_bone_leaves_its_folder_standing() {
+        let mut skel = Skeleton::new();
+        let arm = skel.add_bone(bone("arm", None));
+        let group = skel.add_group(Group::new("left arm"));
+        skel.assign_to_group(GroupMember::Bone(arm), Some(group));
+
+        skel.remove_bone(arm);
+
+        assert!(skel.groups.contains_key(group), "the folder stays");
+        assert!(skel.groups[group].members.is_empty(), "but loses the bone");
+    }
+
+    #[test]
+    fn update_order_is_topological_regardless_of_insertion() {
+        let mut skel = Skeleton::new();
+        // Insert in reverse hierarchy order: child first, then parent, then root.
+        let root = skel.add_bone(bone("root", None));
+        let mid = skel.add_bone(bone("mid", Some(root)));
+        let leaf = skel.add_bone(bone("leaf", Some(mid)));
+
+        skel.rebuild_update_order();
+        let order = skel.update_order.clone();
+        let pos = |id: BoneId| order.iter().position(|&x| x == id).unwrap();
+        assert!(pos(root) < pos(mid));
+        assert!(pos(mid) < pos(leaf));
+    }
+
+    #[test]
+    fn update_order_tiebreaks_by_name() {
+        let mut skel = Skeleton::new();
+        let z = skel.add_bone(bone("zeta", None));
+        let a = skel.add_bone(bone("alpha", None));
+        let m = skel.add_bone(bone("middle", None));
+
+        // Roots inserted out of name order; update_order should be alpha, middle, zeta.
+        skel.rebuild_update_order();
+        let order = skel.update_order.clone();
+        assert_eq!(order, vec![a, m, z]);
+    }
+
+    #[test]
+    fn delete_middle_bone_keeps_identity_and_reparents() {
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let mid = skel.add_bone(bone("mid", Some(root)));
+        let leaf = skel.add_bone(bone("leaf", Some(mid)));
+
+        // Children ids before deletion.
+        let report = skel.remove_bone(mid).expect("bone exists");
+
+        // `mid` is gone; `root` and `leaf` keep their ids.
+        assert!(skel.bones.get(mid).is_none());
+        assert!(skel.bones.get(root).is_some());
+        assert!(skel.bones.get(leaf).is_some());
+
+        // `leaf` was reparented to `root`.
+        assert_eq!(skel.bones.get(leaf).unwrap().parent, Some(root));
+        assert_eq!(report.reparented_children, vec![leaf]);
+
+        // update_order still topological and excludes the removed bone.
+        assert!(!skel.update_order.contains(&mid));
+        let order = skel.update_order.clone();
+        let pos = |id: BoneId| order.iter().position(|&x| x == id).unwrap();
+        assert!(pos(root) < pos(leaf));
+    }
+
+    #[test]
+    fn delete_bone_removes_dependent_slots() {
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let child = skel.add_bone(bone("child", Some(root)));
+
+        let slot_id = skel.slots.insert(crate::slot::Slot::new("s".into(), child));
+        skel.draw_order.push(slot_id);
+
+        let report = skel.remove_bone(child).expect("bone exists");
+        assert_eq!(report.removed_slots, vec![slot_id]);
+        assert!(skel.slots.get(slot_id).is_none());
+        assert!(!skel.draw_order.contains(&slot_id));
+    }
+
+    #[test]
+    fn delete_bone_removes_dependent_ik_constraints() {
+        let mut skel = Skeleton::new();
+        let a = skel.add_bone(bone("a", None));
+        let b = skel.add_bone(bone("b", Some(a)));
+        let target = skel.add_bone(bone("target", None));
+
+        skel.add_constraint(Constraint::Ik(IkConstraint::two_bone("ik", target, [a, b])));
+
+        skel.remove_bone(b).expect("bone exists");
+        // The constraint referencing `b` must be gone, and its name reported.
+        assert!(skel.constraints.is_empty());
+        assert!(skel.constraint_order.is_empty());
+    }
+
+    #[test]
+    fn delete_bone_reports_removed_constraint_names() {
+        let mut skel = Skeleton::new();
+        let a = skel.add_bone(bone("a", None));
+        let b = skel.add_bone(bone("b", Some(a)));
+        let target = skel.add_bone(bone("target", None));
+
+        skel.add_constraint(Constraint::Ik(IkConstraint::two_bone(
+            "left_leg",
+            target,
+            [a, b],
+        )));
+        skel.add_constraint(Constraint::Ik(IkConstraint::aim("look_at", target, a)));
+
+        // Removing the *target* tears down both constraints that reference it.
+        let report = skel.remove_bone(target).expect("bone exists");
+        assert_eq!(report.removed_constraints.len(), 2);
+        assert!(report.removed_constraints.contains(&"left_leg".to_string()));
+        assert!(report.removed_constraints.contains(&"look_at".to_string()));
+        assert!(skel.constraints.is_empty());
+    }
+
+    #[test]
+    fn new_skeleton_has_a_default_skin() {
+        let skel = Skeleton::new();
+        assert!(skel.skins.get(skel.default_skin).is_some());
+        assert_eq!(skel.skins.len(), 1);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_default_skin() {
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let slot = skel.slots.insert(Slot::new("arm".into(), root));
+
+        // Only the default skin defines "arm".
+        let default_skin = skel.default_skin;
+        skel.skins[default_skin].set(slot, "arm", region("default_arm.png"));
+
+        // An alternate skin that overrides nothing for this slot.
+        let alt = skel.add_skin(crate::skin::Skin::new("alt"));
+
+        match skel.resolve(alt, slot, "arm") {
+            Some(Attachment::Region(r)) => assert_eq!(r.texture, "default_arm.png"),
+            other => panic!("expected fallback to the default skin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn active_skin_overrides_default() {
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let slot = skel.slots.insert(Slot::new("arm".into(), root));
+
+        let default_skin = skel.default_skin;
+        skel.skins[default_skin].set(slot, "arm", region("default_arm.png"));
+        let alt = skel.add_skin(crate::skin::Skin::new("alt"));
+        skel.skins[alt].set(slot, "arm", region("alt_arm.png"));
+
+        match skel.resolve(alt, slot, "arm") {
+            Some(Attachment::Region(r)) => assert_eq!(r.texture, "alt_arm.png"),
+            other => panic!("expected the active skin to win, got {other:?}"),
+        }
+        // The default skin is untouched by the override.
+        match skel.resolve(default_skin, slot, "arm") {
+            Some(Attachment::Region(r)) => assert_eq!(r.texture, "default_arm.png"),
+            other => panic!("expected the default entry intact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn swapping_skin_does_not_touch_slots() {
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let slot = skel.slots.insert(Slot::new("arm".into(), root));
+        skel.slots[slot].attachment = Some("arm".into());
+
+        let default_skin = skel.default_skin;
+        skel.skins[default_skin].set(slot, "arm", region("default_arm.png"));
+        let alt = skel.add_skin(crate::skin::Skin::new("alt"));
+        skel.skins[alt].set(slot, "arm", region("alt_arm.png"));
+
+        let slot_before = skel.slots[slot].attachment.clone();
+
+        // Resolving through a different skin swaps the rendered attachment...
+        match skel.resolve_slot(alt, slot) {
+            Some(Attachment::Region(r)) => assert_eq!(r.texture, "alt_arm.png"),
+            other => panic!("expected alt attachment, got {other:?}"),
+        }
+        // ...without the slot's stored name changing (PLAN §2.4, normative).
+        assert_eq!(skel.slots[slot].attachment, slot_before);
+    }
+
+    #[test]
+    fn resolve_returns_none_for_unknown_name() {
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let slot = skel.slots.insert(Slot::new("arm".into(), root));
+        let default_skin = skel.default_skin;
+
+        assert!(skel.resolve(default_skin, slot, "nope").is_none());
+        // A slot with no attachment name resolves to nothing.
+        assert!(skel.resolve_slot(default_skin, slot).is_none());
+    }
+
+    #[test]
+    fn deleting_a_bone_clears_its_slots_skin_entries() {
+        let mut skel = Skeleton::new();
+        let root = skel.add_bone(bone("root", None));
+        let child = skel.add_bone(bone("child", Some(root)));
+        let slot = skel.slots.insert(Slot::new("arm".into(), child));
+
+        let default_skin = skel.default_skin;
+        skel.skins[default_skin].set(slot, "arm", region("arm.png"));
+        let alt = skel.add_skin(crate::skin::Skin::new("alt"));
+        skel.skins[alt].set(slot, "arm", region("alt_arm.png"));
+
+        skel.remove_bone(child).expect("bone exists");
+
+        // The slot is gone, and no skin still holds data for it.
+        assert!(skel.slots.get(slot).is_none());
+        for (_, skin) in skel.skins.iter() {
+            assert_eq!(skin.names_for_slot(slot).count(), 0);
+        }
+    }
+
+    #[test]
+    fn constraint_order_tracks_add_and_remove() {
+        let mut skel = Skeleton::new();
+        let a = skel.add_bone(bone("a", None));
+        let t = skel.add_bone(bone("t", None));
+
+        let first = skel.add_constraint(Constraint::Ik(IkConstraint::aim("first", t, a)));
+        let second = skel.add_constraint(Constraint::Ik(IkConstraint::aim("second", t, a)));
+        assert_eq!(skel.constraint_order, vec![first, second]);
+
+        // Application order follows `constraint_order`, not slotmap order.
+        let names: Vec<&str> = skel.ordered_constraints().map(|(_, c)| c.name()).collect();
+        assert_eq!(names, vec!["first", "second"]);
+
+        skel.remove_constraint(first);
+        assert_eq!(skel.constraint_order, vec![second]);
+        assert_eq!(skel.ordered_constraints().count(), 1);
+    }
+    /// The acceptance case for T-507: a hat skin and an armor skin worn
+    /// together resolve both, and the first listed wins a conflict.
+    #[test]
+    fn composed_skins_layer_with_the_first_winning() {
+        use crate::attachment::{Attachment, ClippingAttachment};
+
+        let mut skel = Skeleton::new();
+        let bone = skel.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 1.0,
+            local_transform: Transform::default(),
+            inherit: Inherit::default(),
+            color: Bone::default_color(),
+        });
+        let head = skel.add_slot(Slot::new("head".into(), bone));
+        let torso = skel.add_slot(Slot::new("torso".into(), bone));
+        let feet = skel.add_slot(Slot::new("feet".into(), bone));
+
+        let clip = |n: f32| {
+            Attachment::Clipping(ClippingAttachment {
+                vertices: vec![glam::vec2(n, 0.0)],
+                end_slot: None,
+            })
+        };
+        let marker = |a: &Attachment| match a {
+            Attachment::Clipping(c) => c.vertices[0].x,
+            _ => -1.0,
+        };
+
+        // Base art for every slot, plus two outfits that each dress one slot —
+        // and both dress the torso, which is the conflict.
+        let default = skel.default_skin;
+        for (slot, name) in [(head, "head"), (torso, "torso"), (feet, "feet")] {
+            skel.skins[default].set(slot, name.to_string(), clip(0.0));
+        }
+        let hat = skel.add_skin(crate::skin::Skin::new("hat"));
+        skel.skins[hat].set(head, "head".to_string(), clip(1.0));
+        skel.skins[hat].set(torso, "torso".to_string(), clip(1.0));
+        let armor = skel.add_skin(crate::skin::Skin::new("armor"));
+        skel.skins[armor].set(torso, "torso".to_string(), clip(2.0));
+
+        // Hat first: it wins the torso.
+        let stack = [hat, armor];
+        assert_eq!(
+            marker(skel.resolve_many(&stack, head, "head").unwrap()),
+            1.0,
+            "the hat skin dressed the head"
+        );
+        assert_eq!(
+            marker(skel.resolve_many(&stack, torso, "torso").unwrap()),
+            1.0,
+            "first match wins the conflict"
+        );
+        assert_eq!(
+            marker(skel.resolve_many(&stack, feet, "feet").unwrap()),
+            0.0,
+            "a slot no outfit mentions falls back to the default skin"
+        );
+
+        // Reverse the priority and the armor takes the torso instead.
+        let stack = [armor, hat];
+        assert_eq!(
+            marker(skel.resolve_many(&stack, torso, "torso").unwrap()),
+            2.0
+        );
+        assert_eq!(
+            marker(skel.resolve_many(&stack, head, "head").unwrap()),
+            1.0,
+            "the hat still dresses the head; only the conflict changed"
+        );
+    }
+
+    #[test]
+    fn resolving_against_no_skins_still_finds_the_default() {
+        use crate::attachment::{Attachment, ClippingAttachment};
+
+        let mut skel = Skeleton::new();
+        let bone = skel.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 1.0,
+            local_transform: Transform::default(),
+            inherit: Inherit::default(),
+            color: Bone::default_color(),
+        });
+        let slot = skel.add_slot(Slot::new("art".into(), bone));
+        let default = skel.default_skin;
+        skel.skins[default].set(
+            slot,
+            "art".to_string(),
+            Attachment::Clipping(ClippingAttachment::default()),
+        );
+        assert!(skel.resolve_many(&[], slot, "art").is_some());
+    }
+}
+
+#[cfg(test)]
+mod posed_resolution_tests {
+    use super::*;
+    use crate::animation::{Animation, Key, Timeline};
+    use crate::attachment::{Rect, RegionAttachment};
+    use crate::math::Transform;
+    use crate::slot::Slot;
+
+    fn region(texture: &str) -> Attachment {
+        Attachment::Region(RegionAttachment {
+            texture: texture.to_string(),
+            local_offset: glam::Vec2::ZERO,
+            local_rotation: 0.0,
+            local_scale: glam::Vec2::ONE,
+            width: 10.0,
+            height: 10.0,
+            uv_rect: Rect::default(),
+            pivot: glam::Vec2::splat(0.5),
+            sequence: None,
+        })
+    }
+
+    /// An attachment timeline writes the name into the pose, never into the
+    /// skeleton. Anything that resolves off the slot shows the setup pose for the
+    /// whole clip — which is a mouth that never changes shape.
+    #[test]
+    fn resolve_posed_follows_an_attachment_timeline() {
+        let mut skel = Skeleton::new();
+        let bone = skel.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 1.0,
+            local_transform: Transform::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let slot = skel.add_slot(Slot {
+            attachment: Some("smile".into()),
+            ..Slot::new("mouth".to_string(), bone)
+        });
+        let skin = skel.default_skin;
+        skel.skins[skin].set(slot, "smile", region("smile"));
+        skel.skins[skin].set(slot, "grind", region("grind"));
+
+        let mut anim = Animation::new("portal", 3.0);
+        anim.timelines.push(Timeline::SlotAttachment {
+            slot,
+            keys: vec![Key::stepped(0.9, Some("grind".to_string()))],
+        });
+
+        let mut pose = crate::pose::Pose::new();
+        let texture =
+            |pose: &crate::pose::Pose, skel: &Skeleton| match skel.resolve_posed(&[], pose, slot) {
+                Some(Attachment::Region(r)) => r.texture.clone(),
+                _ => "none".to_string(),
+            };
+
+        // Before the first key the setup attachment stands.
+        crate::pose::evaluate(&skel, &[(&anim, 0.0, 1.0)], &mut pose);
+        assert_eq!(texture(&pose, &skel), "smile");
+
+        crate::pose::evaluate(&skel, &[(&anim, 1.5, 1.0)], &mut pose);
+        assert_eq!(texture(&pose, &skel), "grind");
+
+        // The skeleton itself never moved, which is exactly why reading it
+        // directly is wrong.
+        assert_eq!(skel.slots[slot].attachment.as_deref(), Some("smile"));
+        assert_eq!(
+            skel.resolve_slot_many(&[], slot)
+                .map(|a| matches!(a, Attachment::Region(r) if r.texture == "smile")),
+            Some(true)
+        );
+    }
+}
+
+#[cfg(test)]
+mod auto_color_tests {
+    use super::*;
+
+    fn distance(a: [f32; 4], b: [f32; 4]) -> f32 {
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    }
+
+    /// The guarantee the name-hash version could not give. Sixty-four is past
+    /// any rig this is likely to meet.
+    #[test]
+    fn every_bone_gets_a_different_colour() {
+        let colors: Vec<[f32; 4]> = (0..64).map(Bone::auto_color).collect();
+        let mut closest = f32::MAX;
+        for (i, a) in colors.iter().enumerate() {
+            for b in colors.iter().skip(i + 1) {
+                closest = closest.min(distance(*a, *b));
+            }
+        }
+        // 0.05 is the measured floor for this scheme at 64 bones, with a little
+        // room: the point of the test is to catch a change that collapses the
+        // spread, not to pin the exact constant.
+        assert!(closest > 0.05, "two bones are the same colour: {closest}");
+    }
+
+    /// Neighbours in the list are the pair most often compared — the shin and
+    /// the foot below it — so they get the widest separation of all.
+    #[test]
+    fn adjacent_bones_are_far_apart() {
+        for i in 0..32 {
+            let d = distance(Bone::auto_color(i), Bone::auto_color(i + 1));
+            assert!(d > 0.4, "bones {i} and {} are close: {d}", i + 1);
+        }
+    }
+
+    /// Fixed saturation and lightness are the point: free-running RGB produces
+    /// near-black and near-white bones, and both vanish — one into the canvas,
+    /// the other into pale artwork.
+    #[test]
+    fn colours_stay_legible() {
+        for i in 0..64 {
+            let c = Bone::auto_color(i);
+            let luma = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+            assert!(
+                (0.2..=0.9).contains(&luma),
+                "bone {i} at luma {luma}: {c:?}"
+            );
+            assert!(c.iter().take(3).all(|v| (0.0..=1.0).contains(v)), "{c:?}");
+        }
+    }
+
+    /// An explicitly coloured bone must not be mistaken for an uncoloured one,
+    /// or setting a colour to the derived value would silently do nothing.
+    #[test]
+    fn auto_colours_are_never_the_default() {
+        for i in 0..64 {
+            assert_ne!(Bone::auto_color(i), Bone::default_color(), "bone {i}");
+        }
+    }
+}
