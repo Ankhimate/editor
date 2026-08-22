@@ -172,9 +172,9 @@ image-sequence import and the hotkeys are core editor work.
 advertises nine coarse tools: open/new, describe, list verbs, run a sandboxed
 script, save, export, render a frame, and render a contact sheet. Render results
 are MCP image content, backed by the reusable `ankhimate-render` layer rather
-than protocol code. The rig stays open across calls. Native `.ankh`, Spine,
-DragonBones, and PSD all enter through the shared importer registry. The full
-render/focus contract is in [mcp.md](mcp.md).
+than protocol code. The rig stays open across calls. Native `.ankh` and PSD,
+plus installed community JavaScript formats, all enter through the shared
+importer registry. The full render/focus contract is in [mcp.md](mcp.md).
 
 A new binary over `core` + `formats` + `export` and the document operators. No
 winit, no UI thread, no `&mut AppState`.
@@ -199,9 +199,14 @@ image bytes by asset name. `ankhimate.cropImage` provides generic atlas crop and
 90-degree unrotation without exposing filesystem access. Export plugins can use
 `emitPreset` to reuse the strict Handlebars/atlas plan.
 
-Spine and DragonBones remain registered native readers until their ordinary
-`.js` replacements pass the existing behavior tests. Removing them before that
-parity proof would turn an architectural migration into silent format loss.
+The ordinary JavaScript packages under `community-plugins/` now own Spine
+import/export and DragonBones import. They pass focused behavior tests plus
+representative whole-project parity tests against the former native readers.
+Neither format is registered without its package. Editor and MCP share one
+package/resource discovery implementation, and MCP can run plugin exporters as
+well as plugin importers. The old Rust readers remain temporarily as unregistered
+test oracles while their remaining narrow fixtures are transferred; they are not
+reachable in either production registry.
 
 ## What is deliberately not on this list
 

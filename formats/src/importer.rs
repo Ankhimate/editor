@@ -191,8 +191,6 @@ impl Importers {
     pub fn builtin() -> Self {
         let mut importers = Self::new();
         importers.register(Box::new(AnkhImporter));
-        importers.register(Box::new(crate::spine::SpineImporter));
-        importers.register(Box::new(crate::dragonbones::DragonBonesImporter));
         importers.register(Box::new(crate::psd::PsdImporter));
         importers
     }
@@ -240,5 +238,19 @@ impl Importers {
             }
         }
         Err(last.unwrap_or(ImportError::NotThisFormat))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Importers;
+
+    #[test]
+    fn external_json_formats_are_not_built_in() {
+        let importers = Importers::builtin();
+        assert!(importers.get("import.ankh").is_some());
+        assert!(importers.get("import.psd").is_some());
+        assert!(importers.get("import.spine").is_none());
+        assert!(importers.get("import.dragonbones").is_none());
     }
 }

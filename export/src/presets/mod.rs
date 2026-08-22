@@ -58,7 +58,7 @@ pub const PHASER_ATLAS: &str = include_str!("phaser_atlas.json");
 /// than one that says which half.
 pub const SPINE_JSON: &str = include_str!("spine_json.json");
 
-/// Every preset shipped with the editor.
+/// Every first-party preset shipped with the editor.
 ///
 /// # Why there is no Godot preset here
 ///
@@ -72,7 +72,7 @@ pub const SPINE_JSON: &str = include_str!("spine_json.json");
 /// `.tres`, observe the output, and write a template from that. Until someone
 /// does that, a user targeting Godot has the same tool we would have used.
 pub fn builtin() -> Vec<Preset> {
-    [ANKHIMATE_RUNTIME, GENERIC_JSON, PHASER_ATLAS, SPINE_JSON]
+    [ANKHIMATE_RUNTIME, GENERIC_JSON, PHASER_ATLAS]
         .iter()
         .filter_map(|text| Preset::from_json(text).ok())
         .collect()

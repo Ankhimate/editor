@@ -4,6 +4,11 @@
 It consumes the same document verbs, importer registry, export plan, and read
 surface as the editor and plugins; it does not define a second editing API.
 
+`.ankh` and PSD are first-party importers. Spine and DragonBones appear only
+when their JavaScript packages are installed in the platform plugin directory.
+The same discovery code is used by the editor and MCP. `export_rig` accepts a
+saved/built-in preset name or an installed plugin exporter id/label.
+
 Run it with `cargo run -p ankhimate-mcp`.
 
 ## Tools

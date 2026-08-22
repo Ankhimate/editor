@@ -12,6 +12,19 @@ use ankhimate_export::run::{self, ExportError};
 use ankhimate_formats::schema::{self, Project};
 use image::{ImageFormat, Rgba, RgbaImage};
 
+fn spine_preset() -> Preset {
+    Preset::from_json(presets::SPINE_JSON).expect("the community Spine preset parses")
+}
+
+#[test]
+fn spine_is_not_a_first_party_export_preset() {
+    assert!(
+        presets::builtin()
+            .iter()
+            .all(|preset| !preset.name.starts_with("Spine JSON"))
+    );
+}
+
 fn image_bytes(size: u32) -> Vec<u8> {
     let mut img = RgbaImage::new(size, size);
     for y in 2..(size - 2) {
@@ -512,10 +525,7 @@ fn every_shipped_preset_parses_and_renders() {
 /// happily. This one reads the fields a 4.3 consumer actually branches on.
 #[test]
 fn the_spine_preset_emits_the_43_layout() {
-    let preset = presets::builtin()
-        .into_iter()
-        .find(|p| p.name.starts_with("Spine JSON"))
-        .expect("the Spine preset ships");
+    let preset = spine_preset();
     let plan = run::plan(&fixture(), &assets(), &preset).expect("the Spine preset renders");
     let file = plan
         .files
@@ -637,10 +647,7 @@ fn the_spine_preset_emits_the_43_layout() {
 /// preset writes **loose images** at the path the skeleton declares.
 #[test]
 fn the_spine_preset_writes_loose_images_where_the_skeleton_looks() {
-    let preset = presets::builtin()
-        .into_iter()
-        .find(|p| p.name.starts_with("Spine JSON"))
-        .expect("the Spine preset ships");
+    let preset = spine_preset();
     assert!(
         preset.copy_images && !preset.atlas.enabled,
         "the editor wants loose files, not a packed page"
@@ -1096,10 +1103,7 @@ fn a_rig_with_every_constraint_kind_still_renders() {
 /// Asserting on the *context* is what let a broken region size ship: the fields
 /// were present and self-consistent, and the file Spine read was still wrong.
 fn render_spine(project: &schema::Project) -> serde_json::Value {
-    let preset = presets::builtin()
-        .into_iter()
-        .find(|p| p.name.starts_with("Spine JSON"))
-        .expect("the Spine preset ships");
+    let preset = spine_preset();
     let plan = run::plan(project, &Default::default(), &preset).expect("the preset renders");
     let file = plan
         .files

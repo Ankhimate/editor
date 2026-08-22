@@ -333,8 +333,11 @@ for (const bone of rig().skeleton.bones) {
 | `ankhimate.sidecar(name)` | A text file beside the imported one |
 | `ankhimate.sidecarBytes(name)` | The same, base64, for images |
 | `ankhimate.sidecars()` | What is beside the imported file |
+| `ankhimate.resource(name)` | UTF-8 package resource beside `plugin.js` |
+| `ankhimate.resourceBytes(name)` | Package resource as base64 |
 | `ankhimate.importProject(project, images, report)` | Atomically import the complete public `.ankh` project shape |
 | `ankhimate.cropImage(base64, rect)` | Crop atlas pixels and optionally rotate the crop clockwise |
+| `ankhimate.imageInfo(base64)` | Decode image dimensions without exposing a decoder object |
 
 ### An importer is a plugin
 
@@ -367,8 +370,9 @@ command. A malformed project changes nothing; a successful import is one Setup
 mode undo step. This is not a raw document write surface.
 
 Packed-atlas importers can use `ankhimate.cropImage(bytes, { x, y, width,
-height, rotate_clockwise })`. It returns base64 PNG bytes and exposes no path or
-decoder object to the script.
+height, quarter_turns_clockwise })`; the legacy boolean `rotate_clockwise` is
+also accepted. It returns base64 PNG bytes. `ankhimate.imageInfo(bytes)` returns
+decoded width/height. Neither exposes a path or decoder object to the script.
 
 `import.report` is what keeps a plugin honest. An import that drops half a file
 quietly is worse than one that refuses, and the report survives an undo because
@@ -445,9 +449,13 @@ at all, and would stay panel-only.
 ### Sidecars are not a filesystem
 
 `ankhimate.sidecar` and `sidecarBytes` reach files in the imported rig's own
-directory and nowhere else. The host fixes the directory; only a bare file name
-comes from the script, and separators, `..`, absolute paths and drive prefixes
-are refused rather than resolved.
+directory and nowhere else. Confined relative subdirectories are allowed so a
+format can use `images/head.png`; absolute paths, parent traversal, drive
+prefixes, and symlink escapes are refused after canonical resolution.
+
+Package resources are separate: a directory named `<plugin>/plugin.js` may
+bundle templates or data beneath that directory. `resource`/`resourceBytes`
+read only that load-time map. Flat `.js` plugins have no package resources.
 
 A failed verb **throws** rather than returning nothing, so a plugin can `try`
 around it and a mistake does not continue silently over an edit that never

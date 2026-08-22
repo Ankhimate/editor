@@ -56,9 +56,9 @@ pub fn all() -> Vec<Tool> {
     vec![
         Tool {
             name: "open_rig",
-            description: "Open a rig file. Reads .ankh, Spine, DragonBones and \
-                          PSD — the format is decided by the file, not named by \
-                          the caller. Replaces whatever was open.",
+            description: "Open a rig through the shared importer registry. .ankh and PSD are \
+                          built in; installed JavaScript plugins can add formats such as Spine \
+                          and DragonBones. Replaces whatever was open.",
             schema: json!({
                 "type": "object",
                 "required": ["path"],
@@ -130,7 +130,8 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "export_rig",
-            description: "Export the open rig through a saved or built-in template preset. \
+            description: "Export through a saved/built-in template preset or an installed \
+                          JavaScript exporter. \
                           Paths rendered by the preset are confined to the output directory; \
                           the complete plan is rendered before writing and nothing is deleted.",
             schema: json!({
@@ -138,7 +139,7 @@ pub fn all() -> Vec<Tool> {
                 "required": ["output_dir"],
                 "properties": {
                     "output_dir": { "type": "string", "description": "Directory to write into" },
-                    "preset": { "type": "string", "description": "Preset name; defaults to Ankhimate runtime" }
+                    "preset": { "type": "string", "description": "Preset name, or plugin exporter id/label; defaults to Ankhimate runtime" }
                 }
             }),
         },

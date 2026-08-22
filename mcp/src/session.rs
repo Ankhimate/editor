@@ -56,9 +56,18 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// The rig a model is working on.
-#[derive(Default)]
 pub struct Session {
     open: Option<Open>,
+    plugin_dir: Option<PathBuf>,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self {
+            open: None,
+            plugin_dir: ankhimate_plugins::discovery::directory(),
+        }
+    }
 }
 
 struct Open {
@@ -73,6 +82,14 @@ struct Open {
 impl Session {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(test)]
+    fn with_plugin_dir(plugin_dir: Option<PathBuf>) -> Self {
+        Self {
+            open: None,
+            plugin_dir,
+        }
     }
 
     /// Is a rig open?
@@ -99,27 +116,26 @@ impl Session {
 
     /// Read a rig, replacing whatever was open.
     ///
-    /// Any importer will do — `.ankh`, Spine, DragonBones, PSD — because the
-    /// registry answers by extension and a model naming a file should not have
-    /// to know which reader we happen to have.
+    /// Any installed importer will do. `.ankh` and PSD are first-party;
+    /// community formats enter through the same discovered packages as the
+    /// editor.
     pub fn open_rig(&mut self, path: &Path) -> Result<(), Error> {
-        let importers = ankhimate_formats::Importers::builtin();
+        let mut importers = ankhimate_formats::Importers::builtin();
+        if let Some(dir) = &self.plugin_dir {
+            for plugin in ankhimate_plugins::discovery::load(dir) {
+                if plugin.is_loaded() {
+                    for importer in plugin.importers {
+                        importers.register(Box::new(importer));
+                    }
+                }
+            }
+        }
         let (_, loaded) = importers
             .read_any(path)
             .map_err(|e| Error::Format(format!("{}: {e}", path.display())))?;
 
         self.open = Some(Open {
-            doc: Document {
-                skeleton: loaded.skeleton,
-                animations: loaded.animations,
-                assets: loaded.assets,
-                meta: ankhimate_document::doc::DocumentMeta {
-                    name: loaded.name,
-                    fps: loaded.fps,
-                },
-                export_presets: Vec::new(),
-                psd_layer_paths: loaded.psd_layer_paths,
-            },
+            doc: Document::from_loaded(loaded),
             source: Some(path.to_path_buf()),
         });
         Ok(())
@@ -152,12 +168,40 @@ impl Session {
             .map_err(|e| Error::Io(format!("{}: {e}", path.display())))
     }
 
-    /// Export the open rig with a saved or built-in template preset.
+    /// Export with a saved/built-in preset or discovered JavaScript exporter.
     pub fn export_rig(
-        &self,
+        &mut self,
         output_dir: &Path,
         preset_name: Option<&str>,
     ) -> Result<ankhimate_export::run::Survey, Error> {
+        if let Some(name) = preset_name
+            && let Some(exporter) = self
+                .plugin_dir
+                .as_deref()
+                .into_iter()
+                .flat_map(ankhimate_plugins::discovery::load)
+                .filter(|plugin| plugin.is_loaded())
+                .flat_map(|plugin| plugin.exporters)
+                .find(|exporter| exporter.id == name || exporter.label == name)
+        {
+            let open = self.open.as_mut().ok_or(Error::NothingOpen)?;
+            let doc = std::mem::take(&mut open.doc);
+            let plan = match exporter.plan(doc) {
+                Ok((plan, doc)) => {
+                    open.doc = doc;
+                    plan
+                }
+                Err((error, doc)) => {
+                    open.doc = doc;
+                    return Err(Error::Export(error.to_string()));
+                }
+            };
+            let survey = plan.survey(output_dir);
+            ankhimate_export::run::write(&plan, output_dir)
+                .map_err(|error| Error::Export(error.to_string()))?;
+            return Ok(survey);
+        }
+
         let doc = self.doc()?;
         let mut presets = doc.presets();
         presets.extend(ankhimate_export::presets::builtin());
@@ -357,5 +401,66 @@ mod tests {
         opened.open_rig(&path).expect("read back");
         assert_eq!(opened.doc().unwrap().skeleton.bones.len(), 1);
         assert!(opened.summary().unwrap().contains("1 bones"));
+    }
+
+    #[test]
+    fn mcp_discovers_the_same_javascript_importer_packages_as_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("toy.js"),
+            r#"
+            ankhimate.registerImporter({
+              id: "import.toy", label: "Toy", extensions: ["toy"],
+              read(text, fileName) {
+                ankhimate.importProject({
+                  version: 3, name: JSON.parse(text).name, fps: 30,
+                  assets: [], bones: [{ name: "root", length: 1 }], slots: [],
+                  draw_order: [], skins: [{ name: "default", entries: [] }],
+                  default_skin: "default", constraints: [], constraint_order: [], animations: []
+                });
+              }
+            });
+            "#,
+        )
+        .unwrap();
+        let rig = dir.path().join("hero.toy");
+        std::fs::write(&rig, r#"{"name":"from plugin"}"#).unwrap();
+
+        let mut session = Session::with_plugin_dir(Some(dir.path().to_path_buf()));
+        session
+            .open_rig(&rig)
+            .expect("community importer reached MCP");
+        assert_eq!(session.doc().unwrap().meta.name, "from plugin");
+        assert_eq!(session.doc().unwrap().skeleton.bones.len(), 1);
+    }
+
+    #[test]
+    fn mcp_exports_through_a_discovered_javascript_exporter() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("toy.js"),
+            r#"
+            ankhimate.registerExporter({
+              id: "export.toy", label: "Toy Format",
+              write() { emit("rig.txt", rig().project.name); }
+            });
+            "#,
+        )
+        .unwrap();
+        let output = dir.path().join("out");
+        std::fs::create_dir(&output).unwrap();
+
+        let mut session = Session::with_plugin_dir(Some(dir.path().to_path_buf()));
+        session.new_rig("from plugin");
+        let survey = session
+            .export_rig(&output, Some("export.toy"))
+            .expect("community exporter reached MCP");
+
+        assert_eq!(
+            std::fs::read_to_string(output.join("rig.txt")).unwrap(),
+            "from plugin"
+        );
+        assert_eq!(survey.created, [std::path::PathBuf::from("rig.txt")]);
+        assert_eq!(session.doc().unwrap().meta.name, "from plugin");
     }
 }

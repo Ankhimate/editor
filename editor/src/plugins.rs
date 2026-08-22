@@ -6,11 +6,9 @@
 //!
 //! # Where plugins live
 //!
-//! `<config>/plugins/*.js`, beside `config.json`. One file per plugin, read at
-//! startup. A directory rather than a manifest because a plugin is one file and
-//! a manifest would be a second thing to keep in step with it; a flat listing
-//! rather than a recursive walk because a plugin that needs a folder of its own
-//! needs more than this loader gives it.
+//! `<config>/plugins/*.js` and `<config>/plugins/<name>/plugin.js`, beside
+//! `config.json`. Packages may carry resources beside `plugin.js`; the
+//! sandbox exposes those bytes but still exposes no arbitrary filesystem.
 //!
 //! # When they are read
 //!
@@ -25,34 +23,8 @@
 //! plugin silently missing is somebody's afternoon; the same plugin listed as
 //! "failed: unexpected token at line 4" is a fix.
 
-use ankhimate_plugins::Host;
-use ankhimate_plugins::panel::PanelSpec;
+pub use ankhimate_plugins::discovery::Plugin;
 use std::path::{Path, PathBuf};
-
-/// One plugin file, and what it declared.
-pub struct Plugin {
-    /// The file it was read from.
-    pub path: PathBuf,
-    /// Its file stem, for the UI.
-    pub name: String,
-    /// The script, kept so its importers, exporters and panels can run.
-    pub source: String,
-    /// Panels it contributes.
-    pub panels: Vec<PanelSpec>,
-    /// Importers it contributes.
-    pub importers: Vec<ankhimate_plugins::importer::JsImporter>,
-    /// Exporters it contributes.
-    pub exporters: Vec<ankhimate_plugins::exporter::JsExporter>,
-    /// Why it did not load, if it did not. `Some` means the rest is empty.
-    pub error: Option<String>,
-}
-
-impl Plugin {
-    /// Did this one load?
-    pub fn is_loaded(&self) -> bool {
-        self.error.is_none()
-    }
-}
 
 /// Every plugin the editor knows about.
 #[derive(Default)]
@@ -61,34 +33,20 @@ pub struct Plugins {
 }
 
 impl Plugins {
-    /// Read every `*.js` in the plugin directory.
+    /// Read every flat `*.js` plugin and `<name>/plugin.js` package.
     ///
     /// A missing directory is not an error: most users have no plugins, and
     /// creating the folder just to leave it empty is noise in their config
     /// directory.
     pub fn load(dir: &Path) -> Self {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return Self::default();
-        };
-
-        let mut files: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("js"))
-            .collect();
-        // Sorted, so a shadowing plugin resolves the same way on every machine.
-        // Directory order is not a contract and differs between filesystems.
-        files.sort();
-
         Self {
-            loaded: files.iter().map(|path| read_one(path)).collect(),
+            loaded: ankhimate_plugins::discovery::load(dir),
         }
     }
 
     /// The directory plugins are read from, beside `config.json`.
     pub fn directory() -> Option<PathBuf> {
-        directories::ProjectDirs::from("", "", "ankhimate")
-            .map(|dirs| dirs.config_dir().join("plugins"))
+        ankhimate_plugins::discovery::directory()
     }
 
     /// Every panel any loaded plugin contributes, as `(id, title)`.
@@ -167,55 +125,6 @@ impl Plugins {
 /// kind at a time — a cost of three script evaluations per plugin at startup,
 /// which is nothing against reading the file at all, and the alternative is a
 /// combined entry point whose only caller is this function.
-fn read_one(path: &Path) -> Plugin {
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("plugin")
-        .to_string();
-
-    let source = match std::fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(e) => {
-            return Plugin {
-                path: path.to_path_buf(),
-                name,
-                source: String::new(),
-                panels: Vec::new(),
-                importers: Vec::new(),
-                exporters: Vec::new(),
-                error: Some(format!("could not be read: {e}")),
-            };
-        }
-    };
-
-    let host = Host::new();
-    let panels = host.panels(&source);
-    let importers = host.importers(&source);
-    let exporters = host.exporters(&source);
-
-    // One failure fails the file. A plugin whose panel registration threw has
-    // not necessarily broken its importer, but running half a plugin is how a
-    // user ends up with a format that reads and a panel that does not, with
-    // nothing saying the two came from the same broken file.
-    let error = panels
-        .as_ref()
-        .err()
-        .or(importers.as_ref().err())
-        .or(exporters.as_ref().err())
-        .map(|e| e.to_string());
-
-    Plugin {
-        path: path.to_path_buf(),
-        name,
-        source,
-        panels: panels.unwrap_or_default(),
-        importers: importers.unwrap_or_default(),
-        exporters: exporters.unwrap_or_default(),
-        error,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +232,29 @@ mod tests {
         let plugins = Plugins::load(dir.path());
         assert_eq!(plugins.loaded.len(), 1);
         assert_eq!(plugins.loaded[0].name, "real");
+    }
+
+    #[test]
+    fn a_plugin_package_can_read_its_own_resources() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("format");
+        std::fs::create_dir(&package).unwrap();
+        write(
+            &package,
+            "plugin.js",
+            r#"if (ankhimate.resource("preset.json") !== "{\"ok\":true}")
+                 throw new Error("resource missing");"#,
+        );
+        write(&package, "preset.json", r#"{"ok":true}"#);
+
+        let plugins = Plugins::load(dir.path());
+        assert_eq!(plugins.loaded.len(), 1);
+        assert_eq!(plugins.loaded[0].name, "format");
+        assert!(
+            plugins.loaded[0].is_loaded(),
+            "{:?}",
+            plugins.loaded[0].error
+        );
     }
 
     #[test]

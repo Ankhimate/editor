@@ -1,10 +1,9 @@
 //! Importers written in JavaScript.
 //!
 //! The founding requirement: the list of rig formats does not close, so the
-//! deliverable is the engine for writing readers rather than the readers
-//! (`docs/plugin-plan.md`). A Rust plugin could already register an
-//! [`Importer`](ankhimate_formats::Importer); this is the same door for a `.js`
-//! file.
+//! deliverable is the engine for writing readers rather than a closed reader
+//! list (`docs/plugin-plan.md`). Discovered `.js` files register through the
+//! same format registry used by first-party importers.
 //!
 //! # A JS importer builds a rig by calling verbs
 //!
@@ -51,9 +50,8 @@ use std::path::{Path, PathBuf};
 
 /// The files a JS importer may open: those beside the one being imported.
 ///
-/// Scoped by construction rather than by checking, so there is no path a caller
-/// can spell that reaches outside. The directory is fixed at construction and
-/// only the file *name* comes from the script.
+/// The directory is fixed at construction. Relative subdirectories are allowed,
+/// but the canonical resolved target must remain beneath that directory.
 pub struct Sidecars {
     dir: PathBuf,
 }
@@ -63,17 +61,11 @@ impl Sidecars {
         Self { dir: dir.into() }
     }
 
-    /// Read a file beside the imported one, by name.
+    /// Read a file beside the imported one, by confined relative path.
     ///
-    /// A name with a separator or a parent segment in it returns `None` rather
-    /// than escaping: the whole point is that a plugin reaches its own sidecars
-    /// and nothing else, and rejecting is cheaper to reason about than
-    /// canonicalising and comparing.
+    /// Absolute paths, parent traversal and symlink escapes return `None`.
     pub fn read(&self, name: &str) -> Option<String> {
-        if !is_plain_name(name) {
-            return None;
-        }
-        std::fs::read_to_string(self.dir.join(name)).ok()
+        std::fs::read_to_string(confined(&self.dir, name)?).ok()
     }
 
     /// Read a binary sidecar, base64-encoded for the script.
@@ -83,10 +75,7 @@ impl Sidecars {
     /// the failure mode of a byte channel is a silently truncated image, and
     /// base64 either decodes or does not.
     pub fn read_bytes(&self, name: &str) -> Option<String> {
-        if !is_plain_name(name) {
-            return None;
-        }
-        let bytes = std::fs::read(self.dir.join(name)).ok()?;
+        let bytes = std::fs::read(confined(&self.dir, name)?).ok()?;
         Some(encode_base64(&bytes))
     }
 
@@ -116,13 +105,21 @@ impl Sidecars {
 /// prefixes. A plugin naming `sub/thing.png` is refused rather than resolved —
 /// no shipped format needs it, and allowing it would mean reasoning about
 /// symlinks.
-fn is_plain_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains(':')
-        && name != ".."
-        && name != "."
+fn confined(root: &Path, name: &str) -> Option<PathBuf> {
+    if name.is_empty() {
+        return None;
+    }
+    let relative = Path::new(name);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    let root = root.canonicalize().ok()?;
+    let candidate = root.join(relative).canonicalize().ok()?;
+    candidate.starts_with(&root).then_some(candidate)
 }
 
 /// A rig format described by a script.
@@ -142,6 +139,7 @@ pub struct JsImporter {
     /// cannot outlive its runtime, and the host deliberately builds a fresh
     /// runtime per run so a plugin cannot hold state across an undo.
     pub source: String,
+    pub resources: std::sync::Arc<std::collections::BTreeMap<String, Vec<u8>>>,
 }
 
 impl JsImporter {
@@ -156,15 +154,18 @@ impl JsImporter {
             .unwrap_or_default()
             .to_string();
 
-        let host = crate::Host::new().with_sidecars(Sidecars::new(dir));
+        let host = crate::Host::new()
+            .with_resources((*self.resources).clone())
+            .with_sidecars(Sidecars::new(dir));
         let mut edit = Edit::default();
 
         // The registration runs again here so the same script defines the
         // importer and performs the read; a plugin file is therefore one thing
         // rather than a registration and a separate body to keep in step.
         let script = format!(
-            "{}\n__ankhimate_run_import({}, {});",
+            "{}\n__ankhimate_run_import({}, {}, {});",
             self.source,
+            serde_json::Value::String(self.id.clone()),
             serde_json::Value::String(text),
             serde_json::Value::String(file_name),
         );
@@ -211,7 +212,11 @@ impl ankhimate_formats::importer::Importer for JsImporter {
         let edit = JsImporter::read(self, path).map_err(|e| {
             // A plugin's own message, not "the import failed". The author threw
             // it deliberately and the user is the one who has to act on it.
-            ImportError::Malformed(e.to_string())
+            if e.to_string().contains("__ANKHIMATE_NOT_THIS_FORMAT__") {
+                ImportError::NotThisFormat
+            } else {
+                ImportError::Malformed(e.to_string())
+            }
         })?;
         Ok(as_loaded(edit, path))
     }
@@ -224,11 +229,14 @@ impl ankhimate_formats::importer::Importer for JsImporter {
 /// here is the two things a script has no way to know — the file's own name, and
 /// that its approximations are import loss rather than editing history.
 fn as_loaded(edit: Edit, path: &std::path::Path) -> Loaded {
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("imported")
-        .to_string();
+    let name = if edit.doc.meta.name.is_empty() || edit.doc.meta.name == "untitled" {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("imported")
+            .to_string()
+    } else {
+        edit.doc.meta.name.clone()
+    };
 
     let mut report = ankhimate_formats::convert::LoadReport::default();
     report.dangling = edit
@@ -258,7 +266,7 @@ fn as_loaded(edit: Edit, path: &std::path::Path) -> Loaded {
         assets: edit.doc.assets,
         name,
         fps: edit.doc.meta.fps,
-        export_presets: Vec::new(),
+        export_presets: edit.doc.export_presets,
         psd_layer_paths: edit.doc.psd_layer_paths,
         report,
     }
@@ -276,6 +284,18 @@ mod tests {
         let sidecars = Sidecars::new(dir.path());
         assert_eq!(sidecars.read("rig_tex.json").as_deref(), Some("{}"));
         assert!(sidecars.list().iter().any(|n| n == "rig_tex.json"));
+    }
+
+    #[test]
+    fn a_sidecar_can_read_a_confined_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("images")).unwrap();
+        std::fs::write(dir.path().join("images").join("arm.png"), b"pixels").unwrap();
+
+        let encoded = Sidecars::new(dir.path())
+            .read_bytes("images/arm.png")
+            .expect("confined child");
+        assert_eq!(decode_for_test(&encoded), b"pixels");
     }
 
     #[test]
@@ -309,6 +329,26 @@ mod tests {
         // An importer asking whether an atlas is there should be able to ask.
         let dir = tempfile::tempdir().unwrap();
         assert!(Sidecars::new(dir.path()).read("nothing.json").is_none());
+    }
+
+    fn decode_for_test(text: &str) -> Vec<u8> {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = Vec::new();
+        let mut buffer = 0u32;
+        let mut bits = 0;
+        for byte in text.bytes().filter(|byte| *byte != b'=') {
+            let value = ALPHABET
+                .iter()
+                .position(|candidate| *candidate == byte)
+                .unwrap() as u32;
+            buffer = (buffer << 6) | value;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((buffer >> bits) as u8);
+            }
+        }
+        out
     }
 }
 

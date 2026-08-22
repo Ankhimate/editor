@@ -1243,8 +1243,8 @@ registries, and one panel action is one editor undo step.
   `export_rig`, `render_frame`, and `render_contact_sheet`.
 - The transport uses the official Rust MCP SDK over stdio; tool definitions are
   adapted from the transport-free catalogue rather than duplicated.
-- Native `.ankh` is registered beside Spine, DragonBones, and PSD, so save/open
-  round trips use the same format registry as every other caller.
+- Native `.ankh` and PSD are registered first-party; installed JavaScript
+  packages add foreign formats through the same registry used by the editor.
 - Saving over the opened source is refused. Export uses the existing confined,
   all-or-nothing, never-delete plan.
 **Accept:** the stdio initialize + `tools/list` exchange succeeds; a rig can be
@@ -1270,6 +1270,15 @@ deliberate omissions.
 entries; full-schema fixtures preserve constraints, curves, weighted meshes,
 deform and atlas artwork; without the plugins those foreign formats are absent;
 the editor and MCP use the same discovered plugin set.
+
+Spine import/export and DragonBones import now ship as ordinary sandboxed
+QuickJS packages under `community-plugins/`. Package resources carry the Spine
+template; sidecars remain confined to the imported rig directory. The native
+registry and first-party preset list no longer expose either foreign format.
+MCP discovers the same packages and can invoke their importers and exporters.
+The former Rust readers are retained only as unregistered parity oracles until
+their remaining narrow tests have been transferred; deleting those files is a
+follow-up cleanup, not production behavior.
 
 ## Dependency overview
 

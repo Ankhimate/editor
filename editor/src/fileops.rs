@@ -221,6 +221,12 @@ mod tests {
         }
     }
 
+    fn community_plugins() -> crate::plugins::Plugins {
+        crate::plugins::Plugins::load(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../community-plugins"),
+        )
+    }
+
     /// Drives the exact code path the File menu triggers — command → document →
     /// `write_to` → `open_path` into a fresh state — minus the OS dialog. Proves
     /// the editor's save/load wiring, not just the `formats` crate in isolation.
@@ -374,12 +380,7 @@ mod tests {
         state.dispatch(Box::new(CreateBone::new(bone("leftover"))));
         let before = state.revision;
 
-        let outcome = import_path_with(
-            &mut state,
-            &crate::plugins::Plugins::default(),
-            "import.spine",
-            &path,
-        );
+        let outcome = import_path_with(&mut state, &community_plugins(), "import.spine", &path);
         assert!(
             matches!(outcome, FileOutcome::Imported { .. }),
             "expected an import outcome"
@@ -418,12 +419,9 @@ mod tests {
         std::fs::write(&path, rig).unwrap();
 
         let mut state = AppState::default();
-        let FileOutcome::Imported { report, .. } = import_path_with(
-            &mut state,
-            &crate::plugins::Plugins::default(),
-            "import.spine",
-            &path,
-        ) else {
+        let FileOutcome::Imported { report, .. } =
+            import_path_with(&mut state, &community_plugins(), "import.spine", &path)
+        else {
             panic!("a rig without images still imports");
         };
         assert!(state.doc.skeleton.bones.values().any(|b| b.name == "arm"));
@@ -472,7 +470,7 @@ mod tests {
 
         let outcome = import_path_with(
             &mut state,
-            &crate::plugins::Plugins::default(),
+            &community_plugins(),
             "import.dragonbones",
             &path,
         );
@@ -512,7 +510,7 @@ mod tests {
         let mut state = AppState::default();
         import_path_with(
             &mut state,
-            &crate::plugins::Plugins::default(),
+            &community_plugins(),
             "import.dragonbones",
             &path,
         );
@@ -535,7 +533,7 @@ mod tests {
 
         let outcome = import_path_with(
             &mut state,
-            &crate::plugins::Plugins::default(),
+            &community_plugins(),
             "import.dragonbones",
             &path,
         );
@@ -561,12 +559,7 @@ mod tests {
         state.dispatch(Box::new(CreateBone::new(bone("keep-me"))));
         let before = state.revision;
 
-        let outcome = import_path_with(
-            &mut state,
-            &crate::plugins::Plugins::default(),
-            "import.spine",
-            &path,
-        );
+        let outcome = import_path_with(&mut state, &community_plugins(), "import.spine", &path);
         assert!(matches!(outcome, FileOutcome::Error(_)));
         assert!(
             state
