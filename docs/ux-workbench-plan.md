@@ -91,6 +91,47 @@ Keep the bundled UI sans for labels, tabular monospace for frames and numeric
 values, and Lucide for semantic actions. Animation software benefits from dense,
 square work surfaces; avoid decorative cards, gradients, and excessive rounding.
 
+### Motion and icon language
+
+The interface should feel animated because it is an animation tool, but motion
+must explain a state change rather than decorate it. Use one shared motion system
+instead of allowing each panel to invent timing and easing:
+
+- `Instant` — pointer-driven transforms, scrubbing, key dragging, painting,
+  resizing, docking previews, and playback controls track input with no easing.
+- `Quick` — 80–120 ms for hover, press, selection, toggle, and focus feedback.
+- `Shift` — 120–160 ms for tab changes, panel content replacement, hierarchy
+  expansion, and Setup/Animate context changes; use a restrained fade with at
+  most 4 px of directional movement.
+- `Enter` — 160–200 ms for dialogs, popovers, command palette, diagnostics, and
+  recovery prompts; combine opacity with a subtle 0.98→1 scale. Closing should
+  be slightly faster than opening.
+- Animations are interruptible and begin from the currently rendered value, so
+  rapid actions never queue or jump.
+- A `Reduced motion` setting disables translation and scale, shortens fades,
+  and follows the operating-system preference when it is available.
+- UI time and animation state stay in `editor`; they never enter the document,
+  undo history, saved format, `core::evaluate()`, render output, plugins, or MCP.
+
+Icons should also carry stable semantic color, as they do in mature animation
+tools. Extend the theme with named icon roles rather than coloring buttons
+individually:
+
+- bones/rigging, slots/attachments, constraints, meshes/weights, events, draw
+  order, and export/plugin actions each receive a recognizable family color;
+- transform and timeline icons reuse the existing translate, rotate, scale,
+  shear, and event channel tokens;
+- neutral navigation stays zinc, the current/primary action uses brand ink,
+  warnings use amber, and destructive actions use red;
+- active state changes brightness, background, outline, or shape in addition to
+  color, so colorblind users and monochrome themes keep the same information;
+- icons keep the same meaning and color across toolbar, hierarchy, inspector,
+  timeline, command palette, menus, and plugin panels.
+
+The intended result is a restrained colored instrument panel, not a rainbow:
+color identifies systems at a glance, while motion makes cause and effect easy
+to follow.
+
 ## Roadmap
 
 ### W0 — Baseline and usability harness
@@ -134,6 +175,30 @@ This is the highest-value package because every editing mode benefits from it.
 **Exit:** switching between setup and animation never leaves stale or
 contradictory context; changing clips takes one gesture; the selected entity is
 identifiable in every visible surface.
+
+### W1a — Motion and semantic icon language
+
+- Add a centralized `editor` motion helper exposing the `Instant`, `Quick`,
+  `Shift`, and `Enter` roles above; widgets request a role instead of embedding
+  durations and easing curves.
+- Animate modal/popover entry and exit, tab and workspace changes, collapsible
+  sections, hierarchy expansion, selection/focus feedback, toasts, and relevant
+  panel-content replacement.
+- Never interpolate document values or delay direct-manipulation feedback.
+- Add reduced-motion configuration, operating-system preference detection where
+  the platform exposes it, and a debug switch that slows UI motion for review.
+- Extend theme files with semantic icon roles and audit every icon-bearing
+  surface for consistent color, tooltip, disabled, hover, active, warning, and
+  destructive states.
+- Give plugin-declared actions semantic roles from a closed host vocabulary;
+  plugins do not submit arbitrary paint code or unreadable colors.
+- Add visual regression states for modal opening, active tools, disabled actions,
+  selected hierarchy rows, warnings, and reduced motion.
+
+**Exit:** opening a modal, changing a tab, or expanding a tree branch has clear,
+interruptible feedback; direct manipulation remains frame-immediate; disabling
+motion removes translation/scale effects; the same entity/action category uses
+the same icon role everywhere.
 
 ### W2 — Hierarchy and asset workflow
 
@@ -349,7 +414,7 @@ editor's implementation language.
 
 | Priority | Work | Why now |
 |---|---|---|
-| P0 | W0, W1, W2, W3 | Removes the daily friction visible in the comparison and stabilizes selection/context semantics |
+| P0 | W0, W1, W1a, W2, W3 | Removes the daily friction visible in the comparison and stabilizes selection/context semantics |
 | P1 | W4, W5, W6 | Completes professional animation and production-readiness workflows |
 | P1 | A1, A4, A5 | Mostly builds on capabilities already present and makes them discoverable |
 | P2 | A3 | High-value precision features that can land independently |
@@ -369,6 +434,10 @@ The following gates define the outcome:
   least 30% fewer gestures where W1–W3 target them.
 - Active mode, clip, selection, tool, and frame never disagree across visible
   surfaces.
+- Modal, panel, tab, hierarchy, and selection transitions use the shared motion
+  roles; direct manipulation has no animation lag; reduced motion is honored.
+- Semantic icon colors remain consistent across surfaces and every colored state
+  is also distinguishable by shape, outline, brightness, label, or tooltip.
 - Import-and-attach and hierarchy reordering each take one direct drag after the
   source is available.
 - Timeline scrolling holds 60 fps at 300 rows; the documented 500-bone
