@@ -1,11 +1,11 @@
 //! Export an `.ankh` through a shipped preset, headlessly.
 //!
 //! For checking a preset against a **real rig** rather than a test fixture: the
-//! Spine preset shipped broken twice because the fixture had no track shape that
-//! triggered the defect. A rig on disk does.
+//! A preset can pass fixtures while failing on a real rig, so this keeps a
+//! manual file-on-disk check available.
 //!
 //! ```text
-//! cargo run -p ankhimate-export --example export_once -- samples/spineboy.ankh out/ "Spine JSON"
+//! cargo run -p ankhimate-export --example export_once -- samples/hero.ankh out/ "Generic JSON"
 //! ```
 
 use ankhimate_export::{presets, run};
@@ -16,7 +16,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let input = args.next().unwrap_or_else(|| usage());
     let output = args.next().unwrap_or_else(|| usage());
-    let wanted = args.next().unwrap_or_else(|| "Spine JSON".into());
+    let wanted = args.next().unwrap_or_else(|| "Generic JSON".into());
 
     let (loaded, _) = ankhimate_formats::load(Path::new(&input))
         .unwrap_or_else(|e| panic!("could not read '{input}': {e}"));

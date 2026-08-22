@@ -187,6 +187,12 @@ code; for the dirty working tree, trust `git status`, tests, and this handoff.
 `docs/plugin-api.md` and `docs/plugin-plan.md` now record the completed plugin
 UI and MCP consumers.
 
+Spine import/export and DragonBones import are ordinary sandboxed packages in
+`community-plugins/`. They are not built in: installing the package restores its
+registry entries in both editor and MCP. The former Rust parser modules and the
+first-party Spine preset copy were removed; format regressions now execute the
+JavaScript packages.
+
 ### MCP server
 
 The MCP implementation is complete:
@@ -206,8 +212,9 @@ The MCP implementation is complete:
 - native `.ankh` is now registered in `Importers::builtin()`, fixing registry
   save/reopen round trips.
 
-Current proof: all 20 `ankhimate-mcp` tests and all five `ankhimate-render`
-tests pass. A real stdio initialize/initialized/`tools/list` + `tools/call`
+Current proof: all 22 `ankhimate-mcp` tests, all five `ankhimate-render` tests,
+and the community format suites pass. A real stdio
+initialize/initialized/`tools/list` + `tools/call`
 exchange advertises all nine tools and returns valid `image/png` content from
 `render_frame`. The full workspace test and clippy commands exit successfully;
 clippy still reports pre-existing warnings outside `render`/`mcp`.

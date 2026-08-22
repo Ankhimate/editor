@@ -1,4 +1,4 @@
-//! Reading Spine JSON (T-6xx).
+//! Reading Spine JSON through the community JavaScript package.
 //!
 //! These pin the decisions an importer makes that a caller cannot see: which
 //! field name a version uses, what happens to a curve this model cannot hold,
@@ -6,7 +6,47 @@
 //! *reported* rather than dropped. A silent drop is the expensive kind: the rig
 //! opens, looks right, and plays back wrong.
 
-use ankhimate_formats::spine::{self, Images};
+mod spine {
+    use ankhimate_formats::Importer;
+
+    pub enum Images {
+        None,
+    }
+
+    pub fn read(
+        json: &str,
+        _images: Images,
+        name: &str,
+    ) -> Result<ankhimate_formats::Loaded, String> {
+        let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let path = dir.path().join(format!("{name}.json"));
+        std::fs::write(&path, json).map_err(|error| error.to_string())?;
+        let source = include_str!("../../community-plugins/spine/plugin.js");
+        let resources = std::collections::BTreeMap::from([(
+            "spine_json.json".to_string(),
+            include_bytes!("../../community-plugins/spine/spine_json.json").to_vec(),
+        )]);
+        let importer = ankhimate_plugins::Host::new()
+            .with_resources(resources)
+            .importers(source)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|importer| importer.id == "import.spine")
+            .ok_or_else(|| "Spine importer was not registered".to_string())?;
+        Importer::read(&importer, &path).map_err(|error| error.to_string())
+    }
+
+    pub fn declared_version(json: &str) -> Option<String> {
+        serde_json::from_str::<serde_json::Value>(json)
+            .ok()?
+            .get("skeleton")?
+            .get("spine")?
+            .as_str()
+            .map(str::to_string)
+    }
+}
+
+use spine::Images;
 
 /// A minimal 4.x skeleton: two bones, one transform constraint, one animation.
 fn skeleton_4x() -> String {

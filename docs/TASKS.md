@@ -1257,7 +1257,7 @@ automatic framing and per-call focus/diagnostics, and never mutate document or
 session selection state. See [MCP server](mcp.md) for the focus contract and
 deliberate omissions.
 
-### T-1003 Move foreign formats to community JavaScript plugins
+### ✅ T-1003 Move foreign formats to community JavaScript plugins
 **Deps:** T-1001 · **Refs:** [plugin plan](plugin-plan.md), [plugin API](plugin-api.md)
 - The complete name-keyed project schema can be imported atomically through
   `ankhimate.importProject`; image bytes and structured diagnostics cross with it.
@@ -1276,9 +1276,10 @@ QuickJS packages under `community-plugins/`. Package resources carry the Spine
 template; sidecars remain confined to the imported rig directory. The native
 registry and first-party preset list no longer expose either foreign format.
 MCP discovers the same packages and can invoke their importers and exporters.
-The former Rust readers are retained only as unregistered parity oracles until
-their remaining narrow tests have been transferred; deleting those files is a
-follow-up cleanup, not production behavior.
+The former Rust parser modules and native-only examples are removed. The Spine
+regression suite now executes the JS importer, and focused DragonBones tests pin
+its defaults, timing, visibility, nested armatures, IK, meshes, diagnostics, and
+representative whole-project conversion.
 
 ## Dependency overview
 

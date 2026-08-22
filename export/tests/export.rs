@@ -13,7 +13,10 @@ use ankhimate_formats::schema::{self, Project};
 use image::{ImageFormat, Rgba, RgbaImage};
 
 fn spine_preset() -> Preset {
-    Preset::from_json(presets::SPINE_JSON).expect("the community Spine preset parses")
+    Preset::from_json(include_str!(
+        "../../community-plugins/spine/spine_json.json"
+    ))
+    .expect("the community Spine preset parses")
 }
 
 #[test]

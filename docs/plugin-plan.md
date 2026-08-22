@@ -200,13 +200,12 @@ image bytes by asset name. `ankhimate.cropImage` provides generic atlas crop and
 `emitPreset` to reuse the strict Handlebars/atlas plan.
 
 The ordinary JavaScript packages under `community-plugins/` now own Spine
-import/export and DragonBones import. They pass focused behavior tests plus
-representative whole-project parity tests against the former native readers.
-Neither format is registered without its package. Editor and MCP share one
-package/resource discovery implementation, and MCP can run plugin exporters as
-well as plugin importers. The old Rust readers remain temporarily as unregistered
-test oracles while their remaining narrow fixtures are transferred; they are not
-reachable in either production registry.
+import/export and DragonBones import. The former native Spine regression suite
+now runs against the JS package, with focused DragonBones package regressions
+covering its format decisions. Neither format is registered without its package.
+Editor and MCP share one package/resource discovery implementation, and MCP can
+run plugin exporters as well as plugin importers. The Rust parser modules and
+the first-party copy of the Spine preset have been removed.
 
 ## What is deliberately not on this list
 
