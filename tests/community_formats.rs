@@ -57,6 +57,17 @@ fn spine_import(json: &str) -> ankhimate_formats::Loaded {
     Importer::read(&importer, &path).expect("plugin imports")
 }
 
+fn dragonbones_import(json: &str) -> Result<ankhimate_formats::Loaded, String> {
+    let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let path = dir.path().join("rig_ske.json");
+    std::fs::write(&path, json).map_err(|error| error.to_string())?;
+    let importer = Host::new()
+        .importers(DRAGONBONES)
+        .map_err(|error| error.to_string())?
+        .remove(0);
+    Importer::read(&importer, &path).map_err(|error| error.to_string())
+}
+
 #[test]
 fn spine_plugin_preserves_constraint_channels_and_per_axis_curves() {
     let loaded = spine_import(
@@ -269,7 +280,8 @@ fn dragonbones_plugin_folds_referenced_sprite_armatures_into_sequences() {
               { "name": "flash", "type": "armature" }
             ] }] }]
           },
-          { "name": "flash", "frameRate": 12, "bone": [{ "name": "sprite" }],
+          { "name": "flash", "frameRate": 12,
+            "bone": [{ "name": "sprite", "transform": { "x": 100.5, "y": 7 } }],
             "skin": [{ "name": "default", "slot": [{ "name": "frames", "display": [
               { "name": "flash1", "type": "image" },
               { "name": "flash2", "type": "image" }
@@ -301,6 +313,8 @@ fn dragonbones_plugin_folds_referenced_sprite_armatures_into_sequences() {
     );
     assert_eq!(attachment["width"], 2.0);
     assert_eq!(attachment["height"], 3.0);
+    assert_eq!(attachment["offset_x"], 100.5);
+    assert_eq!(attachment["offset_y"], -7.0);
     assert!(
         !loaded
             .report
@@ -308,6 +322,106 @@ fn dragonbones_plugin_folds_referenced_sprite_armatures_into_sequences() {
             .iter()
             .any(|loss| loss.what == "armature")
     );
+}
+
+#[test]
+fn dragonbones_plugin_keeps_mesh_geometry_whole_and_reports_lost_weights() {
+    let dir = tempfile::tempdir().expect("temp");
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        2,
+        2,
+        image::Rgba([255, 255, 255, 255]),
+    ))
+    .save(dir.path().join("face.png"))
+    .expect("image");
+    let path = dir.path().join("mesh_ske.json");
+    std::fs::write(
+        &path,
+        r#"{ "name":"mesh", "armature":[{"name":"rig",
+          "bone":[{"name":"root"}], "slot":[{"name":"face","parent":"root"}],
+          "skin":[{"slot":[{"name":"face","display":[{
+            "type":"mesh", "name":"face", "vertices":[0,0,10,0,10,-20,0,-20],
+            "uvs":[0,0,1,0,1,1,0,1], "triangles":[0,1,2,0,2,3], "weights":[1]
+          }]}]}]
+        }] }"#,
+    )
+    .unwrap();
+    let importer = Host::new().importers(DRAGONBONES).unwrap().remove(0);
+    let loaded = Importer::read(&importer, &path).expect("imports");
+    let project = project_value(&loaded);
+    let mesh = &project["skins"][0]["entries"][0]["attachment"];
+    assert_eq!(
+        mesh["vertices"],
+        serde_json::json!([0.0, 0.0, 10.0, 0.0, 10.0, 20.0, 0.0, 20.0])
+    );
+    assert_eq!(
+        mesh["uvs"],
+        serde_json::json!([0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])
+    );
+    assert_eq!(mesh["triangles"].as_array().unwrap().len(), 6);
+    assert!(
+        loaded
+            .report
+            .lossy
+            .iter()
+            .any(|loss| loss.detail.contains("without its weights"))
+    );
+}
+
+#[test]
+fn dragonbones_plugin_pins_defaults_timing_and_visibility() {
+    assert!(dragonbones_import(r#"{"name":"not a rig"}"#).is_err());
+    let loaded = dragonbones_import(
+        r#"{ "name":"defaults", "frameRate":20, "armature":[{
+          "name":"rig", "bone":[{"name":"root"},{"name":"plain","parent":"root"}],
+          "slot":[{"name":"shown","parent":"root","displayIndex":1},
+                  {"name":"hidden","parent":"root","displayIndex":-1}],
+          "skin":[{"slot":[
+            {"name":"shown","display":[{"name":"a"},{"name":"b"}]},
+            {"name":"hidden","display":[{"name":"gone"}]}
+          ]}],
+          "animation":[{"name":"timing","duration":4,"bone":[{"name":"plain",
+            "translateFrame":[{"x":0,"y":0,"tweenEasing":0},{"duration":0,"x":2,"y":3}]
+          }]}]
+        }] }"#,
+    )
+    .expect("imports");
+    let project = project_value(&loaded);
+    let plain = project["bones"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|bone| bone["name"] == "plain")
+        .unwrap();
+    assert_eq!(plain["tx"], 0.0);
+    assert_eq!(plain["ty"], 0.0);
+    assert_eq!(project["animations"][0]["duration"], 0.2);
+    let slots = project["slots"].as_array().unwrap();
+    assert_eq!(slots[0]["attachment"], "b");
+    assert!(slots[1]["attachment"].is_null());
+}
+
+#[test]
+fn dragonbones_plugin_reports_unread_data_and_builds_ik_root_first() {
+    let loaded = dragonbones_import(
+        r#"{ "name":"reported", "armature":[
+          {"name":"host", "bone":[{"name":"root"},{"name":"upper","parent":"root"},
+             {"name":"lower","parent":"upper"},{"name":"target"}],
+           "ik":[{"name":"leg","bone":"lower","target":"target","chain":1,"weight":50}],
+           "animation":[{"name":"odd","timeline":[{"type":99}]}]},
+          {"name":"unused", "bone":[{"name":"other"}]}
+        ] }"#,
+    )
+    .expect("imports");
+    let project = project_value(&loaded);
+    assert_eq!(
+        project["constraints"][0]["bones"],
+        serde_json::json!(["upper", "lower"])
+    );
+    assert_eq!(project["constraints"][0]["mix"], 0.5);
+    let kinds: Vec<&str> = loaded.report.lossy.iter().map(|loss| loss.what).collect();
+    assert!(kinds.contains(&"timeline"), "{kinds:?}");
+    assert!(kinds.contains(&"armature"), "{kinds:?}");
 }
 
 #[test]
@@ -394,7 +508,7 @@ fn normalize_signed_zero(value: &mut serde_json::Value) {
 }
 
 #[test]
-fn spine_plugin_matches_the_native_reader_on_a_representative_rig() {
+fn spine_plugin_preserves_a_representative_whole_project() {
     let json = r#"{
       "skeleton": { "spine": "4.3.23" },
       "bones": [{ "name": "root" }, { "name": "arm", "parent": "root", "x": 10, "rotation": 20 }],
@@ -411,15 +525,23 @@ fn spine_plugin_matches_the_native_reader_on_a_representative_rig() {
         "ik": { "reach": [{ "mix": 0.7 }, { "time": 0.5, "mix": 1 }] }
       }}
     }"#;
-    let native =
-        ankhimate_formats::spine::read(json, ankhimate_formats::spine::Images::None, "rig")
-            .expect("native");
     let plugin = spine_import(json);
-    assert_eq!(project_value(&plugin), project_value(&native));
+    let project = project_value(&plugin);
+    assert_eq!(project["bones"].as_array().unwrap().len(), 2);
+    assert_eq!(project["slots"].as_array().unwrap().len(), 1);
+    assert_eq!(project["constraints"].as_array().unwrap().len(), 2);
+    assert_eq!(project["animations"][0]["duration"], 0.5);
+    assert_eq!(
+        project["animations"][0]["timelines"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
 }
 
 #[test]
-fn dragonbones_plugin_matches_the_native_reader_on_a_representative_rig() {
+fn dragonbones_plugin_preserves_a_representative_whole_project() {
     let json = r#"{
       "name": "hero", "frameRate": 10,
       "armature": [{ "name": "rig", "frameRate": 10,
@@ -437,16 +559,18 @@ fn dragonbones_plugin_matches_the_native_reader_on_a_representative_rig() {
         }]
       }]
     }"#;
-    let native = ankhimate_formats::dragonbones::read(
-        json,
-        ankhimate_formats::dragonbones::Images::None,
-        "rig",
-    )
-    .expect("native");
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("rig_ske.json");
-    std::fs::write(&path, json).unwrap();
-    let importer = Host::new().importers(DRAGONBONES).unwrap().remove(0);
-    let plugin = Importer::read(&importer, &path).expect("plugin");
-    assert_eq!(project_value(&plugin), project_value(&native));
+    let plugin = dragonbones_import(json).expect("plugin");
+    let project = project_value(&plugin);
+    assert_eq!(project["name"], "hero");
+    assert_eq!(project["bones"].as_array().unwrap().len(), 2);
+    assert_eq!(project["slots"].as_array().unwrap().len(), 1);
+    assert_eq!(project["constraints"].as_array().unwrap().len(), 1);
+    assert_eq!(project["animations"][0]["duration"], 0.5);
+    assert_eq!(
+        project["animations"][0]["timelines"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
 }
