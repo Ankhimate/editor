@@ -246,6 +246,41 @@ pub const TAB_TITLE_SPACING: f32 = 10.0;
 /// Width a tab gives up to its close button, when it has one.
 pub const TAB_CLOSE_WIDTH: f32 = 20.0;
 
+/// Minimum height for ordinary form and action controls.
+pub const CONTROL_HEIGHT: f32 = 28.0;
+/// Stable label column used by two-column forms outside the inspector.
+pub const FORM_LABEL_WIDTH: f32 = 104.0;
+
+/// A semantic action with the project's icon vocabulary and workbench height.
+///
+/// Callers still choose placement and enabled state; this only keeps actions
+/// from drifting back toward tiny text-only buttons panel by panel.
+pub fn action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
+    action_button_enabled(ui, true, icon, label)
+}
+
+pub fn action_button_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    icon: &str,
+    label: &str,
+) -> egui::Response {
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(format!("{icon}  {label}")).min_size(egui::vec2(0.0, CONTROL_HEIGHT)),
+    )
+}
+
+/// A calm, right-aligned form label. Equal width is what stops forms reading as
+/// a staircase when labels have different lengths.
+pub fn form_label(ui: &mut egui::Ui, label: &str) {
+    ui.add_sized(
+        [FORM_LABEL_WIDTH, CONTROL_HEIGHT],
+        egui::Label::new(egui::RichText::new(label).color(ui.visuals().weak_text_color()))
+            .halign(egui::Align::RIGHT),
+    );
+}
+
 /// Space before the first tab, holding it off the card's rounded corner.
 ///
 /// Matched to the corner radius: any less and the plate's square bottom-left

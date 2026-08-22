@@ -85,26 +85,23 @@ pub fn ui(
                 });
 
             ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("Close").clicked() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::ui::action_button(ui, crate::ui::icons::CLOSE, "Close").clicked() {
                     close = true;
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .button("Reset to defaults")
-                        .on_hover_text("Grid and fonts only — the theme is left alone")
-                        .clicked()
-                    {
-                        config.grid = Default::default();
-                        config.fonts = Default::default();
-                        // Lives on the Grid page but is not part of `GridSettings`,
-                        // so resetting that struct would leave it behind — and a
-                        // reset button that skips a control on its own page reads
-                        // as broken.
-                        config.hover_labels = Config::default().hover_labels;
-                        state.session.set_status("Grid and fonts reset");
-                    }
-                });
+                if crate::ui::action_button(ui, crate::ui::icons::RESET, "Reset to defaults")
+                    .on_hover_text("Grid and fonts only — the theme is left alone")
+                    .clicked()
+                {
+                    config.grid = Default::default();
+                    config.fonts = Default::default();
+                    // Lives on the Grid page but is not part of `GridSettings`,
+                    // so resetting that struct would leave it behind — and a
+                    // reset button that skips a control on its own page reads
+                    // as broken.
+                    config.hover_labels = Config::default().hover_labels;
+                    state.session.set_status("Grid and fonts reset");
+                }
             });
         });
     close |= dialog.closed;
@@ -356,10 +353,10 @@ fn appearance(
 
     egui::Grid::new("theme_colors")
         .num_columns(2)
-        .spacing([12.0, 4.0])
+        .spacing([12.0, 8.0])
         .show(ui, |ui| {
             for (label, slot) in theme.editable_colors() {
-                ui.label(egui::RichText::new(label).size(11.5));
+                crate::ui::form_label(ui, label);
                 color_field(ui, slot);
                 ui.end_row();
             }
@@ -376,10 +373,14 @@ fn appearance(
                 .desired_width(180.0)
                 .hint_text("New scheme name"),
         );
-        if ui
-            .add_enabled(!name.trim().is_empty(), egui::Button::new("Save as new"))
-            .on_hover_text("Write this scheme to the config directory")
-            .clicked()
+        if crate::ui::action_button_enabled(
+            ui,
+            !name.trim().is_empty(),
+            crate::ui::icons::SAVE,
+            "Save as new",
+        )
+        .on_hover_text("Write this scheme to the config directory")
+        .clicked()
         {
             let mut saved = theme.clone();
             saved.name = name.trim().to_string();
@@ -433,7 +434,7 @@ fn grid(ui: &mut egui::Ui, config: &mut Config) {
     ui.add_space(6.0);
 
     ui.horizontal(|ui| {
-        ui.label("Cell size");
+        crate::ui::form_label(ui, "Cell size");
         ui.add(
             egui::DragValue::new(&mut config.grid.cell)
                 .speed(0.5)
@@ -443,7 +444,7 @@ fn grid(ui: &mut egui::Ui, config: &mut Config) {
         .on_hover_text("World units, so the checker sits still against the artwork while zooming");
     });
     ui.horizontal(|ui| {
-        ui.label("Hide below");
+        crate::ui::form_label(ui, "Hide below");
         ui.add(
             egui::DragValue::new(&mut config.grid.min_cell_px)
                 .speed(0.5)
@@ -491,7 +492,7 @@ fn fonts(ui: &mut egui::Ui, config: &mut Config) {
                 .fixed_decimals(2)
                 .suffix("×"),
         );
-        if ui.button("Reset").clicked() {
+        if crate::ui::action_button(ui, crate::ui::icons::RESET, "Reset").clicked() {
             config.ui_scale = 1.0;
         }
         if (config.ui_scale - before).abs() > 1e-4 {
@@ -524,7 +525,7 @@ fn fonts(ui: &mut egui::Ui, config: &mut Config) {
                 ("Properties", &mut config.fonts.inspector),
                 ("Timeline", &mut config.fonts.timeline),
             ] {
-                ui.label(egui::RichText::new(label).size(11.5));
+                crate::ui::form_label(ui, label);
                 ui.add(
                     egui::Slider::new(value, FontSettings::MIN..=FontSettings::MAX)
                         .fixed_decimals(1)

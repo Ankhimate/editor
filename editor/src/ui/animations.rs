@@ -16,9 +16,13 @@ use ankhimate_document::commands::key_cmds::{
 use eframe::egui;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::Theme) {
-    ui.horizontal(|ui| {
-        if ui
-            .button(format!("{} New", crate::ui::icons::ADD))
+    ui.columns(2, |columns| {
+        let button_width = columns[0].available_width();
+        if columns[0]
+            .add_sized(
+                [button_width, crate::ui::CONTROL_HEIGHT],
+                egui::Button::new(format!("{}  New", crate::ui::icons::ADD)),
+            )
             .clicked()
         {
             let name = format!("animation{}", state.doc.animations.len() + 1);
@@ -31,10 +35,11 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::Theme) 
             }
         }
         let active = state.session.active_animation;
-        if ui
+        if columns[1]
             .add_enabled(
                 active.is_some(),
-                egui::Button::new(format!("{} Duplicate", crate::ui::icons::DUPLICATE)),
+                egui::Button::new(format!("{}  Duplicate", crate::ui::icons::DUPLICATE))
+                    .min_size(egui::vec2(button_width, crate::ui::CONTROL_HEIGHT)),
             )
             .clicked()
             && let Some(id) = active
@@ -135,16 +140,18 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::Theme) 
                 );
 
                 response.context_menu(|ui| {
-                    if ui.button("Rename…").clicked() {
+                    if crate::ui::action_button(ui, crate::ui::icons::EDIT, "Rename…").clicked() {
                         rename = Some((*id, name.clone()));
                         ui.close();
                     }
-                    if ui.button("Duplicate").clicked() {
+                    if crate::ui::action_button(ui, crate::ui::icons::DUPLICATE, "Duplicate")
+                        .clicked()
+                    {
                         state.dispatch(Box::new(DuplicateAnimation::new(*id)));
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Delete").clicked() {
+                    if crate::ui::action_button(ui, crate::ui::icons::DELETE, "Delete").clicked() {
                         delete = Some(*id);
                         ui.close();
                     }
@@ -181,7 +188,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::Theme) 
 
     let mut changed = false;
     ui.horizontal(|ui| {
-        ui.label("Duration");
+        crate::ui::form_label(ui, "Duration");
         changed |= ui
             .add(
                 egui::DragValue::new(&mut duration)
@@ -201,7 +208,10 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::Theme) 
             .on_hover_text("Shortening the clip does not delete keys past the end");
         }
     });
-    changed |= ui.checkbox(&mut looping, "Loop").changed();
+    ui.horizontal(|ui| {
+        crate::ui::form_label(ui, "Playback");
+        changed |= ui.checkbox(&mut looping, "Loop animation").changed();
+    });
     if changed {
         state.dispatch(Box::new(SetAnimationMeta::new(anim_id, duration, looping)));
     }
@@ -225,12 +235,12 @@ fn rename_popup(ui: &mut egui::Ui, state: &mut AppState, theme: &crate::theme::T
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 commit = true;
             }
-            ui.horizontal(|ui| {
-                if ui.button("Rename").clicked() {
-                    commit = true;
-                }
-                if ui.button("Cancel").clicked() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::ui::action_button(ui, crate::ui::icons::CLOSE, "Cancel").clicked() {
                     close = true;
+                }
+                if crate::ui::action_button(ui, crate::ui::icons::EDIT, "Rename").clicked() {
+                    commit = true;
                 }
             });
         });

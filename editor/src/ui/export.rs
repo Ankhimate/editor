@@ -62,65 +62,75 @@ struct CachedPreview {
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plugins) {
     let presets_list = state.doc.presets();
 
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Export").strong());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .button("Export…")
-                .on_hover_text("Render every template and write the file set")
-                .clicked()
-            {
-                run_export(state, plugins, &presets_list);
+    ui.label(egui::RichText::new("Export").strong());
+    ui.columns(3, |columns| {
+        let button_width = columns[0].available_width();
+        egui::containers::menu::MenuButton::from_button(
+            egui::Button::new(format!("{}  Preset", crate::ui::icons::ADD))
+                .min_size(egui::vec2(button_width, crate::ui::CONTROL_HEIGHT)),
+        )
+        .ui(&mut columns[0], |ui| {
+            for builtin in presets::builtin() {
+                if ui.button(&builtin.name).clicked() {
+                    state.dispatch(Box::new(AddPreset::new(builtin)));
+                    ui.close();
+                }
             }
-            if ui
-                .add_enabled(!presets_list.is_empty(), egui::Button::new("Delete"))
-                .clicked()
-            {
-                let index = state.session.export.preset;
-                state.dispatch(Box::new(RemovePreset::new(index)));
-                state.session.export.preset = index.saturating_sub(1);
-            }
-            ui.menu_button("＋ Preset", |ui| {
-                for builtin in presets::builtin() {
-                    if ui.button(&builtin.name).clicked() {
-                        state.dispatch(Box::new(AddPreset::new(builtin)));
+            // Plugin formats, beside the built-in presets. A plugin
+            // exporter is a format like any other, and a separate menu for
+            // "plugin formats" would be the duplication the registry exists
+            // to remove.
+            //
+            // Added as a preset carrying only the plugin's label: the panel
+            // resolves that label back to the exporter when the export runs,
+            // so a document saved with one still names what produced it even
+            // on a machine where the plugin is not installed.
+            let plugin_exporters = plugins.exporters();
+            if !plugin_exporters.is_empty() {
+                ui.separator();
+                for (_, label) in plugin_exporters {
+                    if ui.button(&label).clicked() {
+                        state.dispatch(Box::new(AddPreset::new(Preset::new(label))));
                         ui.close();
                     }
                 }
-                // Plugin formats, beside the built-in presets. A plugin
-                // exporter is a format like any other, and a separate menu for
-                // "plugin formats" would be the duplication the registry exists
-                // to remove.
-                //
-                // Added as a preset carrying only the plugin's label: the panel
-                // resolves that label back to the exporter when the export runs,
-                // so a document saved with one still names what produced it even
-                // on a machine where the plugin is not installed.
-                let plugin_exporters = plugins.exporters();
-                if !plugin_exporters.is_empty() {
-                    ui.separator();
-                    for (_, label) in plugin_exporters {
-                        if ui.button(&label).clicked() {
-                            state.dispatch(Box::new(AddPreset::new(Preset::new(label))));
-                            ui.close();
-                        }
-                    }
-                }
+            }
 
-                ui.separator();
-                if ui.button("Empty preset").clicked() {
-                    let mut blank = Preset::new("New format");
-                    blank.templates.push(Template {
-                        name: "output".into(),
-                        output_path: "{{project.name}}.json".into(),
-                        per: Cadence::Once,
-                        body: "{\n  \"name\": \"{{project.name}}\"\n}\n".into(),
-                    });
-                    state.dispatch(Box::new(AddPreset::new(blank)));
-                    ui.close();
-                }
-            });
+            ui.separator();
+            if ui.button("Empty preset").clicked() {
+                let mut blank = Preset::new("New format");
+                blank.templates.push(Template {
+                    name: "output".into(),
+                    output_path: "{{project.name}}.json".into(),
+                    per: Cadence::Once,
+                    body: "{\n  \"name\": \"{{project.name}}\"\n}\n".into(),
+                });
+                state.dispatch(Box::new(AddPreset::new(blank)));
+                ui.close();
+            }
         });
+        if columns[1]
+            .add_enabled(
+                !presets_list.is_empty(),
+                egui::Button::new(format!("{}  Delete", crate::ui::icons::DELETE))
+                    .min_size(egui::vec2(button_width, crate::ui::CONTROL_HEIGHT)),
+            )
+            .clicked()
+        {
+            let index = state.session.export.preset;
+            state.dispatch(Box::new(RemovePreset::new(index)));
+            state.session.export.preset = index.saturating_sub(1);
+        }
+        if columns[2]
+            .add_sized(
+                [button_width, crate::ui::CONTROL_HEIGHT],
+                egui::Button::new(format!("{}  Export…", crate::ui::icons::DOWNLOAD)),
+            )
+            .on_hover_text("Render every template and write the file set")
+            .clicked()
+        {
+            run_export(state, plugins, &presets_list);
+        }
     });
 
     if presets_list.is_empty() {
@@ -172,15 +182,21 @@ fn options(ui: &mut egui::Ui, state: &mut AppState, preset: &Preset) {
     let mut edited = preset.clone();
     let mut changed = false;
 
+    crate::ui::inspector::section_header(ui, crate::ui::icons::EXPORT, "Output settings");
     egui::Grid::new("export_options")
         .num_columns(2)
-        .spacing([8.0, 4.0])
+        .spacing([12.0, 8.0])
         .show(ui, |ui| {
-            ui.label("Output folder");
-            changed |= ui.text_edit_singleline(&mut edited.output_dir).changed();
+            crate::ui::form_label(ui, "Output folder");
+            changed |= ui
+                .add(
+                    egui::TextEdit::singleline(&mut edited.output_dir)
+                        .desired_width(ui.available_width().max(180.0)),
+                )
+                .changed();
             ui.end_row();
 
-            ui.label("Atlas");
+            crate::ui::form_label(ui, "Atlas");
             ui.horizontal(|ui| {
                 changed |= ui.checkbox(&mut edited.atlas.enabled, "Bake").changed();
                 if edited.atlas.enabled {
@@ -193,14 +209,14 @@ fn options(ui: &mut egui::Ui, state: &mut AppState, preset: &Preset) {
             ui.end_row();
 
             if edited.atlas.enabled {
-                ui.label("Padding");
+                crate::ui::form_label(ui, "Padding");
                 changed |= ui
                     .add(egui::DragValue::new(&mut edited.atlas.settings.padding).range(0..=32))
                     .on_hover_text("Empty pixels between regions")
                     .changed();
                 ui.end_row();
 
-                ui.label("Extrude");
+                crate::ui::form_label(ui, "Extrude");
                 changed |= ui
                     .add(egui::DragValue::new(&mut edited.atlas.settings.extrude).range(0..=8))
                     .on_hover_text(
@@ -210,7 +226,7 @@ fn options(ui: &mut egui::Ui, state: &mut AppState, preset: &Preset) {
                     .changed();
                 ui.end_row();
 
-                ui.label("Max page");
+                crate::ui::form_label(ui, "Max page");
                 changed |= ui
                     .add(
                         egui::DragValue::new(&mut edited.atlas.settings.max_page)
@@ -220,7 +236,7 @@ fn options(ui: &mut egui::Ui, state: &mut AppState, preset: &Preset) {
                     .changed();
                 ui.end_row();
 
-                ui.label("Power of two");
+                crate::ui::form_label(ui, "Power of two");
                 changed |= ui
                     .checkbox(&mut edited.atlas.settings.power_of_two, "")
                     .changed();
@@ -270,7 +286,7 @@ fn templates(ui: &mut egui::Ui, state: &mut AppState, preset: &Preset) {
     let mut changed = false;
 
     ui.horizontal(|ui| {
-        ui.label("Writes");
+        crate::ui::form_label(ui, "Writes");
         changed |= ui
             .add(egui::TextEdit::singleline(&mut edited.output_path).desired_width(220.0))
             .on_hover_text("The output path is a template too")

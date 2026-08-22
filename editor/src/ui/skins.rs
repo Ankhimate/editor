@@ -36,33 +36,40 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     // skin is added or renamed.
     skins.sort_by_key(|(id, _, _)| (*id != default_skin, id.data().as_ffi()));
 
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Skins").strong());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add_enabled(setup, egui::Button::new("+").small())
-                .on_hover_text("New empty skin")
-                .clicked()
-            {
-                let name = unique_name(state, "skin");
-                state.dispatch(Box::new(AddSkin::new(name)));
-            }
-            if ui
-                .add_enabled(setup, egui::Button::new("⧉").small())
-                .on_hover_text("Duplicate the active skin, attachments and all")
-                .clicked()
-            {
-                let base = state
-                    .doc
-                    .skeleton
-                    .skins
-                    .get(active)
-                    .map(|s| s.name.clone())
-                    .unwrap_or_else(|| "skin".to_string());
-                let name = unique_name(state, &format!("{base} copy"));
-                state.dispatch(Box::new(AddSkin::duplicating(name, active)));
-            }
-        });
+    ui.label(egui::RichText::new("Skins").strong());
+    ui.columns(2, |columns| {
+        let button_width = columns[0].available_width();
+        if columns[0]
+            .add_enabled(
+                setup,
+                egui::Button::new(format!("{}  New", crate::ui::icons::ADD))
+                    .min_size(egui::vec2(button_width, crate::ui::CONTROL_HEIGHT)),
+            )
+            .on_hover_text("New empty skin")
+            .clicked()
+        {
+            let name = unique_name(state, "skin");
+            state.dispatch(Box::new(AddSkin::new(name)));
+        }
+        if columns[1]
+            .add_enabled(
+                setup,
+                egui::Button::new(format!("{}  Duplicate", crate::ui::icons::DUPLICATE))
+                    .min_size(egui::vec2(button_width, crate::ui::CONTROL_HEIGHT)),
+            )
+            .on_hover_text("Duplicate the active skin, attachments and all")
+            .clicked()
+        {
+            let base = state
+                .doc
+                .skeleton
+                .skins
+                .get(active)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| "skin".to_string());
+            let name = unique_name(state, &format!("{base} copy"));
+            state.dispatch(Box::new(AddSkin::duplicating(name, active)));
+        }
     });
     ui.add_space(2.0);
     ui.label(
@@ -124,7 +131,15 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                     // deleting it would make un-skinned slots draw nothing.
                     let deletable = setup && *id != default_skin;
                     if ui
-                        .add_enabled(deletable, egui::Button::new("✕").small())
+                        .add_enabled(
+                            deletable,
+                            egui::Button::new(crate::ui::icons::DELETE)
+                                .frame(false)
+                                .min_size(egui::vec2(
+                                    crate::ui::CONTROL_HEIGHT,
+                                    crate::ui::CONTROL_HEIGHT,
+                                )),
+                        )
                         .on_hover_text(if *id == default_skin {
                             "The default skin is the fallback for every slot"
                         } else {
@@ -136,7 +151,15 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                     }
                     if *id != active
                         && ui
-                            .add_enabled(setup, egui::Button::new("→").small())
+                            .add_enabled(
+                                setup,
+                                egui::Button::new(crate::ui::icons::APPLY)
+                                    .frame(false)
+                                    .min_size(egui::vec2(
+                                        crate::ui::CONTROL_HEIGHT,
+                                        crate::ui::CONTROL_HEIGHT,
+                                    )),
+                            )
                             .on_hover_text("Copy this skin's attachments into the active one")
                             .clicked()
                     {

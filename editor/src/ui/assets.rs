@@ -203,9 +203,14 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                     ui.label(egui::RichText::new(text).small().color(color));
                 }
 
-                ui.horizontal(|ui| {
+                let action_width = ((ui.available_width() - 6.0) / 2.0).max(74.0);
+                ui.columns(2, |columns| {
                     let can_attach = setup && state.session.active_bone().is_some();
-                    let btn = ui.add_enabled(can_attach, egui::Button::new("Attach").small());
+                    let btn = columns[0].add_enabled(
+                        can_attach,
+                        egui::Button::new(format!("{}  Attach", crate::ui::icons::ATTACHMENT))
+                            .min_size(egui::vec2(action_width, crate::ui::CONTROL_HEIGHT)),
+                    );
                     let btn = if !setup {
                         btn.on_hover_text("Switch to Setup mode to attach (Tab)")
                     } else if !can_attach {
@@ -216,28 +221,40 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                     if btn.clicked() {
                         attach = Some(id);
                     }
-                    if ui
-                        .add_enabled(setup, egui::Button::new("Delete").small())
+                    if columns[1]
+                        .add_enabled(
+                            setup,
+                            egui::Button::new(format!("{}  Delete", crate::ui::icons::DELETE))
+                                .min_size(egui::vec2(action_width, crate::ui::CONTROL_HEIGHT)),
+                        )
                         .clicked()
                     {
                         delete = Some(id);
                     }
                 });
-                ui.horizontal(|ui| {
+                ui.columns(2, |columns| {
                     let has_source = state
                         .doc
                         .assets
                         .get(id)
                         .is_some_and(|a| a.source_path.is_some());
-                    if ui
-                        .add_enabled(setup && has_source, egui::Button::new("Reload").small())
+                    if columns[0]
+                        .add_enabled(
+                            setup && has_source,
+                            egui::Button::new(format!("{}  Reload", crate::ui::icons::REFRESH))
+                                .min_size(egui::vec2(action_width, crate::ui::CONTROL_HEIGHT)),
+                        )
                         .on_hover_text("Re-read the file this was imported from")
                         .clicked()
                     {
                         reload = Some(id);
                     }
-                    if ui
-                        .add_enabled(setup, egui::Button::new("Relink…").small())
+                    if columns[1]
+                        .add_enabled(
+                            setup,
+                            egui::Button::new(format!("{}  Relink…", crate::ui::icons::RELINK))
+                                .min_size(egui::vec2(action_width, crate::ui::CONTROL_HEIGHT)),
+                        )
                         .on_hover_text("Point this asset at a different file, keeping its name")
                         .clicked()
                     {

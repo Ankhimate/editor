@@ -8,10 +8,10 @@ const X_COLOR: egui::Color32 = egui::Color32::from_rgb(210, 70, 60);
 const Y_COLOR: egui::Color32 = egui::Color32::from_rgb(80, 185, 80);
 const SINGLE_COLOR: egui::Color32 = egui::Color32::from_rgb(100, 140, 220);
 
-const FIELD_H: f32 = 22.0;
-const LABEL_W: f32 = 72.0;
+const FIELD_H: f32 = 26.0;
+const LABEL_W: f32 = 88.0;
 const ACCENT_W: f32 = 3.0;
-const ROW_GAP: f32 = 3.0;
+const ROW_GAP: f32 = 5.0;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(2.0);
@@ -155,7 +155,10 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
                         .color(ui.visuals().weak_text_color()),
                 );
             } else if ui
-                .add_enabled(editable, egui::Button::new("Reset").small())
+                .add_enabled(
+                    editable,
+                    egui::Button::new(format!("{}  Reset", crate::ui::icons::RESET)),
+                )
                 .on_hover_text("Fall back to the nearest coloured ancestor")
                 .clicked()
             {
@@ -576,7 +579,7 @@ fn constraint_inspector(
             ui.label(egui::RichText::new(name).size(11.0).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(setup, egui::Button::new("✕").small())
+                    .add_enabled(setup, egui::Button::new(crate::ui::icons::DELETE))
                     .on_hover_text("Delete this constraint")
                     .clicked()
                 {
@@ -703,7 +706,10 @@ fn constraint_inspector(
     if ui
         .add_enabled(
             setup && default_target.is_some(),
-            egui::Button::new("Add transform constraint").small(),
+            egui::Button::new(format!(
+                "{}  Add transform constraint",
+                crate::ui::icons::ADD
+            )),
         )
         .on_hover_text(
             "Drive this bone from another one — a head that tracks a look-at \
@@ -778,7 +784,7 @@ fn ik_inspector(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_core
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(setup, egui::Button::new("✕").small())
+                    .add_enabled(setup, egui::Button::new(crate::ui::icons::DELETE))
                     .on_hover_text("Delete this constraint (the target bone stays)")
                     .clicked()
                 {
@@ -899,7 +905,10 @@ fn ik_inspector(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_core
         n => format!("Create IK target ({n}-bone chain)"),
     };
     if ui
-        .add_enabled(can_create, egui::Button::new(label).small())
+        .add_enabled(
+            can_create,
+            egui::Button::new(format!("{}  {label}", crate::ui::icons::ADD)),
+        )
         // The "any length" is not padding. Every other 2D editor caps IK at two
         // bones, so a rigger arriving from one assumes the cap is universal and
         // never selects a third — the capability is invisible unless the button
@@ -1001,7 +1010,7 @@ fn physics_inspector(
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(setup, egui::Button::new("✕").small())
+                    .add_enabled(setup, egui::Button::new(crate::ui::icons::DELETE))
                     .on_hover_text("Delete this constraint")
                     .clicked()
                 {
@@ -1140,7 +1149,10 @@ fn physics_inspector(
 
     ui.add_space(4.0);
     if ui
-        .add_enabled(setup, egui::Button::new("Add physics").small())
+        .add_enabled(
+            setup,
+            egui::Button::new(format!("{}  Add physics", crate::ui::icons::ADD)),
+        )
         .on_hover_text("Make this bone sway — hair, a tail, a chain, cloth")
         .clicked()
     {
@@ -1208,7 +1220,7 @@ fn path_constraint_inspector(
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(setup, egui::Button::new("✕").small())
+                    .add_enabled(setup, egui::Button::new(crate::ui::icons::DELETE))
                     .on_hover_text("Delete this constraint")
                     .clicked()
                 {
@@ -1865,7 +1877,7 @@ fn influence_list(
             ui.label(egui::RichText::new(label).size(11.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(setup, egui::Button::new("✕").small())
+                    .add_enabled(setup, egui::Button::new(crate::ui::icons::DELETE))
                     .on_hover_text("Remove this influence")
                     .clicked()
                 {
@@ -1895,7 +1907,10 @@ fn influence_list(
         );
         if off
             && ui
-                .add_enabled(setup, egui::Button::new("Normalize").small())
+                .add_enabled(
+                    setup,
+                    egui::Button::new(format!("{}  Normalize", crate::ui::icons::BALANCE)),
+                )
                 .on_hover_text("Scale these influences so they sum to 1")
                 .clicked()
         {
@@ -2390,7 +2405,10 @@ fn attachment_inspector(
         }
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(setup, egui::Button::new("Retriangulate").small())
+                .add_enabled(
+                    setup,
+                    egui::Button::new(format!("{}  Retriangulate", crate::ui::icons::MESH)),
+                )
                 .on_hover_text("Rebuild triangles from the current vertices")
                 .clicked()
             {
@@ -2404,7 +2422,10 @@ fn attachment_inspector(
                 ));
             }
             if ui
-                .add_enabled(setup, egui::Button::new("Trace from image…").small())
+                .add_enabled(
+                    setup,
+                    egui::Button::new(format!("{}  Trace from image…", crate::ui::icons::INFERRED)),
+                )
                 .on_hover_text(
                     "Rebuild the mesh from the artwork's silhouette, with a preview \
                      of the settings",
@@ -2422,7 +2443,10 @@ fn attachment_inspector(
         });
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(setup, egui::Button::new("UV editor…").small())
+                .add_enabled(
+                    setup,
+                    egui::Button::new(format!("{}  UV editor…", crate::ui::icons::GRID)),
+                )
                 .on_hover_text(
                     "Drag where each vertex samples the texture — the mesh's other                      shape, which the canvas cannot show",
                 )
@@ -2439,7 +2463,10 @@ fn attachment_inspector(
             if ui
                 .add_enabled(
                     setup && two_selected,
-                    egui::Button::new("Pin/release edge").small(),
+                    egui::Button::new(format!(
+                        "{}  Pin/release edge",
+                        crate::ui::icons::RELINK
+                    )),
                 )
                 .on_hover_text(
                     "Force the triangulation to keep the edge between the two                      selected vertices (C on the canvas)",
@@ -2756,7 +2783,7 @@ fn attachment_inspector(
     ui.horizontal(|ui| {
         let btn = ui.add_enabled(
             setup && asset_size.is_some(),
-            egui::Button::new("Reset size").small(),
+            egui::Button::new(format!("{}  Reset size", crate::ui::icons::RESET)),
         );
         if btn
             .on_hover_text("Restore the image's own pixel dimensions")
@@ -2765,21 +2792,30 @@ fn attachment_inspector(
             reset_size = true;
         }
         if ui
-            .add_enabled(setup, egui::Button::new("Duplicate").small())
+            .add_enabled(
+                setup,
+                egui::Button::new(format!("{}  Duplicate", crate::ui::icons::DUPLICATE)),
+            )
             .on_hover_text("Copy under a new name in this slot — the way to build a swap set")
             .clicked()
         {
             duplicate = true;
         }
         if ui
-            .add_enabled(setup, egui::Button::new("Remove").small())
+            .add_enabled(
+                setup,
+                egui::Button::new(format!("{}  Remove", crate::ui::icons::DELETE)),
+            )
             .on_hover_text("Drop this attachment from this skin")
             .clicked()
         {
             remove = true;
         }
         if ui
-            .add_enabled(setup, egui::Button::new("To mesh").small())
+            .add_enabled(
+                setup,
+                egui::Button::new(format!("{}  To mesh", crate::ui::icons::MESH)),
+            )
             .on_hover_text("Convert to a deformable mesh — the quad stays exactly where it is")
             .clicked()
         {
@@ -3310,7 +3346,10 @@ fn sequence_section(
     if ui
         .add_enabled(
             setup,
-            egui::Button::new("Split into separate slots").small(),
+            egui::Button::new(format!(
+                "{}  Split into separate slots",
+                crate::ui::icons::SLOT
+            )),
         )
         .on_hover_text(
             "Stop treating these as frames. The images stay; each gets its own \

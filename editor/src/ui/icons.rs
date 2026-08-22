@@ -78,6 +78,12 @@ pub const CLOSE: &str = f::X;
 pub const MINIMISE: &str = f::MINUS;
 pub const CLEAR: &str = f::CIRCLE_X;
 pub const REFRESH: &str = f::REFRESH_CW;
+pub const RESET: &str = f::ROTATE_CCW;
+pub const EDIT: &str = f::PENCIL;
+pub const RELINK: &str = f::LINK_2;
+pub const APPLY: &str = f::ARROW_RIGHT;
+pub const SAVE: &str = f::SAVE;
+pub const DOWNLOAD: &str = f::DOWNLOAD;
 pub const SEARCH: &str = f::SEARCH;
 /// The "click something" empty state.
 pub const NOTHING_SELECTED: &str = f::MOUSE_POINTER_CLICK;

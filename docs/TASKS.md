@@ -952,6 +952,12 @@ multiples (numeric test on the transform helpers); every modifier is listed in t
 
 ### T-709 ∥ ★ Accessibility & window UX
 **Deps:** T-701 · **Refs:** PLAN §7
+- **UI control pass landed 2026-08-22:** ordinary controls now share a 28 px minimum height,
+  roomier padding, and a consistent vertical rhythm. Assets and animation actions are justified;
+  Assets, Skins, Animations, Export, Settings, and the Inspector use the bundled Lucide vocabulary
+  for semantic actions; common forms use stable label columns. Timeline transport and tool strips
+  deliberately retain their dense exact-size layout. This does not claim the keyboard-flow or
+  close-guard acceptance below.
 - UI scale honored everywhere (no hardcoded pixel fonts), keyboard focus traversal through panels,
   tooltips on every icon-only button, colorblind-safe defaults for the weight heat map and
   onion-skin tints, unsaved-changes guard on close, window geometry/dock layout persistence,

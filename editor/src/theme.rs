@@ -424,6 +424,18 @@ impl Theme {
         visuals.widgets.open.corner_radius = r;
 
         ctx.set_visuals(visuals);
+
+        // Controls are workbench-sized rather than web-form compact. Keep this
+        // here beside the widget visuals so every theme gets the same geometry;
+        // panels that are intentionally dense (timeline transport and tool
+        // strips) allocate their own exact sizes and are unaffected.
+        let mut style = (*ctx.global_style()).clone();
+        style.spacing.item_spacing = eframe::egui::vec2(7.0, 6.0);
+        style.spacing.button_padding = eframe::egui::vec2(10.0, 5.0);
+        style.spacing.interact_size.y = 28.0;
+        style.spacing.combo_width = 140.0;
+        style.spacing.text_edit_width = 180.0;
+        ctx.set_global_style(style);
     }
 }
 
@@ -459,6 +471,18 @@ mod tests {
             "origin_color":"#00ff00"}"##;
         let theme: Theme = serde_json::from_str(json).unwrap();
         assert_ne!(theme.mesh_vertex(), Color32::BLACK);
+    }
+
+    /// Theme changes must not silently collapse the shared form geometry back
+    /// to egui defaults; compact controls are reserved for explicit toolbars.
+    #[test]
+    fn every_theme_applies_workbench_control_spacing() {
+        let ctx = Context::default();
+        Theme::default().apply(&ctx);
+        let style = ctx.global_style();
+        assert_eq!(style.spacing.interact_size.y, 28.0);
+        assert_eq!(style.spacing.button_padding, eframe::egui::vec2(10.0, 5.0));
+        assert_eq!(style.spacing.item_spacing.y, 6.0);
     }
 }
 
