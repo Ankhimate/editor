@@ -343,6 +343,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     ik_inspector(ui, state, bone_id);
     physics_inspector(ui, state, bone_id);
     path_constraint_inspector(ui, state, bone_id);
+    add_driver_menu(ui, state, bone_id);
 
     // ── Slot section (T-205) ─────────────────────────────────────────────
     // Below the transform: it describes what the bone *shows*, which is the
@@ -526,7 +527,7 @@ fn constraint_inspector(
 ) {
     use ankhimate_core::constraints::Constraint;
     use ankhimate_document::commands::constraint_cmds::{
-        AddTransformConstraint, RemoveConstraint, SetTransformProps, TransformProps,
+        RemoveConstraint, SetTransformProps, TransformProps,
     };
 
     let setup = state.session.can_edit_structure();
@@ -693,39 +694,6 @@ fn constraint_inspector(
         }
     }
 
-    ui.add_space(6.0);
-    // Creating one needs a second bone to point at; the picker above changes it
-    // afterwards, so any other bone is a fine starting target.
-    let default_target = state
-        .doc
-        .skeleton
-        .bones
-        .get(bone_id)
-        .and_then(|b| b.parent)
-        .or_else(|| bones.first().map(|(id, _)| *id));
-    if ui
-        .add_enabled(
-            setup && default_target.is_some(),
-            egui::Button::new(format!(
-                "{}  Add transform constraint",
-                crate::ui::icons::ADD
-            )),
-        )
-        .on_hover_text(
-            "Drive this bone from another one — a head that tracks a look-at \
-             target, a wheel that mirrors a shaft",
-        )
-        .clicked()
-        && let Some(target) = default_target
-    {
-        let name = format!("constraint {}", state.doc.skeleton.constraints.len() + 1);
-        state.dispatch(Box::new(AddTransformConstraint::new(
-            name,
-            target,
-            vec![bone_id],
-        )));
-    }
-
     if let Some((id, props)) = edit {
         state.dispatch(Box::new(SetTransformProps::new(id, props)));
     }
@@ -740,9 +708,7 @@ fn constraint_inspector(
 /// constraints that explain why this bone moves on its own.
 fn ik_inspector(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_core::ids::BoneId) {
     use ankhimate_core::constraints::Constraint;
-    use ankhimate_document::commands::constraint_cmds::{
-        CreateIkTarget, IkProps, RemoveConstraint, SetIkProps,
-    };
+    use ankhimate_document::commands::constraint_cmds::{IkProps, RemoveConstraint, SetIkProps};
 
     let setup = state.session.can_edit_structure();
 
@@ -893,42 +859,6 @@ fn ik_inspector(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_core
         }
     }
 
-    // ── Create from a selection ──────────────────────────────────────────
-    // The chain is the selected bones in hierarchy order, so "select shoulder,
-    // elbow, wrist → create IK" is the whole flow. One selected bone makes an
-    // aim constraint, which is the other thing people want this for.
-    let chain = selected_chain(state);
-    ui.add_space(6.0);
-    let can_create = setup && !chain.is_empty();
-    let label = match chain.len() {
-        0 | 1 => "Create IK target".to_string(),
-        n => format!("Create IK target ({n}-bone chain)"),
-    };
-    if ui
-        .add_enabled(
-            can_create,
-            egui::Button::new(format!("{}  {label}", crate::ui::icons::ADD)),
-        )
-        // The "any length" is not padding. Every other 2D editor caps IK at two
-        // bones, so a rigger arriving from one assumes the cap is universal and
-        // never selects a third — the capability is invisible unless the button
-        // says so. See docs/what-others-cannot.md.
-        .on_hover_text(
-            "Make a target bone at the chain's tip and an IK constraint that \
-             reaches for it.\nSelect several bones (shift-click in the Hierarchy) \
-             to build a longer chain — any length, not just two.\nUse Flip bend \
-             to choose which way a long chain curls.",
-        )
-        .clicked()
-        && let Some(&tip) = chain.last()
-    {
-        // The target starts exactly at the tip so switching the constraint on
-        // does not move the rig.
-        let position = state.pose.world_tip(&state.doc.skeleton, tip);
-        let name = format!("ik {}", state.doc.skeleton.constraints.len() + 1);
-        state.dispatch(Box::new(CreateIkTarget::new(chain, name, position)));
-    }
-
     if let Some((id, props)) = edit {
         state.dispatch(Box::new(SetIkProps::new(id, props)));
     }
@@ -971,6 +901,94 @@ fn selected_chain(state: &AppState) -> Vec<ankhimate_core::ids::BoneId> {
     ordered
 }
 
+/// One entry point for adding a driver to the selected bone.
+///
+/// These used to be three unrelated `+` buttons stacked down the inspector.
+/// They are alternatives for the same decision, so one menu states that
+/// relationship and leaves the panel focused on properties that already exist.
+fn add_driver_menu(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_core::ids::BoneId) {
+    use ankhimate_document::commands::constraint_cmds::{
+        AddPhysics, AddTransformConstraint, CreateIkTarget,
+    };
+
+    let setup = state.session.can_edit_structure();
+    let default_target = state
+        .doc
+        .skeleton
+        .bones
+        .get(bone_id)
+        .and_then(|bone| bone.parent)
+        .or_else(|| {
+            state
+                .doc
+                .skeleton
+                .bones
+                .keys()
+                .find(|candidate| *candidate != bone_id)
+        });
+    let chain = selected_chain(state);
+    let button = egui::Button::new(format!("{}  Add driver…", crate::ui::icons::CONSTRAINT))
+        .min_size(egui::vec2(ui.available_width(), crate::ui::CONTROL_HEIGHT));
+
+    ui.add_space(6.0);
+    ui.add_enabled_ui(setup, |ui| {
+        egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
+            if ui
+                .add_enabled(
+                    default_target.is_some(),
+                    egui::Button::new(format!(
+                        "{}  Transform constraint",
+                        crate::ui::icons::TRANSFORM_CONSTRAINT
+                    )),
+                )
+                .on_hover_text("Follow another bone's position, rotation, scale, or shear")
+                .clicked()
+                && let Some(target) = default_target
+            {
+                let name = format!("constraint {}", state.doc.skeleton.constraints.len() + 1);
+                state.dispatch(Box::new(AddTransformConstraint::new(
+                    name,
+                    target,
+                    vec![bone_id],
+                )));
+                ui.close();
+            }
+
+            let ik_label = match chain.len() {
+                0 | 1 => "IK target".to_string(),
+                count => format!("IK target ({count}-bone chain)"),
+            };
+            if ui
+                .add_enabled(
+                    !chain.is_empty(),
+                    egui::Button::new(format!("{}  {ik_label}", crate::ui::icons::IK)),
+                )
+                .on_hover_text(
+                    "Create a target at the selected chain's tip. Shift-click a continuous \
+                     chain in the Hierarchy to drive more than one bone.",
+                )
+                .clicked()
+                && let Some(&tip) = chain.last()
+            {
+                let position = state.pose.world_tip(&state.doc.skeleton, tip);
+                let name = format!("ik {}", state.doc.skeleton.constraints.len() + 1);
+                state.dispatch(Box::new(CreateIkTarget::new(chain.clone(), name, position)));
+                ui.close();
+            }
+
+            if ui
+                .button(format!("{}  Physics", crate::ui::icons::PHYSICS))
+                .on_hover_text("Make this bone sway — hair, a tail, a chain, or cloth")
+                .clicked()
+            {
+                let name = format!("physics {}", state.doc.skeleton.constraints.len() + 1);
+                state.dispatch(Box::new(AddPhysics::new(bone_id, name)));
+                ui.close();
+            }
+        });
+    });
+}
+
 /// Physics constraints on the selected bone (T-503).
 fn physics_inspector(
     ui: &mut egui::Ui,
@@ -979,7 +997,7 @@ fn physics_inspector(
 ) {
     use ankhimate_core::constraints::Constraint;
     use ankhimate_document::commands::constraint_cmds::{
-        AddPhysics, PhysicsProps, RemoveConstraint, SetPhysicsProps,
+        PhysicsProps, RemoveConstraint, SetPhysicsProps,
     };
 
     let setup = state.session.can_edit_structure();
@@ -1145,19 +1163,6 @@ fn physics_inspector(
                 }
             }
         });
-    }
-
-    ui.add_space(4.0);
-    if ui
-        .add_enabled(
-            setup,
-            egui::Button::new(format!("{}  Add physics", crate::ui::icons::ADD)),
-        )
-        .on_hover_text("Make this bone sway — hair, a tail, a chain, cloth")
-        .clicked()
-    {
-        let name = format!("physics {}", state.doc.skeleton.constraints.len() + 1);
-        state.dispatch(Box::new(AddPhysics::new(bone_id, name)));
     }
 
     if let Some((id, props)) = edit {

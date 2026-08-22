@@ -66,14 +66,16 @@ fn groups_section(ui: &mut egui::Ui, state: &mut AppState) {
     if selected > 0 {
         ui.add_space(2.0);
         if ui
-            .add_enabled(
-                state.session.can_edit_structure(),
-                egui::Button::new(format!(
-                    "{}  Group {selected} selected…",
-                    crate::ui::icons::FOLDER
-                ))
-                .small(),
-            )
+            .add_enabled_ui(state.session.can_edit_structure(), |ui| {
+                ui.add_sized(
+                    [ui.available_width(), crate::ui::CONTROL_HEIGHT],
+                    egui::Button::new(format!(
+                        "{}  New group from selection",
+                        crate::ui::icons::FOLDER
+                    )),
+                )
+            })
+            .inner
             .on_hover_text("File the selected bones into a named folder")
             .clicked()
         {
