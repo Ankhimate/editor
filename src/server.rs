@@ -55,6 +55,20 @@ impl AnkhimateServer {
 
         match tools::call(&mut session, name, &args) {
             Ok(tools::Output::Structured(value)) => CallToolResult::structured(value),
+            Ok(tools::Output::StructuredImage {
+                structured,
+                png,
+                width: _,
+                height: _,
+            }) => {
+                let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+                let mut result = CallToolResult::success(vec![
+                    rmcp::model::ContentBlock::text(structured.to_string()),
+                    rmcp::model::ContentBlock::image(encoded, "image/png"),
+                ]);
+                result.structured_content = Some(structured);
+                result
+            }
             Ok(tools::Output::Image { png, width, height }) => {
                 let encoded = base64::engine::general_purpose::STANDARD.encode(png);
                 let mut result = CallToolResult::success(vec![rmcp::model::ContentBlock::image(
@@ -162,5 +176,47 @@ mod tests {
             .decode(&image.data)
             .unwrap();
         assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn protocol_packages_structured_data_and_image_together() {
+        let server = AnkhimateServer::new();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preview.ankh");
+        server.dispatch(
+            "new_rig",
+            Some(serde_json::Map::from_iter([(
+                "name".into(),
+                Value::String("preview".into()),
+            )])),
+        );
+        server.dispatch(
+            "save_rig",
+            Some(serde_json::Map::from_iter([(
+                "path".into(),
+                Value::String(path.to_string_lossy().into_owned()),
+            )])),
+        );
+
+        let opened = server.dispatch(
+            "open_rig",
+            Some(serde_json::Map::from_iter([(
+                "path".into(),
+                Value::String(path.to_string_lossy().into_owned()),
+            )])),
+        );
+        assert_eq!(opened.is_error, Some(false));
+        assert_eq!(
+            opened.structured_content.unwrap()["assets"]["images"],
+            serde_json::json!([])
+        );
+        assert!(matches!(
+            opened.content[0],
+            rmcp::model::ContentBlock::Text(_)
+        ));
+        assert!(matches!(
+            opened.content[1],
+            rmcp::model::ContentBlock::Image(_)
+        ));
     }
 }
