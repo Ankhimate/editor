@@ -76,36 +76,49 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
 /// and the panel is looked at while the other hand is on the canvas.
 fn controls(ui: &mut egui::Ui, state: &mut AppState, target: &Target, mesh: &MeshAttachment) {
     // ── Mode ────────────────────────────────────────────────────────────
-    // Direct sits with the brush modes rather than in a section of its own.
-    // They are alternatives — either the pointer paints or the slider sets —
-    // and putting them side by side makes that a single choice instead of two
-    // controls that have to be reconciled.
-    ui.horizontal_wrapped(|ui| {
-        let direct = state.session.weight_paint_settings.direct;
-        if ui
-            .selectable_label(direct, "Direct")
-            .on_hover_text("Type a weight for the selected vertices instead of painting")
-            .clicked()
-        {
-            state.session.weight_paint_settings.direct = true;
-        }
-        for mode in BrushMode::ALL {
-            let selected = !direct && state.session.weight_paint_settings.mode == mode;
-            let hint = match mode {
-                BrushMode::Add => "Raise toward Weight, never past it",
-                BrushMode::Subtract => "Lower toward zero; Weight is the rate",
-                BrushMode::Replace => "Set to exactly Weight, from either side",
-                BrushMode::Smooth => "Average with neighbouring vertices",
-            };
-            if ui
-                .selectable_label(selected, mode.label())
-                .on_hover_text(hint)
-                .clicked()
-            {
-                state.session.weight_paint_settings.direct = false;
-                state.session.weight_paint_settings.mode = mode;
-            }
-        }
+    // These are one choice, not navigation. The old selectable-label row read
+    // as five tabs and fought the panel's actual Properties/Weights tabs.
+    let direct = state.session.weight_paint_settings.direct;
+    let selected = if direct {
+        "Direct"
+    } else {
+        state.session.weight_paint_settings.mode.label()
+    };
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt("weight_input_mode")
+            .selected_text(selected)
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(direct, "Direct")
+                    .on_hover_text("Type a weight for the selected vertices instead of painting")
+                    .clicked()
+                {
+                    state.session.weight_paint_settings.direct = true;
+                    ui.close();
+                }
+                ui.separator();
+                for mode in BrushMode::ALL {
+                    let active = !state.session.weight_paint_settings.direct
+                        && state.session.weight_paint_settings.mode == mode;
+                    let hint = match mode {
+                        BrushMode::Add => "Raise toward Weight, never past it",
+                        BrushMode::Subtract => "Lower toward zero; Weight is the rate",
+                        BrushMode::Replace => "Set to exactly Weight, from either side",
+                        BrushMode::Smooth => "Average with neighbouring vertices",
+                    };
+                    if ui
+                        .selectable_label(active, mode.label())
+                        .on_hover_text(hint)
+                        .clicked()
+                    {
+                        state.session.weight_paint_settings.direct = false;
+                        state.session.weight_paint_settings.mode = mode;
+                        ui.close();
+                    }
+                }
+            });
+        ui.label("Mode");
     });
     ui.add_space(6.0);
 
