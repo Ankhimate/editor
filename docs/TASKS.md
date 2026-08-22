@@ -1282,6 +1282,10 @@ QuickJS packages under `community-plugins/`. Package resources carry the Spine
 template; sidecars remain confined to the imported rig directory. The native
 registry and first-party preset list no longer expose either foreign format.
 MCP discovers the same packages and can invoke their importers and exporters.
+The editor exposes missing shipped packages under
+**File → Import → Community importers**; installing copies their JS/resources
+to the normal user plugin directory without overwriting an existing package,
+reloads discovery, and adds the registered importer to that same menu.
 The former Rust parser modules and native-only examples are removed. The Spine
 regression suite now executes the JS importer, and focused DragonBones tests pin
 its defaults, timing, visibility, nested armatures, IK, meshes, diagnostics, and

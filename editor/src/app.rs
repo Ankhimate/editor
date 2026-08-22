@@ -777,6 +777,39 @@ impl eframe::App for AnkhimateApp {
                                             ui.close();
                                         }
                                     }
+                                    let missing: Vec<_> = crate::plugins::COMMUNITY_PLUGINS
+                                        .iter()
+                                        .filter(|plugin| {
+                                            !self.plugins.has_importer(plugin.importer_id)
+                                        })
+                                        .collect();
+                                    if !missing.is_empty() {
+                                        ui.separator();
+                                        ui.label(
+                                            egui::RichText::new("Community importers")
+                                                .small()
+                                                .weak(),
+                                        );
+                                        for plugin in missing {
+                                            if ui
+                                                .button(format!(
+                                                    "{}  Install {}",
+                                                    crate::ui::icons::DOWNLOAD,
+                                                    plugin.label
+                                                ))
+                                                .on_hover_text(
+                                                    "Install the sandboxed JavaScript package, then \
+                                                     add it to this Import menu",
+                                                )
+                                                .clicked()
+                                            {
+                                                file_action = Some(FileAction::InstallCommunity(
+                                                    plugin.id.to_string(),
+                                                ));
+                                                ui.close();
+                                            }
+                                        }
+                                    }
                                 });
                                 ui.separator();
                                 // Recent files (T-304) — the same list the
@@ -1689,6 +1722,9 @@ enum FileAction {
     /// importer's id rather than a variant per format: the set is open, and a
     /// plugin's importer has to reach this without a new enum arm.
     Import(String),
+    /// Copy an opt-in JS package into the user's plugin directory, then reload
+    /// discovery. It remains a plugin: installation is what makes it exist.
+    InstallCommunity(String),
 }
 
 /// What an import could not carry across, held while the report is shown.
@@ -1934,6 +1970,23 @@ impl AnkhimateApp {
             FileAction::Save => fileops::save(&self.state, &self.current_path),
             FileAction::SaveAs => fileops::save_as(&self.state),
             FileAction::Import(id) => fileops::import_with(&mut self.state, &self.plugins, &id),
+            FileAction::InstallCommunity(id) => {
+                match crate::plugins::Plugins::install_community(&id) {
+                    Ok(path) => {
+                        self.plugins = crate::plugins::Plugins::directory()
+                            .map(|dir| crate::plugins::Plugins::load(&dir))
+                            .unwrap_or_default();
+                        self.status = Some(format!(
+                            "Installed {} — open File → Import to use it",
+                            path.file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("community plugin")
+                        ));
+                    }
+                    Err(error) => self.status = Some(format!("Could not install plugin: {error}")),
+                }
+                return;
+            }
         };
         match outcome {
             FileOutcome::Saved(path) => {

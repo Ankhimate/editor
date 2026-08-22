@@ -32,6 +32,28 @@ pub struct Plugins {
     pub loaded: Vec<Plugin>,
 }
 
+/// An opt-in package shipped as source, installed into the same directory as
+/// any plugin the user writes or downloads. It is not registered until its JS
+/// file is installed and discovered.
+pub struct CommunityPlugin {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub importer_id: &'static str,
+}
+
+pub const COMMUNITY_PLUGINS: &[CommunityPlugin] = &[
+    CommunityPlugin {
+        id: "spine",
+        label: "Spine JSON",
+        importer_id: "import.spine",
+    },
+    CommunityPlugin {
+        id: "dragonbones",
+        label: "DragonBones JSON",
+        importer_id: "import.dragonbones",
+    },
+];
+
 impl Plugins {
     /// Read every flat `*.js` plugin and `<name>/plugin.js` package.
     ///
@@ -80,6 +102,23 @@ impl Plugins {
         }
     }
 
+    pub fn has_importer(&self, id: &str) -> bool {
+        self.loaded
+            .iter()
+            .filter(|plugin| plugin.is_loaded())
+            .flat_map(|plugin| &plugin.importers)
+            .any(|importer| ankhimate_formats::Importer::id(importer) == id)
+    }
+
+    /// Install one shipped community package without overwriting anything.
+    /// Resources are written first and `plugin.js` last, so a failed partial
+    /// install is ignored by discovery rather than loaded without its files.
+    pub fn install_community(id: &str) -> Result<PathBuf, String> {
+        let root =
+            Self::directory().ok_or_else(|| "plugin directory is unavailable".to_string())?;
+        install_community_into(&root, id)
+    }
+
     /// Every exporter any loaded plugin contributes, as `(id, label)`.
     ///
     /// For the export panel's format list, which offers these beside the
@@ -119,6 +158,39 @@ impl Plugins {
     }
 }
 
+fn install_community_into(root: &Path, id: &str) -> Result<PathBuf, String> {
+    let (script, resources): (&[u8], &[(&str, &[u8])]) = match id {
+        "spine" => (
+            include_bytes!("../../community-plugins/spine/plugin.js"),
+            &[(
+                "spine_json.json",
+                include_bytes!("../../community-plugins/spine/spine_json.json"),
+            )],
+        ),
+        "dragonbones" => (
+            include_bytes!("../../community-plugins/dragonbones/plugin.js"),
+            &[],
+        ),
+        _ => return Err(format!("unknown community plugin `{id}`")),
+    };
+    let target = root.join(id);
+    if target.exists() {
+        return Err(format!("{} already exists", target.display()));
+    }
+    std::fs::create_dir_all(root)
+        .map_err(|error| format!("could not create {}: {error}", root.display()))?;
+    std::fs::create_dir(&target)
+        .map_err(|error| format!("could not create {}: {error}", target.display()))?;
+
+    for (name, bytes) in resources {
+        std::fs::write(target.join(name), bytes)
+            .map_err(|error| format!("could not install {name}: {error}"))?;
+    }
+    std::fs::write(target.join("plugin.js"), script)
+        .map_err(|error| format!("could not install {id}: {error}"))?;
+    Ok(target)
+}
+
 /// Read one plugin file and collect what it declares.
 ///
 /// Declarations are collected in separate runs because the host collects one
@@ -140,6 +212,44 @@ mod tests {
         let plugins = Plugins::load(Path::new("no/such/place"));
         assert!(plugins.loaded.is_empty());
         assert_eq!(plugins.summary(), "No plugins");
+    }
+
+    #[test]
+    fn installing_a_community_importer_makes_it_discoverable() {
+        let dir = tempfile::tempdir().unwrap();
+        let installed = install_community_into(dir.path(), "spine").unwrap();
+        assert!(installed.join("plugin.js").is_file());
+        assert!(installed.join("spine_json.json").is_file());
+
+        let plugins = Plugins::load(dir.path());
+        assert!(plugins.has_importer("import.spine"));
+        assert!(
+            plugins
+                .exporters()
+                .iter()
+                .any(|(id, _)| id == "export.spine")
+        );
+    }
+
+    #[test]
+    fn installing_never_overwrites_an_existing_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("dragonbones");
+        std::fs::create_dir(&target).unwrap();
+        write(&target, "plugin.js", "keep me");
+
+        assert!(install_community_into(dir.path(), "dragonbones").is_err());
+        assert_eq!(
+            std::fs::read_to_string(target.join("plugin.js")).unwrap(),
+            "keep me"
+        );
+    }
+
+    #[test]
+    fn an_unknown_community_package_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(install_community_into(dir.path(), "mystery").is_err());
+        assert!(!dir.path().join("mystery").exists());
     }
 
     #[test]
