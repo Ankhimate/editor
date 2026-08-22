@@ -12,7 +12,7 @@
 
 use ankhimate_plugins::Host;
 
-const FIXTURE: &[u8] = include_bytes!("../../formats/tests/fixtures/tagged_rig.psd");
+const FIXTURE: &[u8] = include_bytes!("fixtures/tagged_rig.psd");
 
 /// Run `script` with the fixture available as `PSD_BASE64`, returning whatever
 /// it logs.

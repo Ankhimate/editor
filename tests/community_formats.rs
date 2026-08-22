@@ -3,19 +3,19 @@
 use ankhimate_formats::Importer;
 use ankhimate_plugins::Host;
 
-const SPINE: &str = include_str!("../../community-plugins/spine/plugin.js");
-const DRAGONBONES: &str = include_str!("../../community-plugins/dragonbones/plugin.js");
+const SPINE: &str = include_str!("../community-plugins/spine/plugin.js");
+const DRAGONBONES: &str = include_str!("../community-plugins/dragonbones/plugin.js");
 
 fn spine_host() -> Host {
     Host::new().with_resources(std::collections::BTreeMap::from([(
         "spine_json.json".to_string(),
-        include_bytes!("../../community-plugins/spine/spine_json.json").to_vec(),
+        include_bytes!("../community-plugins/spine/spine_json.json").to_vec(),
     )]))
 }
 
 #[test]
 fn community_packages_restore_the_external_format_registries() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../community-plugins");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("community-plugins");
     let plugins = ankhimate_plugins::discovery::load(&root);
     assert_eq!(plugins.len(), 2, "{root:?}");
     assert!(plugins.iter().all(|plugin| plugin.is_loaded()));

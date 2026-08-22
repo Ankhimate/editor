@@ -1,0 +1,3 @@
+[submodule "community-plugins"]
+	path = community-plugins
+	url = https://github.com/Ankhimate/community-plugins
