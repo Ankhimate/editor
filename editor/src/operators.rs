@@ -269,6 +269,7 @@ impl Operator for Adopted {
             doc: std::mem::take(&mut state.doc),
             history: std::mem::take(&mut state.history),
             // The editor has no importer running, so nothing reports into this.
+            dangling: Vec::new(),
             report: Vec::new(),
             mode: state.session.work_mode,
         };

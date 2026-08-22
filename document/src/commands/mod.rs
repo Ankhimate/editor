@@ -32,6 +32,7 @@ pub mod bone_cmds;
 pub mod clip_cmds;
 pub mod constraint_cmds;
 pub mod create_attachment_cmds;
+pub mod document_cmds;
 pub mod event_cmds;
 pub mod export_cmds;
 pub mod group_cmds;

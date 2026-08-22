@@ -231,6 +231,11 @@ fn as_loaded(edit: Edit, path: &std::path::Path) -> Loaded {
         .to_string();
 
     let mut report = ankhimate_formats::convert::LoadReport::default();
+    report.dangling = edit
+        .dangling
+        .into_iter()
+        .map(|(what, name)| (Box::leak(what.into_boxed_str()) as &'static str, name))
+        .collect();
     // `Lossy::what` is a `&'static str` and a plugin's kind is a `String` read
     // from its own file, so the name is leaked to reach that lifetime. A leak
     // per reported approximation, bounded by one import — against dropping the

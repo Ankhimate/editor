@@ -1257,6 +1257,20 @@ automatic framing and per-call focus/diagnostics, and never mutate document or
 session selection state. See [MCP server](mcp.md) for the focus contract and
 deliberate omissions.
 
+### T-1003 Move foreign formats to community JavaScript plugins
+**Deps:** T-1001 · **Refs:** [plugin plan](plugin-plan.md), [plugin API](plugin-api.md)
+- The complete name-keyed project schema can be imported atomically through
+  `ankhimate.importProject`; image bytes and structured diagnostics cross with it.
+- Atlas-based importers can crop and unrotate encoded images without filesystem
+  access. Export plugins can render an existing strict preset with `emitPreset`.
+- Port Spine import/export and DragonBones import to ordinary `.js` files, pin
+  them against the existing native behavior tests, then remove their native
+  registry entries and parser modules.
+**Accept:** installing the community plugins restores the corresponding registry
+entries; full-schema fixtures preserve constraints, curves, weighted meshes,
+deform and atlas artwork; without the plugins those foreign formats are absent;
+the editor and MCP use the same discovered plugin set.
+
 ## Dependency overview
 
 ```

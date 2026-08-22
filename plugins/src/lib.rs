@@ -506,6 +506,41 @@ impl Host {
                 })?,
             )?;
 
+            // A complete name-keyed project is the lossless importer boundary.
+            // Fine-grained verbs remain useful for small formats, but making a
+            // Spine or DragonBones importer replay hundreds of commands would
+            // omit schema features the verb catalogue does not expose. The
+            // replacement still goes through one EditCommand, so it is atomic,
+            // mode-checked, and one undo step rather than direct mutation.
+            let import_edit = cell.clone();
+            ank.set(
+                "importProject",
+                Function::new(
+                    ctx.clone(),
+                    move |project_json: String,
+                          images_json: String,
+                          report_json: String|
+                          -> String {
+                        import_project(
+                            &mut import_edit.borrow_mut(),
+                            &project_json,
+                            &images_json,
+                            &report_json,
+                        )
+                    },
+                )?,
+            )?;
+
+            ank.set(
+                "cropImage",
+                Function::new(
+                    ctx.clone(),
+                    move |base64: String, options_json: String| -> String {
+                        crop_image(&base64, &options_json)
+                    },
+                )?,
+            )?;
+
             // ── Exporters ────────────────────────────────────────────────
             let exporter_sink = exporters.clone();
             ank.set(
@@ -542,6 +577,20 @@ impl Host {
                     {
                         sink.borrow_mut().binary.push((path, bytes));
                     }
+                })?,
+            )?;
+
+            // Let a community exporter reuse the strict Handlebars + atlas
+            // engine. The script supplies data, receives no file handle, and
+            // the resulting files join the same confined all-or-nothing Plan
+            // as files written with `emit`.
+            let preset_doc = cell.clone();
+            let preset_emitted = emitted.clone();
+            ank.set(
+                "emitPreset",
+                Function::new(ctx.clone(), move |preset_json: String| -> String {
+                    let borrowed = preset_doc.borrow();
+                    emit_preset(&borrowed.doc, preset_emitted.as_ref(), &preset_json)
                 })?,
             )?;
 
@@ -654,6 +703,11 @@ impl Host {
                   sidecar: (name) => __ankhimate.sidecar(name),
                   sidecarBytes: (name) => __ankhimate.sidecarBytes(name),
                   sidecars: () => __ankhimate.sidecars(),
+                  importProject: (project, images = {}, report = {}) =>
+                    __unwrap(__ankhimate.importProject(
+                      JSON.stringify(project), JSON.stringify(images), JSON.stringify(report))),
+                  cropImage: (base64, options) =>
+                    __unwrap(__ankhimate.cropImage(base64, JSON.stringify(options ?? {}))),
 
                   // Structure reading. Each throws on failure rather than
                   // returning an error object: a plugin that ignored a returned
@@ -693,6 +747,8 @@ impl Host {
                   __ankhimate.declareExporter(spec.id, spec.label ?? spec.id);
                 };
                 globalThis.emit = (path, contents) => __ankhimate.emit(path, String(contents));
+                globalThis.emitPreset = (preset) =>
+                  __unwrap(__ankhimate.emitPreset(JSON.stringify(preset)));
                 globalThis.bakeAtlas = (settings) =>
                   JSON.parse(__ankhimate.bakeAtlas(JSON.stringify(settings ?? {})));
                 globalThis.emitBytes = (path, base64) => __ankhimate.emitBytes(path, base64);
@@ -903,6 +959,139 @@ mod tests {
 
         assert_eq!(printed, ["no require", "no process"]);
     }
+
+    #[test]
+    fn a_plugin_imports_the_complete_project_schema_without_flattening_it() {
+        let host = Host::new();
+        let mut edit = Edit::default();
+        host.run(
+            r#"
+            ankhimate.importProject({
+              version: 3,
+              name: "complete",
+              fps: 24,
+              assets: [{ name: "missing", file: "missing.png", width: 16, height: 16 }],
+              bones: [
+                { name: "root", length: 10 },
+                { name: "target", length: 1, tx: 20 }
+              ],
+              slots: [{ name: "shape", bone: "root", attachment: "mesh" }],
+              draw_order: ["shape"],
+              skins: [{
+                name: "default",
+                entries: [
+                  { slot: "shape", name: "mesh", attachment: {
+                    type: "mesh", texture: "missing", vertices: [0,0, 10,0, 0,10],
+                    uvs: [0,0, 1,0, 0,1], triangles: [0,1,2],
+                    weights: [[ ["root",1] ], [ ["root",1] ], [ ["root",1] ]]
+                  }},
+                  { slot: "shape", name: "route", attachment: {
+                    type: "path", vertices: [0,0, 5,8, 10,0], closed: false,
+                    constant_speed: true
+                  }}
+                ]
+              }],
+              default_skin: "default",
+              constraints: [{
+                name: "follow", type: "transform", target: "target", bones: ["root"],
+                transform_mix: { rotate: 0.5, translate_x: 0.25 },
+                offsets: [1,2,3,4,5,6,7]
+              }],
+              constraint_order: ["follow"],
+              animations: [{
+                name: "bend", duration: 1, looping: true,
+                timelines: [
+                  { kind: "bone_rotate", bone: "root", keys: [
+                    { time: 0, value: 0, curve: "linear" },
+                    { time: 1, value: 45, curve: "bezier", handles: [0.2,0.3,0.8,0.9] }
+                  ]},
+                  { kind: "transform_constraint_mix", constraint: "follow", keys: [
+                    { time: 0.5, rotate: 0.75, translate_x: 0.5, curve: "linear" }
+                  ]},
+                  { kind: "deform", slot: "shape", attachment: "mesh", keys: [
+                    { time: 0.5, offsets: [1,2, 3,4, 5,6], curve: "linear" }
+                  ]}
+                ]
+              }]
+            });
+            "#,
+            &mut edit,
+        )
+        .expect("complete project imports");
+
+        let json = ankhimate_formats::to_json(&edit.doc.as_project_ref()).expect("serializes");
+        let project: serde_json::Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(project["name"], "complete");
+        assert_eq!(project["fps"], 24);
+        assert_eq!(
+            project["skins"][0]["entries"][1]["attachment"]["type"],
+            "path"
+        );
+        assert_eq!(
+            project["animations"][0]["timelines"][0]["keys"][1]["handles"],
+            serde_json::json!([0.2, 0.3, 0.8, 0.9])
+        );
+        assert_eq!(
+            project["animations"][0]["timelines"][1]["kind"],
+            "transform_constraint_mix"
+        );
+        assert_eq!(project["animations"][0]["timelines"][2]["kind"], "deform");
+        assert_eq!(edit.dangling, [("asset image".into(), "missing".into())]);
+
+        assert!(edit.undo(), "the complete import is one command");
+        assert_eq!(edit.doc.meta.name, "untitled");
+        assert!(edit.doc.skeleton.bones.is_empty());
+        assert!(!edit.undo(), "one import means one undo step");
+    }
+
+    #[test]
+    fn a_bad_complete_project_leaves_the_document_untouched() {
+        let host = Host::new();
+        let mut edit = Edit::default();
+        edit.doc.meta.name = "keep me".into();
+
+        let error = host
+            .run(
+                r#"ankhimate.importProject({ version: 3, name: "broken" });"#,
+                &mut edit,
+            )
+            .expect_err("missing required schema fields");
+
+        assert!(format!("{error}").contains("invalid Ankhimate project"));
+        assert_eq!(edit.doc.meta.name, "keep me");
+        assert!(edit.doc.skeleton.bones.is_empty());
+        assert!(!edit.undo(), "a failed import records no command");
+    }
+
+    #[test]
+    fn an_atlas_importer_can_crop_and_unrotate_image_bytes() {
+        let mut source = image::RgbaImage::new(3, 2);
+        for y in 0..2 {
+            for x in 0..3 {
+                source.put_pixel(x, y, image::Rgba([x as u8 * 50, y as u8 * 80, 10, 255]));
+            }
+        }
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(source)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("png");
+        let script = format!(
+            r#"console.log(ankhimate.cropImage({}, {{
+                x: 1, y: 0, width: 2, height: 1, rotate_clockwise: true
+            }}));"#,
+            serde_json::Value::String(importer::encode_base64(&bytes))
+        );
+
+        let printed = Host::new()
+            .run(&script, &mut Edit::default())
+            .expect("crop runs");
+        let cropped = decode_base64(&printed[0]).expect("base64");
+        let cropped = image::load_from_memory(&cropped).expect("png");
+        assert_eq!((cropped.width(), cropped.height()), (1, 2));
+    }
 }
 
 /// Decode standard base64. Paired with the encoder in `importer.rs`.
@@ -951,6 +1140,165 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+/// Replace an importer's working document from the public `.ankh` project
+/// schema, binding encoded image bytes by asset name.
+fn import_project(
+    edit: &mut Edit,
+    project_json: &str,
+    images_json: &str,
+    report_json: &str,
+) -> String {
+    let mut loaded = match ankhimate_formats::from_json(project_json) {
+        Ok(loaded) => loaded,
+        Err(e) => return error_json(&format!("invalid Ankhimate project: {e}")),
+    };
+    let mut images: std::collections::BTreeMap<String, String> =
+        match serde_json::from_str(images_json) {
+            Ok(images) => images,
+            Err(e) => return error_json(&format!("invalid image map: {e}")),
+        };
+    let plugin_report: serde_json::Value = match serde_json::from_str(report_json) {
+        Ok(report) => report,
+        Err(e) => return error_json(&format!("invalid import report: {e}")),
+    };
+
+    for (_, asset) in loaded.assets.images.iter_mut() {
+        match images.remove(&asset.name) {
+            Some(encoded) => match decode_base64(&encoded) {
+                Some(bytes) => asset.bytes = bytes,
+                None => return error_json(&format!("image `{}` is not valid base64", asset.name)),
+            },
+            None => loaded.report.dangling("asset image", &asset.name),
+        }
+    }
+
+    let report = std::mem::take(&mut loaded.report);
+    let document = ankhimate_document::Document::from_loaded(loaded);
+    if let Err(e) = edit.dispatch(Box::new(
+        ankhimate_document::commands::document_cmds::ReplaceDocument::new(document),
+    )) {
+        return error_json(&e.to_string());
+    }
+
+    edit.dangling.extend(
+        report
+            .dangling
+            .into_iter()
+            .map(|(what, name)| (what.to_string(), name)),
+    );
+    edit.report.extend(
+        report
+            .lossy
+            .into_iter()
+            .map(|loss| ankhimate_document::Approximation {
+                what: loss.what.to_string(),
+                where_: loss.where_,
+                detail: loss.detail,
+            }),
+    );
+    if let Some(dangling) = plugin_report.get("dangling").and_then(|v| v.as_array()) {
+        edit.dangling.extend(dangling.iter().filter_map(|item| {
+            Some((
+                item.get("what")?.as_str()?.to_string(),
+                item.get("name")?.as_str()?.to_string(),
+            ))
+        }));
+    }
+    if let Some(lossy) = plugin_report.get("lossy").and_then(|v| v.as_array()) {
+        edit.report.extend(lossy.iter().filter_map(|item| {
+            Some(ankhimate_document::Approximation {
+                what: item.get("what")?.as_str()?.to_string(),
+                where_: item.get("where")?.as_str()?.to_string(),
+                detail: item.get("detail")?.as_str()?.to_string(),
+            })
+        }));
+    }
+    "null".to_string()
+}
+
+/// Crop an encoded image and optionally turn the crop clockwise by 90 degrees.
+/// This is generic image plumbing for atlas-based importers; no format parser
+/// or filesystem access crosses into the host.
+fn crop_image(base64: &str, options_json: &str) -> String {
+    let Some(bytes) = decode_base64(base64) else {
+        return error_json("that image is not valid base64");
+    };
+    let options: serde_json::Value = match serde_json::from_str(options_json) {
+        Ok(options) => options,
+        Err(e) => return error_json(&format!("invalid crop options: {e}")),
+    };
+    let number = |name: &str| -> Option<u32> {
+        options
+            .get(name)
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+    };
+    let (Some(x), Some(y), Some(width), Some(height)) =
+        (number("x"), number("y"), number("width"), number("height"))
+    else {
+        return error_json("crop options require integer x, y, width, and height");
+    };
+    let image = match image::load_from_memory(&bytes) {
+        Ok(image) => image.to_rgba8(),
+        Err(e) => return error_json(&format!("could not decode image: {e}")),
+    };
+    let Some(right) = x.checked_add(width) else {
+        return error_json("crop rectangle overflows");
+    };
+    let Some(bottom) = y.checked_add(height) else {
+        return error_json("crop rectangle overflows");
+    };
+    if width == 0 || height == 0 || right > image.width() || bottom > image.height() {
+        return error_json("crop rectangle is outside the image");
+    }
+    let cropped = image::imageops::crop_imm(&image, x, y, width, height).to_image();
+    let cropped = if options
+        .get("rotate_clockwise")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        image::imageops::rotate90(&cropped)
+    } else {
+        cropped
+    };
+    let mut png = Vec::new();
+    if let Err(e) = image::DynamicImage::ImageRgba8(cropped)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+    {
+        return error_json(&format!("could not encode crop: {e}"));
+    }
+    serde_json::Value::String(importer::encode_base64(&png)).to_string()
+}
+
+/// Render a user-authored export preset into the current plugin export sink.
+fn emit_preset(
+    doc: &ankhimate_document::Document,
+    emitted: Option<&std::rc::Rc<std::cell::RefCell<exporter::Emitted>>>,
+    preset_json: &str,
+) -> String {
+    let Some(emitted) = emitted else {
+        return error_json("emitPreset() is only available while an exporter is running");
+    };
+    let preset: ankhimate_export::preset::Preset = match serde_json::from_str(preset_json) {
+        Ok(preset) => preset,
+        Err(e) => return error_json(&format!("invalid export preset: {e}")),
+    };
+    let project = ankhimate_formats::convert::to_schema(&doc.as_project_ref());
+    let plan = match ankhimate_export::run::plan(&project, &doc.assets, &preset) {
+        Ok(plan) => plan,
+        Err(e) => return error_json(&e.to_string()),
+    };
+
+    let mut sink = emitted.borrow_mut();
+    sink.text.extend(
+        plan.files
+            .into_iter()
+            .map(|file| (file.path, file.contents)),
+    );
+    sink.binary.extend(plan.binaries);
+    "null".to_string()
 }
 
 /// Pack a document's images and hand the result back as JSON.

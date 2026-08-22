@@ -190,6 +190,19 @@ the whole skill. It will do rig structure from a description, mechanical
 animation (blinks, holds, loops), bulk edits across many rigs, retargeting, and
 rough first drafts to fix by hand.
 
+## Foreign-format plugin migration
+
+The lossless boundary needed by real JavaScript importers has landed:
+`ankhimate.importProject` accepts the complete public name-keyed project schema
+as one undoable replacement, carries dangling/lossy diagnostics, and binds
+image bytes by asset name. `ankhimate.cropImage` provides generic atlas crop and
+90-degree unrotation without exposing filesystem access. Export plugins can use
+`emitPreset` to reuse the strict Handlebars/atlas plan.
+
+Spine and DragonBones remain registered native readers until their ordinary
+`.js` replacements pass the existing behavior tests. Removing them before that
+parity proof would turn an architectural migration into silent format loss.
+
 ## What is deliberately not on this list
 
 - **Electron.** Would cost the whole application and buy only plugin-authoring

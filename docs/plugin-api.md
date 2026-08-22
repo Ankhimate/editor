@@ -333,6 +333,8 @@ for (const bone of rig().skeleton.bones) {
 | `ankhimate.sidecar(name)` | A text file beside the imported one |
 | `ankhimate.sidecarBytes(name)` | The same, base64, for images |
 | `ankhimate.sidecars()` | What is beside the imported file |
+| `ankhimate.importProject(project, images, report)` | Atomically import the complete public `.ankh` project shape |
+| `ankhimate.cropImage(base64, rect)` | Crop atlas pixels and optionally rotate the crop clockwise |
 
 ### An importer is a plugin
 
@@ -354,9 +356,19 @@ ankhimate.registerImporter({
 });
 ```
 
-It builds the rig by calling verbs rather than constructing a document — which
-gives it a property the built-in Rust readers do not have: **the import is a run
-of commands, so it undoes.** Those replace the document wholesale and cannot.
+Small importers build a rig by calling verbs. A format that needs the complete
+schema can instead call `ankhimate.importProject(project, images, report)`.
+`project` is the name-keyed shape documented by the `.ankh` schema, `images` is
+an object from asset name to base64-encoded image bytes, and `report` may contain
+`dangling: [{ what, name }]` and `lossy: [{ what, where, detail }]`.
+
+The host parses and resolves that project before dispatching one whole-document
+command. A malformed project changes nothing; a successful import is one Setup
+mode undo step. This is not a raw document write surface.
+
+Packed-atlas importers can use `ankhimate.cropImage(bytes, { x, y, width,
+height, rotate_clockwise })`. It returns base64 PNG bytes and exposes no path or
+decoder object to the script.
 
 `import.report` is what keeps a plugin honest. An import that drops half a file
 quietly is worse than one that refuses, and the report survives an undo because
@@ -385,6 +397,7 @@ ankhimate.registerExporter({
 | `ankhimate.registerExporter(spec)` | Declare a format this plugin writes |
 | `emit(path, contents)` | A text file, relative to the output directory |
 | `emitBytes(path, base64)` | A binary one |
+| `emitPreset(preset)` | Render a strict Handlebars/atlas preset into this export plan |
 | `bakeAtlas(settings)` | Pack the rig's images; pages as base64 PNG, regions as metadata |
 
 `bakeAtlas` is what lets a plugin produce a real engine format. Most runtime
@@ -398,6 +411,10 @@ const atlas = bakeAtlas({ padding: 2 });
 for (const page of atlas.pages) emitBytes(`atlas_${page.index}.png`, page.png_base64);
 emit("atlas.json", JSON.stringify(atlas.regions));
 ```
+
+`emitPreset(preset)` lets a JavaScript format wrapper reuse the existing strict
+template and atlas pipeline. Its files join the same plugin export plan, so it
+does not bypass confinement or atomic writing.
 
 A bake that fails returns `{ error }` rather than throwing, so a rig with one
 undecodable image lets a plugin write the rest and say what was missing — the

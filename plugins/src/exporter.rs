@@ -278,6 +278,40 @@ mod tests {
     }
 
     #[test]
+    fn a_javascript_exporter_can_reuse_a_strict_export_preset() {
+        let preset_json = include_str!("../../export/src/presets/spine_json.json");
+        let source = format!(
+            r#"
+            const preset = {preset_json};
+            ankhimate.registerExporter({{
+              id: "export.spine.community",
+              label: "Spine JSON",
+              write() {{ emitPreset(preset); }}
+            }});
+            "#
+        );
+
+        let exporter = Host::new()
+            .exporters(&source)
+            .expect("plugin loads")
+            .remove(0);
+        let (actual, _) = exporter.plan(rig()).expect("plugin preset renders");
+
+        let expected_doc = rig();
+        let project = ankhimate_formats::convert::to_schema(&expected_doc.as_project_ref());
+        let preset = ankhimate_export::preset::Preset::from_json(preset_json).expect("preset");
+        let expected = ankhimate_export::run::plan(&project, &expected_doc.assets, &preset)
+            .expect("native preset renders");
+
+        assert_eq!(actual.files.len(), expected.files.len());
+        for (actual, expected) in actual.files.iter().zip(&expected.files) {
+            assert_eq!(actual.path, expected.path);
+            assert_eq!(actual.contents, expected.contents);
+        }
+        assert_eq!(actual.binaries, expected.binaries);
+    }
+
+    #[test]
     fn baking_reports_a_failure_rather_than_throwing() {
         // A rig with one undecodable image should let a plugin write the rest
         // and say what was missing — the same choice the importers make with
