@@ -73,6 +73,25 @@ impl Document {
         }
     }
 
+    /// Build document state from the format layer's name-resolved result.
+    ///
+    /// Importers use this at the serialization boundary, then replace the open
+    /// document through an [`EditCommand`](crate::commands::EditCommand). Keeping
+    /// the field mapping here avoids every headless consumer inventing its own.
+    pub fn from_loaded(loaded: ankhimate_formats::Loaded) -> Self {
+        Self {
+            skeleton: loaded.skeleton,
+            animations: loaded.animations,
+            assets: loaded.assets,
+            meta: DocumentMeta {
+                name: loaded.name,
+                fps: loaded.fps,
+            },
+            psd_layer_paths: loaded.psd_layer_paths,
+            export_presets: loaded.export_presets,
+        }
+    }
+
     /// The presets, parsed. Anything that no longer deserializes is skipped
     /// rather than failing the document — a preset from a newer editor is a
     /// reason to leave it alone, not to refuse to open the rig.

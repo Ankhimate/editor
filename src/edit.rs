@@ -34,6 +34,9 @@ pub struct Approximation {
 pub struct Edit {
     pub doc: Document,
     pub history: History,
+    /// Name references that did not resolve while importing (`what`, `name`).
+    /// Like [`Self::report`], this is diagnostic session state, not authored data.
+    pub dangling: Vec<(String, String)>,
     /// What an importer could not represent exactly.
     ///
     /// Not undoable: a report is not part of the rig, and undoing an import's
@@ -81,6 +84,7 @@ impl Edit {
         Self {
             doc,
             history: History::default(),
+            dangling: Vec::new(),
             report: Vec::new(),
             mode: WorkMode::Setup,
         }
