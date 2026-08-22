@@ -327,7 +327,7 @@ for (const bone of rig().skeleton.bones) {
 | `ops.schema(id)` | What that verb takes |
 | `ops.invoke(id, args)` | Run it. Throws on a bad argument or a refused mode |
 | `rig()` | The read surface, as the template context |
-| `names()` | Bones, slots, skins and animations by name |
+| `names()` | Bones, slots, skins, animations, image assets, and per-slot attachment choices by name |
 | `console.log(msg)` | Comes back to the host as a line |
 | `ankhimate.registerImporter(spec)` | Declare a rig format this plugin reads |
 | `ankhimate.sidecar(name)` | A text file beside the imported one |

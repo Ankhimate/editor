@@ -51,7 +51,7 @@ pub use commands::{EditCommand, History, IdRemap};
 pub use doc::{Document, DocumentMeta};
 pub use edit::{Approximation, Edit, Refused};
 pub use ops::{DocOperator, DocOps, OpError};
-pub use read::{Names, describe, names};
+pub use read::{Names, SlotAttachments, describe, names};
 pub use work_mode::WorkMode;
 
 #[cfg(test)]

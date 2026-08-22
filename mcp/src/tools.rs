@@ -34,6 +34,12 @@ pub struct Tool {
 #[derive(Debug)]
 pub enum Output {
     Structured(Value),
+    StructuredImage {
+        structured: Value,
+        png: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
     Image {
         png: Vec<u8>,
         width: u32,
@@ -46,6 +52,7 @@ impl Output {
     fn structured(self) -> Value {
         match self {
             Self::Structured(value) => value,
+            Self::StructuredImage { structured, .. } => structured,
             Self::Image { .. } => panic!("expected structured output"),
         }
     }
@@ -58,7 +65,8 @@ pub fn all() -> Vec<Tool> {
             name: "open_rig",
             description: "Open a rig through the shared importer registry. .ankh and PSD are \
                           built in; installed JavaScript plugins can add formats such as Spine \
-                          and DragonBones. Replaces whatever was open.",
+                          and DragonBones. Returns a setup-pose preview and a compact inventory \
+                          of image assets and attachment choices. Replaces whatever was open.",
             schema: json!({
                 "type": "object",
                 "required": ["path"],
@@ -219,7 +227,30 @@ pub fn call(session: &mut Session, name: &str, args: &Value) -> Result<Output, E
         "open_rig" => {
             let path = string_arg(args, "path")?;
             session.open_rig(Path::new(&path))?;
-            Ok(Output::Structured(json!({ "opened": session.summary()? })))
+            let names = ankhimate_document::read::names(session.doc()?);
+            let rendered = ankhimate_render::render_frame(
+                session.doc()?,
+                &ankhimate_render::FrameRequest::default(),
+            )
+            .map_err(|error| Error::Render(error.to_string()))?;
+            Ok(Output::StructuredImage {
+                structured: json!({
+                    "opened": session.summary()?,
+                    "preview": {
+                        "pose": "setup",
+                        "width": rendered.width,
+                        "height": rendered.height,
+                        "mime_type": "image/png",
+                    },
+                    "assets": {
+                        "images": names.images,
+                        "attachments": names.attachments,
+                    },
+                }),
+                png: rendered.bytes,
+                width: rendered.width,
+                height: rendered.height,
+            })
         }
         "new_rig" => {
             let name = string_arg(args, "name")?;
@@ -508,8 +539,63 @@ mod tests {
                 assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
                 assert_eq!(image_dimensions(&png), (64, 48));
             }
-            Output::Structured(_) => panic!("render_frame returned JSON instead of an image"),
+            Output::Structured(_) | Output::StructuredImage { .. } => {
+                panic!("render_frame returned JSON instead of an image")
+            }
         }
+    }
+
+    #[test]
+    fn opening_a_rig_returns_setup_preview_and_attachment_choices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hands.ankh");
+        let mut built = Session::new();
+        call_ok(&mut built, "new_rig", json!({ "name": "hands" }));
+        call_ok(
+            &mut built,
+            "run_script",
+            json!({ "script": r#"
+                ops.invoke("bone.create", { name: "root" });
+                ops.invoke("slot.create", { name: "hand", bone: "root" });
+                ops.invoke("attachment.create_point", { slot: "hand", name: "closed" });
+                ops.invoke("attachment.create_point", { slot: "hand", name: "open" });
+                ops.invoke("slot.set_attachment", { slot: "hand", attachment: "closed" });
+            "# }),
+        );
+        call_ok(
+            &mut built,
+            "save_rig",
+            json!({ "path": path.to_str().unwrap() }),
+        );
+
+        let mut opened = Session::new();
+        let output = call(
+            &mut opened,
+            "open_rig",
+            &json!({ "path": path.to_str().unwrap() }),
+        )
+        .unwrap();
+        let Output::StructuredImage {
+            structured,
+            png,
+            width,
+            height,
+        } = output
+        else {
+            panic!("open_rig did not return structured data with a preview");
+        };
+        assert_eq!((width, height), (512, 512));
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(structured["preview"]["pose"], "setup");
+        assert_eq!(structured["assets"]["images"], json!([]));
+        assert_eq!(
+            structured["assets"]["attachments"],
+            json!([{
+                "slot": "hand",
+                "current": "closed",
+                "available": ["closed", "open"],
+            }])
+        );
     }
 
     fn image_dimensions(png: &[u8]) -> (u32, u32) {

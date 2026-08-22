@@ -13,7 +13,8 @@ Run it with `cargo run -p ankhimate-mcp`.
 
 ## Tools
 
-- `open_rig`, `new_rig`, `describe_rig`, `list_verbs`, `run_script`,
+- `open_rig` returns a compact asset/attachment inventory and setup-pose PNG;
+  `new_rig`, `describe_rig`, `list_verbs`, `run_script`,
   `save_rig`, and `export_rig` provide the headless edit/export loop.
 - `render_frame` renders one setup pose or named animation time.
 - `render_contact_sheet` renders explicit `times`, or `frame_count` evenly

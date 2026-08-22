@@ -47,6 +47,39 @@ pub fn describe(doc: &Document) -> serde_json::Value {
 /// precedes every edit. Answering it without building the whole context matters
 /// when the rig is large and the caller is deciding what to do next.
 pub fn names(doc: &Document) -> Names {
+    let mut images: Vec<String> = doc
+        .assets
+        .images
+        .values()
+        .map(|image| image.name.clone())
+        .collect();
+    images.sort();
+
+    let attachments = doc
+        .skeleton
+        .slots
+        .iter()
+        .filter_map(|(slot_id, slot)| {
+            let mut available: Vec<String> = doc
+                .skeleton
+                .skins
+                .values()
+                .flat_map(|skin| skin.names_for_slot(slot_id).map(str::to_owned))
+                .collect();
+            available.sort();
+            available.dedup();
+            if available.is_empty() && slot.attachment.is_none() {
+                None
+            } else {
+                Some(SlotAttachments {
+                    slot: slot.name.clone(),
+                    current: slot.attachment.clone(),
+                    available,
+                })
+            }
+        })
+        .collect();
+
     Names {
         bones: doc
             .skeleton
@@ -67,6 +100,8 @@ pub fn names(doc: &Document) -> Names {
             .map(|s| s.name.clone())
             .collect(),
         animations: doc.animations.values().map(|a| a.name.clone()).collect(),
+        images,
+        attachments,
     }
 }
 
@@ -77,12 +112,29 @@ pub struct Names {
     pub slots: Vec<String>,
     pub skins: Vec<String>,
     pub animations: Vec<String>,
+    pub images: Vec<String>,
+    pub attachments: Vec<SlotAttachments>,
+}
+
+/// Attachment choices for one slot, without the geometry in the full read surface.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SlotAttachments {
+    pub slot: String,
+    pub current: Option<String>,
+    pub available: Vec<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Args, DocOps, Edit};
+    use ankhimate_core::{
+        assets::ImageAsset,
+        attachment::{Attachment, PointAttachment},
+        math::Transform,
+        skeleton::Bone,
+        slot::Slot,
+    };
     use serde_json::json;
 
     fn rig() -> Edit {
@@ -121,6 +173,42 @@ mod tests {
         assert!(names.bones.contains(&"spine".to_string()));
         assert_eq!(names.slots, ["body"]);
         assert_eq!(names.animations, ["walk"]);
+    }
+
+    #[test]
+    fn names_include_compact_asset_and_attachment_choices() {
+        let mut doc = Document::new();
+        let bone = doc.skeleton.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 0.0,
+            local_transform: Transform::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let mut hand = Slot::new("hand".into(), bone);
+        hand.attachment = Some("closed".into());
+        let hand = doc.skeleton.add_slot(hand);
+        let skin = doc.skeleton.default_skin;
+        doc.skeleton.skins[skin].set(hand, "open", Attachment::Point(PointAttachment::default()));
+        doc.skeleton.skins[skin].set(
+            hand,
+            "closed",
+            Attachment::Point(PointAttachment::default()),
+        );
+        doc.assets
+            .add(ImageAsset::new("hand.png", Vec::new(), 1, 1));
+
+        let names = names(&doc);
+        assert_eq!(names.images, ["hand.png"]);
+        assert_eq!(
+            names.attachments,
+            [SlotAttachments {
+                slot: "hand".into(),
+                current: Some("closed".into()),
+                available: vec!["closed".into(), "open".into()],
+            }]
+        );
     }
 
     #[test]
