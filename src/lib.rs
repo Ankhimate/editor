@@ -17,7 +17,6 @@
 
 pub mod container;
 pub mod convert;
-pub mod dragonbones;
 pub mod importer;
 pub mod migrate;
 pub mod psd;
@@ -25,7 +24,6 @@ pub mod psd_infer;
 pub mod psd_read;
 pub mod psd_tags;
 pub mod schema;
-pub mod spine;
 
 use std::path::Path;
 

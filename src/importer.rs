@@ -187,12 +187,11 @@ impl Importers {
         Self::default()
     }
 
-    /// Every built-in importer, registered through the same door a plugin uses.
+    /// Native importers. Foreign formats are registered by `ankhimate-plugins`
+    /// at the consuming application's composition root.
     pub fn builtin() -> Self {
         let mut importers = Self::new();
         importers.register(Box::new(AnkhImporter));
-        importers.register(Box::new(crate::spine::SpineImporter));
-        importers.register(Box::new(crate::dragonbones::DragonBonesImporter));
         importers.register(Box::new(crate::psd::PsdImporter));
         importers
     }
