@@ -327,12 +327,12 @@ fn apply_trace(state: &mut AppState, pending: &PendingTrace, traced: &meshgen::T
     else {
         return;
     };
-    // Trace into the mesh's current footprint, so the result lands where the art
-    // already is rather than jumping to a canonical box.
-    let bounds = mesh.bounds();
     let had_weights = !mesh.weights.is_empty();
 
-    let (vertices, uvs, triangles) = meshgen::mesh_from_trace(traced, bounds);
+    // Preserve the mesh's UV-to-local frame. Using its axis-aligned bounds here
+    // discarded rotation from a converted region and spread the texture across
+    // the larger box.
+    let (vertices, uvs, triangles) = meshgen::mesh_from_trace_on_mesh(traced, mesh);
     if triangles.is_empty() {
         state
             .session

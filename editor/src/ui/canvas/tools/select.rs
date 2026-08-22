@@ -15,6 +15,7 @@ pub struct SelectTool;
 fn drag_attachment(ctx: &mut ToolContext, cursor_world: glam::Vec2) -> bool {
     use ankhimate_core::attachment::Attachment;
     use ankhimate_document::commands::attachment_cmds::{RegionProps, SetRegionProps, owning_skin};
+    use ankhimate_document::commands::mesh_cmds::{EditMesh, MeshEdit};
 
     let Some(slot_id) = ctx.state.session.active_slot() else {
         return false;
@@ -40,11 +41,12 @@ fn drag_attachment(ctx: &mut ToolContext, cursor_world: glam::Vec2) -> bool {
     ) else {
         return false;
     };
-    let Some(Attachment::Region(region)) = ctx.state.doc.skeleton.skins[skin].get(slot_id, &name)
+    let Some(attachment) = ctx.state.doc.skeleton.skins[skin]
+        .get(slot_id, &name)
+        .cloned()
     else {
         return false;
     };
-    let props = RegionProps::from_region(region);
 
     // Work in the bone's local space: the attachment's numbers live there, so a
     // sheared or scaled parent does not skew the edit.
@@ -59,56 +61,138 @@ fn drag_attachment(ctx: &mut ToolContext, cursor_world: glam::Vec2) -> bool {
     let local_prev = inv.transform_point(prev);
     let delta = local_now - local_prev;
 
-    let alt = ctx.ui.input(|i| i.modifiers.alt);
-    let next = if alt {
-        // Alt-drag moves the pivot under the cursor, art staying put.
-        let size = glam::vec2(props.width, props.height) * props.scale;
-        if size.x.abs() < 1e-4 || size.y.abs() < 1e-4 {
-            return false;
-        }
-        let (sin, cos) = (-props.rotation).sin_cos();
-        let unrotated = {
-            let d = local_now - props.offset;
-            glam::vec2(d.x * cos - d.y * sin, d.x * sin + d.y * cos)
-        };
-        let pivot = props.pivot + unrotated / size;
-        props.with_pivot_keeping_position(pivot.clamp(glam::Vec2::ZERO, glam::Vec2::ONE))
-    } else {
-        match ctx.state.session.active_transform_tool {
-            crate::session::TransformTool::Translate => RegionProps {
-                offset: props.offset + delta,
-                ..props
-            },
-            crate::session::TransformTool::Rotate => {
-                let angle = |v: glam::Vec2| v.y.atan2(v.x);
-                let swept = ankhimate_core::transforms::wrap_angle(
-                    angle(local_now - props.offset) - angle(local_prev - props.offset),
-                );
-                RegionProps {
-                    rotation: props.rotation + swept,
-                    ..props
+    let changed = match attachment {
+        Attachment::Region(region) => {
+            let props = RegionProps::from_region(&region);
+            let alt = ctx.ui.input(|i| i.modifiers.alt);
+            let next = if alt {
+                // Alt-drag moves the pivot under the cursor, art staying put.
+                let size = glam::vec2(props.width, props.height) * props.scale;
+                if size.x.abs() < 1e-4 || size.y.abs() < 1e-4 {
+                    return false;
                 }
-            }
-            crate::session::TransformTool::Scale => {
-                // Distance from the pivot drives a uniform scale; dragging past
-                // it would flip the art, so the factor is clamped positive.
-                let before = (local_prev - props.offset).length().max(1e-3);
-                let after = (local_now - props.offset).length().max(1e-3);
-                let factor = (after / before).clamp(0.2, 5.0);
-                RegionProps {
-                    scale: props.scale * factor,
-                    ..props
+                let (sin, cos) = (-props.rotation).sin_cos();
+                let unrotated = {
+                    let d = local_now - props.offset;
+                    glam::vec2(d.x * cos - d.y * sin, d.x * sin + d.y * cos)
+                };
+                let pivot = props.pivot + unrotated / size;
+                props.with_pivot_keeping_position(pivot.clamp(glam::Vec2::ZERO, glam::Vec2::ONE))
+            } else {
+                match ctx.state.session.active_transform_tool {
+                    crate::session::TransformTool::Translate => RegionProps {
+                        offset: props.offset + delta,
+                        ..props
+                    },
+                    crate::session::TransformTool::Rotate => {
+                        let angle = |v: glam::Vec2| v.y.atan2(v.x);
+                        let swept = ankhimate_core::transforms::wrap_angle(
+                            angle(local_now - props.offset) - angle(local_prev - props.offset),
+                        );
+                        RegionProps {
+                            rotation: props.rotation + swept,
+                            ..props
+                        }
+                    }
+                    crate::session::TransformTool::Scale => {
+                        // Distance from the pivot drives a uniform scale; dragging past
+                        // it would flip the art, so the factor is clamped positive.
+                        let before = (local_prev - props.offset).length().max(1e-3);
+                        let after = (local_now - props.offset).length().max(1e-3);
+                        let factor = (after / before).clamp(0.2, 5.0);
+                        RegionProps {
+                            scale: props.scale * factor,
+                            ..props
+                        }
+                    }
+                    // Shear has no attachment equivalent — a region is a quad.
+                    crate::session::TransformTool::Shear => return false,
                 }
-            }
-            // Shear has no attachment equivalent — a region is a quad.
-            crate::session::TransformTool::Shear => return false,
+            };
+            ctx.state
+                .dispatch(Box::new(SetRegionProps::new(skin, slot_id, name, next)))
         }
+        Attachment::Mesh(mesh) => {
+            // A mesh has no separate transform fields: whole-attachment
+            // placement applies the same affine to every setup vertex while UVs
+            // stay fixed. Alt-pivot and shear require persistent mesh transform
+            // metadata, which meshes deliberately do not store.
+            if ctx.ui.input(|i| i.modifiers.alt) || mesh.linked.is_some() {
+                return false;
+            }
+            let Some(moves) = transformed_mesh_vertices(
+                &mesh.setup_vertices,
+                ctx.state.session.active_transform_tool,
+                local_prev,
+                local_now,
+            ) else {
+                return false;
+            };
+            ctx.state.dispatch(Box::new(EditMesh::new(
+                skin,
+                slot_id,
+                name,
+                MeshEdit::MoveVertices(moves),
+            )))
+        }
+        _ => return false,
     };
 
-    ctx.state
-        .dispatch(Box::new(SetRegionProps::new(skin, slot_id, name, next)));
-    ctx.state.session.drag_start_world_pos = Some(cursor_world);
-    true
+    if changed {
+        ctx.state.session.drag_start_world_pos = Some(cursor_world);
+    }
+    changed
+}
+
+fn mesh_transform_origin(vertices: &[glam::Vec2]) -> Option<glam::Vec2> {
+    (!vertices.is_empty())
+        .then(|| vertices.iter().copied().sum::<glam::Vec2>() / vertices.len() as f32)
+}
+
+fn transformed_mesh_vertices(
+    vertices: &[glam::Vec2],
+    tool: crate::session::TransformTool,
+    previous: glam::Vec2,
+    current: glam::Vec2,
+) -> Option<Vec<(usize, glam::Vec2)>> {
+    let origin = mesh_transform_origin(vertices)?;
+    let transform = match tool {
+        crate::session::TransformTool::Translate => {
+            let delta = current - previous;
+            Box::new(move |vertex: glam::Vec2| vertex + delta)
+                as Box<dyn Fn(glam::Vec2) -> glam::Vec2>
+        }
+        crate::session::TransformTool::Rotate => {
+            let before = previous - origin;
+            let after = current - origin;
+            if before.length_squared() < 1e-6 || after.length_squared() < 1e-6 {
+                return None;
+            }
+            let angle = ankhimate_core::transforms::wrap_angle(
+                after.y.atan2(after.x) - before.y.atan2(before.x),
+            );
+            let (sin, cos) = angle.sin_cos();
+            Box::new(move |vertex: glam::Vec2| {
+                let p = vertex - origin;
+                origin + glam::vec2(p.x * cos - p.y * sin, p.x * sin + p.y * cos)
+            })
+        }
+        crate::session::TransformTool::Scale => {
+            let before = (previous - origin).length().max(1e-3);
+            let after = (current - origin).length().max(1e-3);
+            let factor = (after / before).clamp(0.2, 5.0);
+            Box::new(move |vertex: glam::Vec2| origin + (vertex - origin) * factor)
+        }
+        crate::session::TransformTool::Shear => return None,
+    };
+    Some(
+        vertices
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, vertex)| (index, transform(vertex)))
+            .collect(),
+    )
 }
 
 /// Where the selected slot's pivot sits on screen, if there is one.
@@ -116,19 +200,25 @@ fn attachment_pivot_screen(ctx: &ToolContext, viewport_size: glam::Vec2) -> Opti
     use ankhimate_core::attachment::Attachment;
     let slot_id = ctx.state.session.active_slot()?;
     let slot = ctx.state.doc.skeleton.slots.get(slot_id)?;
-    let Attachment::Region(region) = ctx
+    let attachment = ctx
         .state
         .doc
         .skeleton
-        .resolve_slot(ctx.state.session.active_skin, slot_id)?
-    else {
-        return None;
+        .resolve_slot(ctx.state.session.active_skin, slot_id)?;
+    let local_origin = match attachment {
+        Attachment::Region(region) => region.local_offset,
+        Attachment::Mesh(mesh) if mesh.linked.is_none() => {
+            mesh_transform_origin(&mesh.setup_vertices)?
+        }
+        _ => return None,
     };
     let bone_world = ctx.state.pose.worlds.get(slot.bone)?;
-    Some(ctx.state.session.camera.world_to_screen(
-        bone_world.transform_point(region.local_offset),
-        viewport_size,
-    ))
+    Some(
+        ctx.state
+            .session
+            .camera
+            .world_to_screen(bone_world.transform_point(local_origin), viewport_size),
+    )
 }
 
 /// The attachment-editing interaction: grab the pivot crosshair, drag with the
@@ -749,4 +839,55 @@ fn pick_attachment(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square() -> Vec<glam::Vec2> {
+        vec![
+            glam::vec2(-1.0, 1.0),
+            glam::vec2(-1.0, -1.0),
+            glam::vec2(1.0, -1.0),
+            glam::vec2(1.0, 1.0),
+        ]
+    }
+
+    /// Regression: mesh attachments used to be rejected by the placement path,
+    /// leaving no whole-slot transform after conversion.
+    #[test]
+    fn whole_mesh_translation_moves_every_vertex_without_changing_shape() {
+        let vertices = square();
+        let moved = transformed_mesh_vertices(
+            &vertices,
+            crate::session::TransformTool::Translate,
+            glam::vec2(2.0, 3.0),
+            glam::vec2(7.0, 1.0),
+        )
+        .expect("mesh can be translated");
+
+        for (expected_index, ((index, next), original)) in
+            moved.iter().zip(vertices.iter()).enumerate()
+        {
+            assert_eq!(*index, expected_index);
+            assert_eq!(*next, *original + glam::vec2(5.0, -2.0));
+        }
+    }
+
+    #[test]
+    fn whole_mesh_rotation_keeps_the_mesh_centre_fixed() {
+        let vertices = square();
+        let moved = transformed_mesh_vertices(
+            &vertices,
+            crate::session::TransformTool::Rotate,
+            glam::vec2(1.0, 0.0),
+            glam::vec2(0.0, 1.0),
+        )
+        .expect("mesh can be rotated");
+        let next: Vec<_> = moved.into_iter().map(|(_, point)| point).collect();
+
+        assert!(mesh_transform_origin(&next).unwrap().length() < 1e-5);
+        assert!(next[0].distance(glam::vec2(-1.0, -1.0)) < 1e-5);
+    }
 }

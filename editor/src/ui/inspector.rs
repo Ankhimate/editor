@@ -2900,9 +2900,10 @@ fn attachment_inspector(
             ),
         ))
     {
-        // Straight into vertex editing: converting is only ever a prelude to
-        // moving a vertex.
-        state.session.mesh_edit = true;
+        // Keep attachment placement active. Vertex editing has its own explicit
+        // toggle; forcing it on here made the whole mesh impossible to place
+        // immediately after conversion.
+        state.session.mesh_edit = false;
         state.session.selected_vertices.clear();
     }
     if remove {

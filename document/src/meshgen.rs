@@ -431,6 +431,59 @@ pub fn mesh_from_trace(
     (vertices, uvs, triangles)
 }
 
+/// Build traced geometry in the UV-to-local frame of an existing mesh.
+///
+/// A converted region can already be rotated, scaled, and translated. Its
+/// axis-aligned bounds do not retain that frame, so projecting a trace through
+/// those bounds makes the artwork snap upright and stretches it across the
+/// enlarged box. A non-degenerate source triangle gives the affine mapping the
+/// renderer already observes between UV and local space.
+pub fn mesh_from_trace_on_mesh(
+    traced: &Traced,
+    source: &MeshAttachment,
+) -> (Vec<Vec2>, Vec<Vec2>, Vec<[u32; 3]>) {
+    let (mut vertices, uvs, triangles) = mesh_from_trace(traced, source.bounds());
+    if let Some((linear, translation)) = uv_to_local_affine(source) {
+        vertices = uvs.iter().map(|uv| linear * *uv + translation).collect();
+    }
+    (vertices, uvs, triangles)
+}
+
+/// Recover one stable affine UV frame. The largest UV triangle is least
+/// sensitive to floating-point error and exactly recovers converted quads and
+/// meshes that have only received whole-attachment transforms.
+fn uv_to_local_affine(mesh: &MeshAttachment) -> Option<(glam::Mat2, Vec2)> {
+    let mut best: Option<(f32, [usize; 3])> = None;
+    for triangle in &mesh.triangles {
+        let indices = [
+            triangle[0] as usize,
+            triangle[1] as usize,
+            triangle[2] as usize,
+        ];
+        let [Some(a), Some(b), Some(c)] = indices.map(|i| mesh.uvs.get(i).copied()) else {
+            continue;
+        };
+        if indices.iter().any(|&i| i >= mesh.setup_vertices.len()) {
+            continue;
+        }
+        let area = (b - a).perp_dot(c - a).abs();
+        if area > best.map_or(1e-8, |(best_area, _)| best_area) {
+            best = Some((area, indices));
+        }
+    }
+
+    let (_, [i0, i1, i2]) = best?;
+    let uv0 = mesh.uvs[i0];
+    let uv_basis = glam::Mat2::from_cols(mesh.uvs[i1] - uv0, mesh.uvs[i2] - uv0);
+    let local0 = mesh.setup_vertices[i0];
+    let local_basis = glam::Mat2::from_cols(
+        mesh.setup_vertices[i1] - local0,
+        mesh.setup_vertices[i2] - local0,
+    );
+    let linear = local_basis * uv_basis.inverse();
+    Some((linear, local0 - linear * uv0))
+}
+
 /// Marching-squares contour following over a binary mask.
 ///
 /// Walks every boundary — the outer silhouette and each hole — by stepping
@@ -976,6 +1029,53 @@ mod tests {
         assert_eq!(max, Vec2::new(50.0, 50.0));
         // The top-left corner samples the top-left of the texture.
         assert_eq!(mesh.uvs[0], Vec2::new(0.0, 0.0));
+    }
+
+    /// Regression: projecting into an axis-aligned bounding box erased the
+    /// rotation baked into a converted region, so a traced texture broke into
+    /// conspicuous triangular strips.
+    #[test]
+    fn tracing_a_rotated_converted_region_keeps_its_uv_frame() {
+        let region = RegionAttachment {
+            texture: "art".into(),
+            local_offset: Vec2::new(17.0, -9.0),
+            local_rotation: 0.63,
+            local_scale: Vec2::new(1.4, 0.8),
+            width: 120.0,
+            height: 45.0,
+            uv_rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
+            pivot: Vec2::splat(0.5),
+            sequence: None,
+        };
+        let source = MeshAttachment::from_region(&region);
+        let traced = Traced {
+            contours: vec![vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(0.0, 1.0),
+                Vec2::new(1.0, 1.0),
+                Vec2::new(1.0, 0.0),
+            ]],
+            interior: Vec::new(),
+        };
+
+        let (vertices, uvs, _) = mesh_from_trace_on_mesh(&traced, &source);
+        for (uv, vertex) in uvs.iter().zip(vertices.iter()) {
+            let source_index = source
+                .uvs
+                .iter()
+                .position(|candidate| candidate.distance(*uv) < 1e-5)
+                .expect("traced corner has a source corner");
+            assert!(
+                vertex.distance(source.setup_vertices[source_index]) < 1e-4,
+                "UV {uv:?} moved from {:?} to {vertex:?}",
+                source.setup_vertices[source_index]
+            );
+        }
     }
 
     #[test]
