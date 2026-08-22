@@ -1,0 +1,22 @@
+[package]
+name = "ankhimate-document"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Ankhimate/document"
+authors = ["Ankhimate Contributors"]
+description = "The undoable document, its commands, and the named operators over them — no UI."
+
+[dependencies]
+ankhimate-core = { version = "0.1.0", git = "https://github.com/Ankhimate/core", rev = "82d4490d08e2f56298abdf1b4692bb8593c048f9" }
+ankhimate-formats = { version = "0.1.0", git = "https://github.com/Ankhimate/formats", rev = "97cf02ee6a4f2246c6f3ea7fe4575fca4f84b5a4" }
+ankhimate-export = { version = "0.1.0", git = "https://github.com/Ankhimate/export", rev = "f7ee43c7138e5452f5bf87c0a880f58612093b93" }
+glam = "0.33.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+log = "0.4.32"
+spade = "2.15.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+
+[dev-dependencies]
+glam = "0.33.1"
