@@ -209,14 +209,21 @@ fn button(
     );
     let visuals = ui.visuals();
     let accent = visuals.selection.bg_fill;
+    let hover_factor = crate::ui::motion::factor(
+        ui.ctx(),
+        response.id.with("hover"),
+        response.hovered(),
+        crate::ui::motion::Role::Quick,
+    );
 
     // Selected is a tinted plate rather than a solid one: a solid accent block
     // at this size fights the viewport for attention every frame it is on.
     if selected {
         ui.painter()
             .rect_filled(rect, 6, accent.gamma_multiply(0.22));
-    } else if response.hovered() {
-        ui.painter().rect_filled(rect, 6, visuals.faint_bg_color);
+    } else if hover_factor > 0.0 {
+        ui.painter()
+            .rect_filled(rect, 6, visuals.faint_bg_color.gamma_multiply(hover_factor));
     }
 
     let semantic = theme.icon_color(crate::ui::icons::role(icon));

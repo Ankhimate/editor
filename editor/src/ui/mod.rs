@@ -656,14 +656,38 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
         let compact = self.compact_tabs.contains(&tile_id);
         let full_title = self.tab_title_for_tile(tiles, tile_id);
         let icon = tab_icon(tiles, tile_id);
-        let label: egui::WidgetText = if compact {
-            icon.into()
+        let text_color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
+        let role = icons::role(icon);
+        let icon_color = if role == crate::theme::IconRole::Neutral {
+            text_color
         } else {
-            format!("{icon}  {}", full_title.text()).into()
+            self.theme
+                .icon_color(role)
+                .gamma_multiply(if state.active { 1.0 } else { 0.68 })
         };
         let font_id = egui::TextStyle::Button.resolve(ui.style());
-        let galley =
-            label.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
+        let mut label = egui::text::LayoutJob::default();
+        label.append(
+            icon,
+            0.0,
+            egui::TextFormat {
+                font_id: font_id.clone(),
+                color: icon_color,
+                ..Default::default()
+            },
+        );
+        if !compact {
+            label.append(
+                &format!("  {}", full_title.text()),
+                0.0,
+                egui::TextFormat {
+                    font_id,
+                    color: text_color,
+                    ..Default::default()
+                },
+            );
+        }
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(label));
 
         // Only the active tab carries a close button. A row of them turns a tab
         // strip into a row of targets to misclick, and the tab you want to close
@@ -710,7 +734,6 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
                 );
             }
 
-            let color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
             // The label centres in what is left after the close button, so
             // adding one shifts the text rather than sliding it under the glyph.
             let text_area = egui::Rect::from_min_max(
@@ -723,7 +746,7 @@ impl<'a> Behavior<Tab> for AppBehavior<'a> {
             let pos = egui::Align2::CENTER_CENTER
                 .align_size_within_rect(galley.size(), text_area)
                 .min;
-            ui.painter().galley(pos, galley, color);
+            ui.painter().galley(pos, galley, text_color);
         }
 
         if closable {
