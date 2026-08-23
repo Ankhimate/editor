@@ -838,10 +838,11 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
         }
     });
 
+    let tint = bone_tint(&state.doc.skeleton, bone_id);
     let text_color = if is_selected {
         ui.visuals().selection.bg_fill
     } else {
-        ui.visuals().text_color()
+        tint
     };
 
     // Lock padlock in the left gutter — click toggles (T-206). A locked bone
@@ -880,7 +881,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
         egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
     );
 
-    let mut cx = depth_guides(ui, rect, depth);
+    let mut cx = depth_guides(ui, rect, depth, Some(tint));
 
     if has_nested_rows {
         let toggle_rect =
@@ -1199,9 +1200,11 @@ pub const INDENT: f32 = 14.0;
 /// Shared by every row type. Bone rows used to draw these and nothing else did,
 /// so a slot sat at some arbitrary indent with no line connecting it to the bone
 /// it belongs to — the hierarchy simply stopped being drawn halfway down.
-fn depth_guides(ui: &egui::Ui, rect: egui::Rect, depth: usize) -> f32 {
+fn depth_guides(ui: &egui::Ui, rect: egui::Rect, depth: usize, tint: Option<egui::Color32>) -> f32 {
     let start_x = rect.min.x + GUTTER + 4.0;
-    let guide = ui.visuals().widgets.noninteractive.bg_stroke.color;
+    let guide = tint
+        .unwrap_or(ui.visuals().widgets.noninteractive.bg_stroke.color)
+        .gamma_multiply(0.65);
     for d in 0..depth {
         let x = start_x + d as f32 * INDENT + INDENT / 2.0;
         ui.painter().line_segment(
@@ -1300,7 +1303,7 @@ fn selectable_row(ui: &mut egui::Ui, state: &mut AppState, row: Row<'_>) -> egui
             }
         }
     }
-    let x = depth_guides(ui, rect, row.depth);
+    let x = depth_guides(ui, rect, row.depth, row.tint);
     ui.painter().text(
         egui::pos2(x, rect.center().y),
         egui::Align2::LEFT_CENTER,
@@ -1748,7 +1751,7 @@ mod layout_tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 21.0));
                 for depth in 0..4 {
-                    x_at.push(depth_guides(ui, rect, depth));
+                    x_at.push(depth_guides(ui, rect, depth, None));
                 }
             });
         });

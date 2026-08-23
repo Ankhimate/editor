@@ -12,6 +12,14 @@ const FIELD_H: f32 = 26.0;
 const LABEL_W: f32 = 88.0;
 const ACCENT_W: f32 = 3.0;
 const ROW_GAP: f32 = 5.0;
+const KEY_AREA_W: f32 = 62.0;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TransformView {
+    Local,
+    Parent,
+    World,
+}
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(2.0);
@@ -68,8 +76,8 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     // ── Bone info ─────────────────────────────────────────────────────────
     let bone_name = bone.name.clone();
     let bone_len = bone.length;
-    let parent_name = bone
-        .parent
+    let bone_parent = bone.parent;
+    let parent_name = bone_parent
         .and_then(|p| state.doc.skeleton.bones.get(p))
         .map(|b| b.name.clone());
 
@@ -174,8 +182,41 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(10.0);
 
     // ── Local Transform ───────────────────────────────────────────────────
-    section_header(ui, crate::ui::icons::TRANSLATE, "Local Transform");
+    let view_id = ui.id().with(("transform_view", bone_id));
+    let mut transform_view = ui
+        .data(|data| data.get_temp::<TransformView>(view_id))
+        .unwrap_or(TransformView::Local);
+    let has_parent = bone_parent.is_some();
+    if transform_view == TransformView::Parent && !has_parent {
+        transform_view = TransformView::Local;
+    }
+    ui.horizontal(|ui| {
+        section_header(ui, crate::ui::icons::TRANSLATE, "Transform");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            egui::ComboBox::from_id_salt(view_id.with("selector"))
+                .selected_text(match transform_view {
+                    TransformView::Local => "Local",
+                    TransformView::Parent => "Parent",
+                    TransformView::World => "World",
+                })
+                .width(72.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut transform_view, TransformView::Local, "Local");
+                    ui.add_enabled_ui(has_parent, |ui| {
+                        ui.selectable_value(&mut transform_view, TransformView::Parent, "Parent");
+                    });
+                    ui.selectable_value(&mut transform_view, TransformView::World, "World");
+                });
+        });
+    });
+    ui.data_mut(|data| data.insert_temp(view_id, transform_view));
     ui.add_space(4.0);
+
+    let edit_bone_id = if transform_view == TransformView::Parent {
+        bone_parent.unwrap_or(bone_id)
+    } else {
+        bone_id
+    };
 
     // Setup mode edits the setup transform; Animate mode edits the *posed*
     // value, which is what the viewport shows and what a key will capture
@@ -186,13 +227,23 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
             .doc
             .skeleton
             .bones
-            .get(bone_id)
+            .get(edit_bone_id)
             .unwrap()
             .local_transform;
         let t = if state.session.is_animating() {
-            state.pose.locals.get(bone_id).copied().unwrap_or(setup)
+            state
+                .pose
+                .locals
+                .get(edit_bone_id)
+                .copied()
+                .unwrap_or(setup)
         } else {
             setup
+        };
+        let t = if transform_view == TransformView::World {
+            state.pose.world_decomposed(edit_bone_id)
+        } else {
+            t
         };
         (
             t.rotation.to_degrees(),
@@ -210,7 +261,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     let mut changed = false;
     // Key affordances only mean something against a clip (T-210).
     let animating = state.session.is_animating();
-    let pending = state.session.pending_pose.contains(&bone_id);
+    let pending = state.session.pending_pose.contains(&edit_bone_id);
     let mut dot_action: Option<(
         BoneProperty,
         Option<ankhimate_core::animation::Axis>,
@@ -229,7 +280,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
             &state.doc,
             &state.session,
             &TimelineAddr::Bone {
-                bone: bone_id,
+                bone: edit_bone_id,
                 property,
                 axis,
             },
@@ -330,37 +381,28 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     }
 
     if let Some((property, axis, action)) = dot_action {
-        apply_dot_action(state, bone_id, property, axis, action);
+        apply_dot_action(state, edit_bone_id, property, axis, action);
     }
 
     if changed {
         // Routed through the mode (T-207): a setup edit in Setup, keys at the
         // playhead in Animate. Undoable, and merged — dragging a spinbox
         // produces one history entry rather than one per frame.
-        let local = ankhimate_core::math::Transform {
+        let entered = ankhimate_core::math::Transform {
             position: glam::vec2(tx, ty),
             rotation: rot.to_radians(),
             scale: glam::vec2(sx, sy),
             shear: glam::vec2(shx.to_radians(), shy.to_radians()),
         };
-        state.commit_bone_pose(bone_id, local);
+        let local = if transform_view == TransformView::World {
+            world_to_local(state, edit_bone_id, entered).unwrap_or(entered)
+        } else {
+            entered
+        };
+        state.commit_bone_pose(edit_bone_id, local);
     }
 
     // ── World Transform (read-only) ───────────────────────────────────────
-    ui.add_space(10.0);
-    section_header(ui, crate::ui::icons::WORLD, "World Transform");
-    ui.add_space(2.0);
-
-    let wt = match state.doc.skeleton.bones.contains_key(bone_id) {
-        true => state.pose.world_decomposed(bone_id),
-        false => return,
-    };
-    readonly_row(ui, "Pos X", &format!("{:.2}", wt.position.x));
-    readonly_row(ui, "Pos Y", &format!("{:.2}", wt.position.y));
-    readonly_row(ui, "Rotation", &format!("{:.2}°", wt.rotation.to_degrees()));
-    readonly_row(ui, "Scale X", &format!("{:.3}", wt.scale.x));
-    readonly_row(ui, "Scale Y", &format!("{:.3}", wt.scale.y));
-
     // ── Constraints (T-501) ──────────────────────────────────────────────
     constraint_inspector(ui, state, bone_id);
     ik_inspector(ui, state, bone_id);
@@ -951,7 +993,10 @@ fn add_driver_menu(ui: &mut egui::Ui, state: &mut AppState, bone_id: ankhimate_c
         });
     let chain = selected_chain(state);
     let button = egui::Button::new(format!("{}  Add driver…", crate::ui::icons::CONSTRAINT))
-        .min_size(egui::vec2(ui.available_width(), crate::ui::CONTROL_HEIGHT));
+        .min_size(egui::vec2(
+            (ui.available_width() - 8.0).max(80.0),
+            crate::ui::CONTROL_HEIGHT,
+        ));
 
     ui.add_space(6.0);
     ui.add_enabled_ui(setup, |ui| {
@@ -2152,15 +2197,18 @@ fn keyed_row(
         return (body(ui), DotAction::None);
     }
 
-    const DOT_W: f32 = 18.0;
     let mut changed = false;
     let mut action = DotAction::None;
     ui.horizontal(|ui| {
-        let width = (ui.available_width() - DOT_W).max(60.0);
+        let width = (ui.available_width() - KEY_AREA_W).max(60.0);
         ui.allocate_ui(egui::vec2(width, FIELD_H), |ui| {
             changed = body(ui);
         });
-        action = key_dot(ui, keyed);
+        ui.allocate_ui_with_layout(
+            egui::vec2(KEY_AREA_W, FIELD_H),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| action = key_dot(ui, keyed),
+        );
     });
     (changed, action)
 }
@@ -2175,11 +2223,10 @@ fn keyed_xy_row(
         return (body(ui), [DotAction::None; 2]);
     }
 
-    const DOTS_W: f32 = 50.0;
     let mut changed = false;
     let mut actions = [DotAction::None; 2];
     ui.horizontal(|ui| {
-        let width = (ui.available_width() - DOTS_W).max(60.0);
+        let width = (ui.available_width() - KEY_AREA_W).max(60.0);
         ui.allocate_ui(egui::vec2(width, FIELD_H), |ui| {
             changed = body(ui);
         });
@@ -2197,6 +2244,34 @@ fn axis_action(actions: [DotAction; 2]) -> Option<(ankhimate_core::animation::Ax
     [(Axis::X, actions[0]), (Axis::Y, actions[1])]
         .into_iter()
         .find(|(_, action)| *action != DotAction::None)
+}
+
+fn world_to_local(
+    state: &AppState,
+    bone: ankhimate_core::ids::BoneId,
+    world: ankhimate_core::math::Transform,
+) -> Option<ankhimate_core::math::Transform> {
+    use ankhimate_core::transforms::Affine2;
+
+    let authored = state.doc.skeleton.bones.get(bone)?;
+    let Some(parent) = authored.parent else {
+        return Some(world);
+    };
+    let parent_world = state.pose.world(parent);
+    // `compose_child(parent, identity, inherit)` is the effective inherited
+    // basis. Removing it converts the entered world affine back to the local
+    // transform that remains the document's source of truth.
+    let inherited = Affine2::compose_child(
+        &parent_world,
+        &ankhimate_core::math::Transform::default(),
+        &authored.inherit,
+    );
+    Some(
+        inherited
+            .invert()?
+            .mul(&Affine2::compose(&world))
+            .decompose(),
+    )
 }
 
 /// Key or unkey one bone property at the playhead.
@@ -3562,43 +3637,6 @@ fn transform_row_xy(
 
 // ── Readonly world-transform row ─────────────────────────────────────────
 
-fn readonly_row(ui: &mut egui::Ui, label: &str, value: &str) {
-    let w = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 18.0), egui::Sense::hover());
-
-    let dim = ui.visuals().weak_text_color();
-    let light = ui.visuals().text_color().gamma_multiply(0.7);
-
-    // Subtle left indent bar (dimmer than section headers)
-    ui.painter().rect_filled(
-        egui::Rect::from_min_size(
-            rect.min + egui::vec2(8.0, 3.0),
-            egui::vec2(1.0, rect.height() - 6.0),
-        ),
-        0.0,
-        dim.gamma_multiply(0.4),
-    );
-
-    ui.painter().text(
-        egui::pos2(rect.min.x + 16.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(11.0),
-        dim,
-    );
-
-    // Right-aligned value
-    let value_rect =
-        egui::Rect::from_min_max(egui::pos2(rect.min.x + LABEL_W, rect.min.y), rect.max);
-    ui.painter().text(
-        egui::pos2(value_rect.min.x, value_rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        value,
-        egui::FontId::monospace(11.0),
-        light,
-    );
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 fn draw_row_label(ui: &egui::Ui, row_rect: egui::Rect, label: &str, active: bool) {
@@ -3710,9 +3748,12 @@ fn colored_drag(
 mod explicit_axis_key_tests {
     use super::*;
     use ankhimate_core::animation::{Axis, Timeline};
+    use ankhimate_core::math::Transform;
     use ankhimate_core::skeleton::Bone;
+    use ankhimate_core::transforms::Affine2;
     use ankhimate_document::commands::bone_cmds::CreateBone;
     use ankhimate_document::commands::key_cmds::CreateAnimation;
+    use glam::Vec2;
 
     #[test]
     fn translate_x_dot_keys_only_translate_x() {
@@ -3754,5 +3795,57 @@ mod explicit_axis_key_tests {
                 .iter()
                 .any(|timeline| matches!(timeline, Timeline::BoneTranslate { axis: Axis::Y, .. }))
         );
+    }
+
+    #[test]
+    fn world_transform_input_converts_back_to_the_authored_local() {
+        let mut state = AppState::default();
+        let parent = state.doc.skeleton.add_bone(Bone {
+            name: "parent".into(),
+            parent: None,
+            length: 10.0,
+            local_transform: Transform {
+                position: Vec2::new(20.0, -8.0),
+                rotation: 0.4,
+                scale: Vec2::new(1.3, 0.8),
+                shear: Vec2::new(0.0, 0.12),
+            },
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let child = state.doc.skeleton.add_bone(Bone {
+            name: "child".into(),
+            parent: Some(parent),
+            length: 5.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        state.refresh_pose();
+
+        let requested = Transform {
+            position: Vec2::new(47.0, 11.0),
+            rotation: -0.25,
+            scale: Vec2::new(0.9, 1.1),
+            shear: Vec2::new(0.0, -0.08),
+        };
+        let local = world_to_local(&state, child, requested).expect("invertible parent");
+        let actual = Affine2::compose_child(
+            &state.pose.world(parent),
+            &local,
+            &state.doc.skeleton.bones[child].inherit,
+        );
+        let expected = Affine2::compose(&requested);
+
+        for (actual, expected) in [
+            (actual.a, expected.a),
+            (actual.b, expected.b),
+            (actual.c, expected.c),
+            (actual.d, expected.d),
+            (actual.tx, expected.tx),
+            (actual.ty, expected.ty),
+        ] {
+            assert!((actual - expected).abs() < 1e-4, "{actual} != {expected}");
+        }
     }
 }

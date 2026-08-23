@@ -640,6 +640,7 @@ impl Session {
         self.reveal_selection = true;
         self.selection = bone.map(Selection::Bone);
         self.selected_bones.clear();
+        self.selected_slots.clear();
         if let Some(bone) = bone {
             self.selected_bones.push(bone);
             // Picking a bone means you want to move the bone. The counterpart of
@@ -661,6 +662,7 @@ impl Session {
     pub fn select_slot(&mut self, slot: Option<SlotId>) {
         self.reveal_selection = true;
         self.selection = slot.map(Selection::Slot);
+        self.selected_bones.clear();
         self.selected_slots.clear();
         if let Some(slot) = slot {
             self.selected_slots.push(slot);
@@ -938,5 +940,30 @@ mod visibility_tests {
         // And back: clicking a bone returns the gizmo to the bone.
         s.select_bone(Some(bone));
         assert_eq!(s.edit_target, EditTarget::Bone);
+    }
+
+    #[test]
+    fn bone_and_slot_selection_are_mutually_exclusive() {
+        use ankhimate_core::skeleton::{Bone, Skeleton};
+        use ankhimate_core::slot::Slot;
+
+        let mut skel = Skeleton::new();
+        let bone = skel.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 10.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let slot = skel.add_slot(Slot::new("art".to_string(), bone));
+        let mut session = Session::new(skel.default_skin);
+
+        session.select_slot(Some(slot));
+        session.select_bone(Some(bone));
+        assert!(session.selected_slots.is_empty());
+
+        session.select_slot(Some(slot));
+        assert!(session.selected_bones.is_empty());
     }
 }
