@@ -1286,7 +1286,7 @@ at startup.",
             .frame(
                 egui::Frame::NONE
                     .fill(self.theme.window_background())
-                    .inner_margin(egui::Margin::symmetric(8, 3)),
+                    .inner_margin(egui::Margin::symmetric(5, 3)),
             )
             .show(ctx, |ui| {
                 crate::ui::context_ribbon::ui(ui, &mut self.state, &self.theme);

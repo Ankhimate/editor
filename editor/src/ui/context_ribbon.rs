@@ -5,40 +5,45 @@ use crate::session::{Selection, Tool, TransformTool, WorkMode};
 use crate::theme::{IconRole, Theme};
 use eframe::egui;
 
-pub const HEIGHT: f32 = 34.0;
+pub const HEIGHT: f32 = 40.0;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
-    ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
-    ui.horizontal_centered(|ui| {
-        mode_segment(ui, state, theme);
-        divider(ui, theme);
-        clip_segment(ui, state);
-        divider(ui, theme);
-        selection_segment(ui, state, theme);
-        divider(ui, theme);
-        tool_segment(ui, state, theme);
+    egui::Frame::NONE
+        .fill(crate::theme::hex_to_color(&theme.panel_fill))
+        .stroke(egui::Stroke::new(1.0, theme.card_border()))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(8, 3))
+        .show(ui, |ui| {
+            ui.set_height(26.0);
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+            ui.horizontal_centered(|ui| {
+                mode_segment(ui, state, theme);
+                clip_segment(ui, state);
+                selection_segment(ui, state);
+                tool_segment(ui, state);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            frame_segment(ui, state, theme);
-            if state.session.work_mode == WorkMode::Animate {
-                let color = if state.session.auto_key {
-                    theme.icon_color(IconRole::Destructive)
-                } else {
-                    ui.visuals().weak_text_color()
-                };
-                ui.label(
-                    egui::RichText::new(crate::ui::icons::RECORD)
-                        .color(color)
-                        .size(12.0),
-                )
-                .on_hover_text(if state.session.auto_key {
-                    "Auto-key is on"
-                } else {
-                    "Auto-key is off"
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    frame_segment(ui, state, theme);
+                    if state.session.work_mode == WorkMode::Animate {
+                        let color = if state.session.auto_key {
+                            theme.icon_color(IconRole::Destructive)
+                        } else {
+                            ui.visuals().weak_text_color()
+                        };
+                        ui.label(
+                            egui::RichText::new(crate::ui::icons::RECORD)
+                                .color(color)
+                                .size(12.0),
+                        )
+                        .on_hover_text(if state.session.auto_key {
+                            "Auto-key is on"
+                        } else {
+                            "Auto-key is off"
+                        });
+                    }
                 });
-            }
+            });
         });
-    });
 }
 
 fn mode_segment(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
@@ -46,11 +51,20 @@ fn mode_segment(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
     for (mode, label) in [(WorkMode::Setup, "Setup"), (WorkMode::Animate, "Animate")] {
         let selected = mode == current;
         let text = if selected {
-            egui::RichText::new(label).strong().color(theme.primary())
+            egui::RichText::new(label)
+                .strong()
+                .color(theme.on_primary())
         } else {
             egui::RichText::new(label).color(ui.visuals().weak_text_color())
         };
-        if ui.selectable_label(selected, text).clicked() && !selected {
+        let button = egui::Button::new(text)
+            .selected(selected)
+            .corner_radius(6)
+            .min_size(egui::vec2(
+                if mode == WorkMode::Setup { 52.0 } else { 62.0 },
+                24.0,
+            ));
+        if ui.add(button).clicked() && !selected {
             state.set_work_mode(mode);
         }
     }
@@ -95,25 +109,17 @@ fn clip_segment(ui: &mut egui::Ui, state: &mut AppState) {
         });
 }
 
-fn selection_segment(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
-    let (icon, label, role) = selection_identity(state).unwrap_or((
+fn selection_segment(ui: &mut egui::Ui, state: &mut AppState) {
+    let (icon, label, _) = selection_identity(state).unwrap_or((
         crate::ui::icons::NOTHING_SELECTED,
         "Nothing selected".to_string(),
         IconRole::Neutral,
     ));
-    let color = if role == IconRole::Neutral {
-        ui.visuals().weak_text_color()
-    } else {
-        theme.icon_color(role)
-    };
     let response = ui
         .add(
-            egui::Button::new(
-                egui::RichText::new(format!("{icon}  {label}"))
-                    .color(color)
-                    .size(11.5),
-            )
-            .frame(false),
+            egui::Button::new(crate::ui::semantic_icon_label(ui, icon, &label))
+                .frame(false)
+                .corner_radius(6),
         )
         .on_hover_text("Reveal the selection in the hierarchy");
     if response.clicked() && state.session.selection.is_some() {
@@ -151,57 +157,52 @@ fn selection_identity(state: &AppState) -> Option<(&'static str, String, IconRol
     }
 }
 
-fn tool_segment(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
-    let (icon, label, role) = tool_identity(state);
-    ui.menu_button(
-        egui::RichText::new(format!("{icon}  {label}"))
-            .color(theme.icon_color(role))
-            .size(11.5),
-        |ui| {
-            if ui.button("Select").clicked() {
+fn tool_segment(ui: &mut egui::Ui, state: &mut AppState) {
+    let (icon, label, _) = tool_identity(state);
+    ui.menu_button(crate::ui::semantic_icon_label(ui, icon, label), |ui| {
+        if ui.button("Select").clicked() {
+            state.session.tool = Tool::Select;
+            ui.close();
+        }
+        ui.separator();
+        for (tool, label) in [
+            (TransformTool::Translate, "Translate"),
+            (TransformTool::Rotate, "Rotate"),
+            (TransformTool::Scale, "Scale"),
+            (TransformTool::Shear, "Shear"),
+        ] {
+            if ui
+                .selectable_label(
+                    state.session.tool == Tool::Select
+                        && state.session.active_transform_tool == tool,
+                    label,
+                )
+                .clicked()
+            {
                 state.session.tool = Tool::Select;
+                state.session.active_transform_tool = tool;
                 ui.close();
             }
-            ui.separator();
-            for (tool, label) in [
-                (TransformTool::Translate, "Translate"),
-                (TransformTool::Rotate, "Rotate"),
-                (TransformTool::Scale, "Scale"),
-                (TransformTool::Shear, "Shear"),
-            ] {
-                if ui
-                    .selectable_label(
-                        state.session.tool == Tool::Select
-                            && state.session.active_transform_tool == tool,
-                        label,
-                    )
-                    .clicked()
-                {
-                    state.session.tool = Tool::Select;
-                    state.session.active_transform_tool = tool;
-                    ui.close();
-                }
-            }
-            ui.separator();
-            let setup = state.session.can_edit_structure();
-            if ui
-                .add_enabled(setup, egui::Button::new("Create bone"))
-                .on_disabled_hover_text("Setup mode only")
-                .clicked()
-            {
-                state.session.tool = Tool::CreateBone;
-                ui.close();
-            }
-            if ui
-                .add_enabled(setup, egui::Button::new("Weight paint"))
-                .on_disabled_hover_text("Setup mode only")
-                .clicked()
-            {
-                state.session.tool = Tool::WeightPaint;
-                ui.close();
-            }
-        },
-    );
+        }
+        ui.separator();
+        let setup = state.session.can_edit_structure();
+        if ui
+            .add_enabled(setup, egui::Button::new("Create bone"))
+            .on_disabled_hover_text("Setup mode only")
+            .clicked()
+        {
+            state.session.tool = Tool::CreateBone;
+            ui.close();
+        }
+        if ui
+            .add_enabled(setup, egui::Button::new("Weight paint"))
+            .on_disabled_hover_text("Setup mode only")
+            .clicked()
+        {
+            state.session.tool = Tool::WeightPaint;
+            ui.close();
+        }
+    });
 }
 
 fn tool_identity(state: &AppState) -> (&'static str, &'static str, IconRole) {
@@ -243,11 +244,6 @@ fn frame_segment(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
     ui.label(
         egui::RichText::new(crate::ui::icons::TIME).color(theme.icon_color(IconRole::Animation)),
     );
-}
-
-fn divider(ui: &mut egui::Ui, theme: &Theme) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 16.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, theme.card_border());
 }
 
 #[cfg(test)]

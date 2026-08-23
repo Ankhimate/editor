@@ -408,52 +408,8 @@ fn draw_mode_chrome(ui: &egui::Ui, rect: egui::Rect, state: &AppState) {
     let painter = ui.painter();
     let animating = state.session.is_animating();
 
-    if animating {
-        let color = if state.session.auto_key {
-            egui::Color32::from_rgb(230, 60, 60)
-        } else {
-            egui::Color32::from_rgb(230, 170, 60)
-        };
-        painter.rect_stroke(
-            rect.shrink(1.0),
-            0.0,
-            egui::Stroke::new(2.0, color),
-            egui::StrokeKind::Inside,
-        );
-    }
-
-    // Corner chip: what mode, and — while animating — which clip and frame.
-    let (label, chip) = if animating {
-        let clip = state
-            .session
-            .active_animation
-            .and_then(|id| state.doc.animations.get(id))
-            .map(|a| a.name.clone())
-            .unwrap_or_else(|| "—".into());
-        let frame = (state.session.playhead * state.doc.meta.fps.max(1) as f32).round() as i64;
-        (
-            format!("ANIMATE · {clip} · f{frame}"),
-            egui::Color32::from_rgb(230, 60, 60),
-        )
-    } else {
-        (
-            "SETUP POSE".to_string(),
-            ui.visuals().weak_text_color().gamma_multiply(0.8),
-        )
-    };
-
-    let pos = rect.left_top() + egui::vec2(10.0, 10.0);
-    let galley = painter.layout_no_wrap(label, egui::FontId::proportional(11.0), chip);
-    let bg = egui::Rect::from_min_size(pos, galley.size() + egui::vec2(12.0, 6.0));
-    painter.rect_filled(
-        bg,
-        egui::epaint::CornerRadius::same(3),
-        ui.visuals().extreme_bg_color.gamma_multiply(0.85),
-    );
-    painter.galley(pos + egui::vec2(6.0, 3.0), galley, chip);
-
     // Unkeyed edits are easy to lose; say so where the user is looking.
-    let mut below = bg.left_bottom() + egui::vec2(0.0, 6.0);
+    let mut below = rect.left_top() + egui::vec2(10.0, 10.0);
     if animating && state.session.has_pending_pose() {
         painter.text(
             below,

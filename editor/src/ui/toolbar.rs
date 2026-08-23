@@ -14,7 +14,7 @@
 //! everything is a rail nobody can find anything in.
 
 use crate::app_state::AppState;
-use crate::session::{Tool, TransformTool, WorkMode};
+use crate::session::{Tool, TransformTool};
 use eframe::egui;
 
 /// Width of the rail, including its margins.
@@ -31,9 +31,6 @@ pub fn ui(
 ) {
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 3.0);
     ui.vertical_centered(|ui| {
-        mode_switch(ui, state);
-        gap(ui);
-
         // ── Tools ──────────────────────────────────────────────────────
         // Rig-authoring tools stay visible while animating so the rail does not
         // reflow under the cursor, but disabled with the reason on hover.
@@ -243,51 +240,4 @@ fn button(
     );
 
     response.on_hover_text(hover).clicked()
-}
-
-/// The Setup ⇄ Animate switch (T-207), stacked to fit the rail.
-///
-/// Two letters rather than two words: "SETUP" does not fit in 32px, and the
-/// mode is also on the status bar and the Tab key.
-fn mode_switch(ui: &mut egui::Ui, state: &mut AppState) {
-    let current = state.session.work_mode;
-    let mut clicked = None;
-    for (mode, letter, tooltip) in [
-        (
-            WorkMode::Setup,
-            "S",
-            "Setup mode (Tab) — edit the rig: create, parent, and pose the setup skeleton",
-        ),
-        (
-            WorkMode::Animate,
-            "A",
-            "Animate mode (Tab) — edits become keys on the active animation",
-        ),
-    ] {
-        let selected = mode == current;
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(BTN, 22.0), egui::Sense::click());
-        let visuals = ui.visuals();
-        if selected {
-            ui.painter().rect_filled(rect, 5, visuals.selection.bg_fill);
-        } else if response.hovered() {
-            ui.painter().rect_filled(rect, 5, visuals.faint_bg_color);
-        }
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            letter,
-            egui::FontId::proportional(12.0),
-            if selected {
-                crate::theme::hex_to_color("#18181b")
-            } else {
-                visuals.weak_text_color()
-            },
-        );
-        if response.on_hover_text(tooltip).clicked() && !selected {
-            clicked = Some(mode);
-        }
-    }
-    if let Some(mode) = clicked {
-        state.set_work_mode(mode);
-    }
 }
