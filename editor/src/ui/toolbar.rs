@@ -150,14 +150,13 @@ pub fn ui(
 
 /// A separator between groups of tools.
 fn gap(ui: &mut egui::Ui) {
-    ui.add_space(5.0);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(BTN * 0.6, 1.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(BTN, 13.0), egui::Sense::hover());
+    let rule = egui::Rect::from_center_size(rect.center(), egui::vec2(20.0, 1.0));
     ui.painter().rect_filled(
-        rect,
+        rule,
         0.0,
         ui.visuals().widgets.noninteractive.bg_stroke.color,
     );
-    ui.add_space(5.0);
 }
 
 /// One rail button. Returns whether it was clicked.

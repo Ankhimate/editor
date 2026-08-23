@@ -8,39 +8,37 @@ use eframe::egui;
 pub const HEIGHT: f32 = 34.0;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
-    egui::Frame::NONE
-        .inner_margin(egui::Margin::symmetric(4, 1))
-        .show(ui, |ui| {
-            ui.set_height(26.0);
-            ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
-            ui.horizontal_centered(|ui| {
-                mode_segment(ui, state, theme);
-                clip_segment(ui, state);
-                selection_segment(ui, state);
-                tool_segment(ui, state);
+    egui::Frame::NONE.show(ui, |ui| {
+        ui.set_height(28.0);
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
+        ui.horizontal_centered(|ui| {
+            mode_segment(ui, state, theme);
+            clip_segment(ui, state);
+            selection_segment(ui, state);
+            tool_segment(ui, state);
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    frame_segment(ui, state, theme);
-                    if state.session.work_mode == WorkMode::Animate {
-                        let color = if state.session.auto_key {
-                            theme.icon_color(IconRole::Destructive)
-                        } else {
-                            ui.visuals().weak_text_color()
-                        };
-                        ui.label(
-                            egui::RichText::new(crate::ui::icons::RECORD)
-                                .color(color)
-                                .size(12.0),
-                        )
-                        .on_hover_text(if state.session.auto_key {
-                            "Auto-key is on"
-                        } else {
-                            "Auto-key is off"
-                        });
-                    }
-                });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                frame_segment(ui, state, theme);
+                if state.session.work_mode == WorkMode::Animate {
+                    let color = if state.session.auto_key {
+                        theme.icon_color(IconRole::Destructive)
+                    } else {
+                        ui.visuals().weak_text_color()
+                    };
+                    ui.label(
+                        egui::RichText::new(crate::ui::icons::RECORD)
+                            .color(color)
+                            .size(12.0),
+                    )
+                    .on_hover_text(if state.session.auto_key {
+                        "Auto-key is on"
+                    } else {
+                        "Auto-key is off"
+                    });
+                }
             });
         });
+    });
 }
 
 fn mode_segment(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
@@ -57,10 +55,7 @@ fn mode_segment(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
         let button = egui::Button::new(text)
             .selected(selected)
             .corner_radius(6)
-            .min_size(egui::vec2(
-                if mode == WorkMode::Setup { 52.0 } else { 62.0 },
-                24.0,
-            ));
+            .min_size(egui::vec2(60.0, 26.0));
         if ui.add(button).clicked() && !selected {
             state.set_work_mode(mode);
         }
