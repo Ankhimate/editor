@@ -19,6 +19,7 @@ pub fn ui(
     layout: &Layout,
     rect: egui::Rect,
     style: super::Style<'_>,
+    summary_times: &[f32],
 ) {
     ui.allocate_rect(rect, egui::Sense::hover());
     let painter = ui.painter_at(rect);
@@ -79,6 +80,27 @@ pub fn ui(
     // ── Markers (T-906) ──────────────────────────────────────────────────
     // Claimed before the scrub below, so grabbing a marker does not also drag
     // the playhead out from under it.
+    // A single clip-wide key summary belongs in the ruler. Property rows use
+    // ticks; repeating diamonds above every keyed row adds visual noise.
+    for &time in summary_times {
+        let x = layout.time_to_x(time);
+        if x < sheet_rect.left() - 4.0 || x > sheet_rect.right() + 4.0 {
+            continue;
+        }
+        let center = egui::pos2(x, rect.bottom() - 4.0);
+        let d = 4.0;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(center.x, center.y - d),
+                egui::pos2(center.x + d, center.y),
+                egui::pos2(center.x, center.y + d),
+                egui::pos2(center.x - d, center.y),
+            ],
+            style.theme.event_marker(),
+            egui::Stroke::NONE,
+        ));
+    }
+
     let markers: Vec<(usize, f32, String, [f32; 4])> = state
         .session
         .active_animation

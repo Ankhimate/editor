@@ -1,4 +1,4 @@
-//! The dopesheet body: banded rows, summary diamonds, key ticks, playhead.
+//! The dopesheet body: banded rows, keyed spans, key ticks, playhead.
 //!
 //! Iterates the same [`VisibleRow`] list as the name tree so every key sits on
 //! its label's row. Interactions: click/ctrl-click select, drag selected keys in
@@ -16,47 +16,6 @@ use eframe::egui;
 
 const KEY_HIT_R: f32 = 5.0;
 const DELETE_DROP_MARGIN: f32 = 36.0;
-
-/// One clip-wide timing overview directly below the ruler.
-pub fn summary_ui(
-    ui: &mut egui::Ui,
-    model: &TimelineModel,
-    layout: &Layout,
-    rect: egui::Rect,
-    style: super::Style<'_>,
-) {
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(
-        rect,
-        0.0,
-        crate::theme::hex_to_color(&style.theme.faint_bg_color),
-    );
-    painter.text(
-        egui::pos2(rect.left() + 8.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        "keys",
-        egui::FontId::proportional(style.text - 0.5),
-        ui.visuals().weak_text_color(),
-    );
-    for time in model.summary_times() {
-        let x = layout.time_to_x(time);
-        if x < layout.sheet_x0 - 4.0 || x > rect.right() + 4.0 {
-            continue;
-        }
-        let center = egui::pos2(x, rect.center().y);
-        let d = 4.0;
-        painter.add(egui::Shape::convex_polygon(
-            vec![
-                egui::pos2(center.x, center.y - d),
-                egui::pos2(center.x + d, center.y),
-                egui::pos2(center.x, center.y + d),
-                egui::pos2(center.x - d, center.y),
-            ],
-            style.theme.event_marker(),
-            egui::Stroke::NONE,
-        ));
-    }
-}
 
 /// Selected keys, in egui memory (UI state, never undoable).
 #[derive(Clone, Default)]
@@ -234,17 +193,7 @@ pub fn ui(
                     let x1 = layout.time_to_x(end).clamp(rect.left(), rect.right());
                     if x1 > x0 {
                         let color = display_color.gamma_multiply(if shown { 0.9 } else { 0.3 });
-                        if let Some(next) = data.keys.get(index + 1) {
-                            draw_key_span(&painter, x0, x1, y + ROW_H / 2.0, next.interp, color);
-                        } else {
-                            painter.line_segment(
-                                [
-                                    egui::pos2(x0, y + ROW_H / 2.0),
-                                    egui::pos2(x1, y + ROW_H / 2.0),
-                                ],
-                                egui::Stroke::new(2.0, color),
-                            );
-                        }
+                        draw_key_span(&painter, x0, x1, y + ROW_H / 2.0, color);
                     }
                 }
                 for k in &data.keys {
@@ -475,41 +424,11 @@ fn draw_frame_grid(
     }
 }
 
-fn draw_key_span(
-    painter: &egui::Painter,
-    x0: f32,
-    x1: f32,
-    y: f32,
-    interp: Interp,
-    color: egui::Color32,
-) {
-    let bend = 3.0;
-    let points = match interp {
-        Interp::Stepped => vec![
-            egui::pos2(x0, y + bend),
-            egui::pos2((x1 - bend).max(x0), y + bend),
-            egui::pos2(x1, y - bend),
-        ],
-        Interp::Linear => vec![egui::pos2(x0, y + bend), egui::pos2(x1, y - bend)],
-        Interp::Bezier {
-            out_handle,
-            in_handle,
-        } => (0..=12)
-            .map(|step| {
-                let t = step as f32 / 12.0;
-                let mt = 1.0 - t;
-                let bx =
-                    3.0 * mt * mt * t * out_handle.x + 3.0 * mt * t * t * in_handle.x + t * t * t;
-                let by =
-                    3.0 * mt * mt * t * out_handle.y + 3.0 * mt * t * t * in_handle.y + t * t * t;
-                egui::pos2(
-                    x0 + (x1 - x0) * bx.clamp(0.0, 1.0),
-                    y + bend - by * bend * 2.0,
-                )
-            })
-            .collect(),
-    };
-    painter.add(egui::Shape::line(points, egui::Stroke::new(2.0, color)));
+fn draw_key_span(painter: &egui::Painter, x0: f32, x1: f32, y: f32, color: egui::Color32) {
+    painter.line_segment(
+        [egui::pos2(x0, y), egui::pos2(x1, y)],
+        egui::Stroke::new(2.0, color),
+    );
 }
 
 /// Draw a compact vertical property-key tick.
