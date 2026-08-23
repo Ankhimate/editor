@@ -1280,6 +1280,18 @@ at startup.",
             return;
         }
 
+        egui::TopBottomPanel::top("context_ribbon")
+            .exact_height(crate::ui::context_ribbon::HEIGHT)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::NONE
+                    .fill(self.theme.window_background())
+                    .inner_margin(egui::Margin::symmetric(8, 3)),
+            )
+            .show(ctx, |ui| {
+                crate::ui::context_ribbon::ui(ui, &mut self.state, &self.theme);
+            });
+
         // The tool rail. Vertical and on the left because tools are chosen with
         // the pointer already over the viewport — a horizontal strip at the top
         // is the longest trip from where the hand is.

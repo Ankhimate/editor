@@ -4,6 +4,7 @@ pub mod atlas;
 pub mod branding;
 pub mod canvas;
 pub mod constraints;
+pub mod context_ribbon;
 pub mod dialog;
 pub mod draw_order;
 pub mod events;
