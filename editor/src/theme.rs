@@ -497,7 +497,7 @@ impl Theme {
     /// already have in hand; a shared enum would have to be threaded through the
     /// model for no gain.
     pub fn channel_color(&self, property: &str) -> Color32 {
-        match property {
+        match property.split_whitespace().next().unwrap_or(property) {
             "translate" => hex_to_color(&self.channel_translate),
             "rotate" => hex_to_color(&self.channel_rotate),
             "scale" => hex_to_color(&self.channel_scale),
@@ -679,6 +679,16 @@ mod tests {
         assert_eq!(style.spacing.interact_size.y, 28.0);
         assert_eq!(style.spacing.button_padding, eframe::egui::vec2(10.0, 5.0));
         assert_eq!(style.spacing.item_spacing.y, 6.0);
+    }
+
+    #[test]
+    fn axis_rows_keep_their_property_colour() {
+        let theme = Theme::default();
+        assert_eq!(
+            theme.channel_color("translate x"),
+            theme.channel_color("translate")
+        );
+        assert_eq!(theme.channel_color("scale y"), theme.channel_color("scale"));
     }
 }
 
