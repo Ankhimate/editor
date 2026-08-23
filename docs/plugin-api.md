@@ -1,3 +1,8 @@
+---
+title: Plugin API contract
+description: The complete sandboxed JavaScript API for automation, importers, exporters, and panels.
+---
+
 # The plugin API
 
 What a plugin, a script or an MCP client can do to a rig, and what it can ask
@@ -499,6 +504,6 @@ Both remaining consumers have landed:
   save over the file it opened. `render_frame` and `render_contact_sheet` are
   read-only visual consumers: their per-call focus arguments filter the
   evaluated picture without adding document verbs or selection state. See
-  [MCP server](mcp.md).
+  [MCP server](/editor/mcp/).
 
 Neither adds a vocabulary. They consume this one.

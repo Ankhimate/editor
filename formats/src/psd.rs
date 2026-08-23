@@ -22,7 +22,7 @@
 //!
 //! Coordinates: PSD measures from the top-left with Y down; we measure from the
 //! canvas centre with Y up (PLAN §2.2). The conversion happens once, in
-//! [`layer_center`].
+//! `layer_center`.
 
 use ankhimate_core::assets::{AssetDb, ImageAsset};
 use ankhimate_core::attachment::{Attachment, Rect, RegionAttachment};

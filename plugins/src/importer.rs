@@ -7,7 +7,7 @@
 //!
 //! # A JS importer builds a rig by calling verbs
 //!
-//! It does not construct a [`Loaded`](ankhimate_formats::Loaded). That holds
+//! It does not construct a [`Loaded`]. That holds
 //! `core` types keyed by slotmap ids, which a script has no way to make and no
 //! business making — ids are not stable across sessions (ADR 0004), and handing
 //! a plugin raw entity keys is the mistake the argument layer exists to avoid.
@@ -36,7 +36,7 @@
 //!
 //! A real importer needs the files beside the one it was given: Spine's
 //! `.atlas`, DragonBones' `_tex.json`. So `read` is handed a
-//! [`Sidecars`](crate::importer::Sidecars) that can open **only** files in the
+//! [`Sidecars`] that can open **only** files in the
 //! imported file's own directory.
 //!
 //! Not a filesystem. `sidecar("../../.ssh/id_rsa")` resolves to nothing, and

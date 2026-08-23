@@ -1,3 +1,8 @@
+---
+title: Graph editor interaction rules
+description: The graph editor's selection, handle, snapping, and navigation behavior.
+---
+
 # Graph editor interaction rules (T-912)
 
 Four rules and one deferral, each written down because it answers a complaint

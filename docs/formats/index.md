@@ -1,0 +1,13 @@
+---
+title: File and export formats
+description: Understand the editable .ankh container and the separate user-authored runtime export contract.
+---
+
+# File and export formats
+
+The `.ankh` authoring file and an engine export solve different problems. The
+authoring file preserves editable rig structure and embedded artwork. Runtime
+output is generated from a user-authored preset and contains only what a target
+engine contract asks for.
+
+![The ankh archive contains project JSON and image entries.](../diagrams/container.svg)

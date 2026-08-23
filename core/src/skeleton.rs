@@ -187,7 +187,7 @@ pub enum GroupMember {
 /// once; showing the same bone under two groups means either drawing it twice —
 /// and then a click selects an ambiguous row — or the tree quietly not being a
 /// tree. Tags are a real alternative but they are a different feature, and
-/// [`SelectionSet`] already covers "these things belong together" without
+/// `SelectionSet` already covers "these things belong together" without
 /// claiming to be where they live.
 ///
 /// # What it does not touch
@@ -527,7 +527,7 @@ impl Skeleton {
             .filter_map(|&id| self.constraints.get(id).map(|c| (id, c)))
     }
 
-    /// Rebuild [`update_order`] via pre-order DFS, roots sorted by name and
+    /// Rebuild [`Skeleton::update_order`] via pre-order DFS, roots sorted by name and
     /// each parent's children sorted by name. Deterministic regardless of
     /// insertion order. See ADR 0001.
     pub fn rebuild_update_order(&mut self) {

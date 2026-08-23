@@ -46,7 +46,7 @@ pub struct ClipConstraint {
     /// re-pointed on paste using the index maps below.
     pub constraint: ankhimate_core::constraints::Constraint,
     /// Positions in [`BoneClip::bones`] for each id the constraint holds, in the
-    /// order [`Constraint::affected_bones`] reports them.
+    /// order [`ankhimate_core::constraints::Constraint::affected_bones`] reports them.
     pub bones: Vec<usize>,
     /// Position of the target bone, when the constraint has one *and* it was
     /// inside the copied subtree.

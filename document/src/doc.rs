@@ -2,7 +2,7 @@
 //!
 //! Everything here is authored data. Derived state (`Pose`) and UI state
 //! (selection, camera, tool) live elsewhere: `Pose` is recomputed per frame from
-//! this, and [`Session`](crate::session::Session) holds what the user is *doing*
+//! this, and the editor's `Session` holds what the user is *doing*
 //! rather than what they have *made*.
 //!
 //! Mutating a `Document` outside an [`EditCommand`](crate::commands::EditCommand)

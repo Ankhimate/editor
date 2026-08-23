@@ -7,7 +7,7 @@
 //! as a tool call anyway.
 //!
 //! So: open, describe, save, export — the shape of what someone actually asks
-//! for — plus [`run_script`], which takes JavaScript over the whole verb
+//! for — plus `run_script`, which takes JavaScript over the whole verb
 //! surface. Twenty lines of script beats twenty round trips, and the plugin host
 //! already sandboxes it.
 //!

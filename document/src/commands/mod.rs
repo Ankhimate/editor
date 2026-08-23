@@ -20,7 +20,7 @@
 //! holding what it needs to reverse itself. That is the wrong thing for a
 //! keymap or a plugin to name — they want the verb, not one occurrence of it.
 //!
-//! [`registry::Operator`] is the verb: a stable string id, an applicability
+//! `registry::Operator` is the editor-side verb: a stable string id, an applicability
 //! test, and an `invoke` that reads live state and dispatches whatever command
 //! the situation calls for. Operators sit *above* commands and never replace
 //! them, so undo, drag-merge and the T-207 mode rule keep their single

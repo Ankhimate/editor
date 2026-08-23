@@ -155,7 +155,7 @@ pub fn plan(project: &Project, assets: &AssetDb, preset: &Preset) -> Result<Plan
 /// Whether a plan carries its atlas pages as encoded PNG bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Images {
-    /// Encode every page. Required before [`write`] — a plan without bytes
+    /// Encode every page. Required before [`write()`] — a plan without bytes
     /// writes no images.
     Encoded,
     /// Name the pages but leave their bytes empty.

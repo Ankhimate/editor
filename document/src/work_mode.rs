@@ -14,7 +14,7 @@
 ///   viewport always shows the setup pose (no animation applied, whatever the
 ///   playhead says), and structural edits are allowed.
 /// * **Animate** — animate the rig. The same edits become keys on
-///   [`Session::active_animation`] at [`Session::playhead`]; the setup data is
+///   the editor session's active animation at its playhead; the setup data is
 ///   read-only and structural commands are refused.
 ///
 /// [`Skeleton`]: ankhimate_core::skeleton::Skeleton

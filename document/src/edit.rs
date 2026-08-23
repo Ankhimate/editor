@@ -1,6 +1,6 @@
 //! Editing a document without an editor.
 //!
-//! [`AppState::dispatch`] is the editor's only sanctioned mutation path, and it
+//! `AppState::dispatch` is the editor's only sanctioned mutation path, and it
 //! is the right one — it enforces undo and the Setup/Animate rule so no panel
 //! has to remember them. But it needs a `Session` for the current mode and a
 //! status line for refusals, and a headless caller has neither.

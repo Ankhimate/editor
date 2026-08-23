@@ -1,0 +1,20 @@
+{
+  "name": "ankhimate-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "check": "astro check",
+    "build": "bun run build:site && bun run build:api && bun scripts/copy-api.ts && bun scripts/check-built-links.ts",
+    "build:site": "astro build",
+    "build:api": "cargo doc -p ankhimate-core -p ankhimate-document -p ankhimate-formats -p ankhimate-export -p ankhimate-plugins -p ankhimate-render -p ankhimate-mcp --no-deps",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@astrojs/starlight": "0.41.7",
+    "astro": "7.2.4",
+    "sharp": "^0.35.3",
+    "typescript": "^6.0.0"
+  }
+}

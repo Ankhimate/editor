@@ -1,3 +1,8 @@
+---
+title: PSD import
+description: Import layered artwork and use tags to infer useful rig structure.
+---
+
 # PSD import
 
 A layered PSD is already a rig nobody has told the computer about. The group

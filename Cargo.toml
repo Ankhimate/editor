@@ -8,6 +8,7 @@ members = [
     "render",
     "editor",
     "mcp",
+    "xtask",
 ]
 resolver = "2"
 

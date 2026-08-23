@@ -8,7 +8,7 @@
 //! Constrained Delaunay via `spade`, covering the convex hull. Concave
 //! silhouettes need an explicit outline to trim against: the tracer (T-402)
 //! produces one from the artwork, and a user can pin individual edges by hand
-//! (`MeshAttachment::edges`) — see [`retriangulate`] for why guessing one from
+//! (`MeshAttachment::edges`) — see [`crate::meshgen::retriangulate()`] for why guessing one from
 //! vertex order does not work.
 
 use ankhimate_core::attachment::MeshAttachment;

@@ -1,3 +1,8 @@
+---
+title: MCP server reference
+description: Architecture, tool semantics, and protocol behavior for the headless Ankhimate MCP server.
+---
+
 # MCP server
 
 `ankhimate-mcp` is a stdio MCP server which keeps one rig open per connection.

@@ -57,8 +57,9 @@ file-export iteration, UI, physics stepping and metadata are still open.
 The runtime crate has no worked example yet — `macroquad_player` and
 `docs/runtime-guide.md` are the next task.
 
-Also missing: onion skinning, autosave and crash recovery, localization, and a
-second viewport in its own window (other panels tear off; the canvas does not).
+Also missing: panic-time crash dumps, localization, and a second viewport in its
+own window (other panels tear off; the canvas does not). Autosave/recovery and
+onion skinning are implemented; both remain part of the unfinished production-polish pass.
 
 ## Workspace
 
@@ -146,6 +147,17 @@ anything you build with Ankhimate — it applies to the icon font alone, which t
 runtime does not use.
 
 ## Documentation
+
+The product and integration site is published at
+[ankhimate.github.io/editor](https://ankhimate.github.io/editor/). Build it locally
+with the locked Bun dependencies:
+
+```bash
+cargo run -p xtask -- docs-check
+bun install --frozen-lockfile
+bun run check
+bun run build
+```
 
 - [`docs/ARCHITECTURE_PLAN.md`](docs/ARCHITECTURE_PLAN.md) — normative architecture & roadmap
 - [`docs/TASKS.md`](docs/TASKS.md) — task breakdown and current status

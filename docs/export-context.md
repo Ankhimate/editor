@@ -1,3 +1,8 @@
+---
+title: Export template context
+description: The public Handlebars context, helpers, and compatibility contract for user-authored exports.
+---
+
 # The template context
 
 What a template can address, field by field. This is the reference the export

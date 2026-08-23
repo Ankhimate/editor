@@ -28,6 +28,8 @@ desktop.ini
 perf.data*
 flamegraph.svg
 /dist/
+/node_modules/
+/.astro/
 
 # ── Third-party rigs ─────────────────────────────────────────────────────────
 # Rigs authored in other tools, and anything converted from them. Converting a
