@@ -101,9 +101,6 @@ pub fn ui(
         egui::Sense::click_and_drag(),
     );
 
-    // Vertical frame gridlines behind the rows.
-    draw_frame_grid(&painter, layout, rect, &visuals);
-
     let folded = |id: u64| is_folded(ui, id);
     let rows = model.visible_rows(&folded);
     // Where the clip ends, for the row fills below.
@@ -137,20 +134,37 @@ pub fn ui(
         // backdrop for diamonds. Past the clip's end it drops to a flat dark
         // fill, so "where this animation stops" is visible without counting
         // frames on the ruler.
-        let band = band_color(&visuals, matches!(row, VisibleRow::Group { .. }));
+        let is_group = matches!(row, VisibleRow::Group { .. });
+        let band = band_color(&visuals, is_group);
         let end_x = layout.time_to_x(duration).clamp(rect.left(), rect.right());
         painter.rect_filled(
             egui::Rect::from_min_max(row_rect.min, egui::pos2(end_x, row_rect.bottom())),
             0.0,
-            band.gamma_multiply(0.72),
+            band,
         );
         if end_x < rect.right() {
             painter.rect_filled(
                 egui::Rect::from_min_max(egui::pos2(end_x, row_rect.top()), row_rect.max),
                 0.0,
-                visuals.extreme_bg_color.gamma_multiply(0.55),
+                band.gamma_multiply(0.72),
             );
         }
+        // Paint the grid after the lane fill. Drawing it once behind all rows
+        // made every band cover it, leaving the dopesheet without a frame
+        // rhythm even though the grid code existed.
+        draw_frame_grid(&painter, layout, row_rect.intersect(rect), &visuals);
+        painter.line_segment(
+            [row_rect.left_bottom(), row_rect.right_bottom()],
+            egui::Stroke::new(
+                1.0,
+                visuals
+                    .widgets
+                    .noninteractive
+                    .bg_stroke
+                    .color
+                    .gamma_multiply(0.7),
+            ),
+        );
         // A row filtered out by soloing keeps its keys on screen but greyed:
         // hiding them outright would make the dopesheet lie about what the clip
         // contains, which is the one thing it is for.
@@ -175,6 +189,31 @@ pub fn ui(
                 }
             }
             VisibleRow::Property { data, .. } => {
+                let channel = style.theme.channel_color(data.label);
+                // A dopesheet describes held motion, not only isolated moments.
+                // Join each key to the next, and the final key to clip end, so a
+                // glance shows where a channel is active across time.
+                for (index, key) in data.keys.iter().enumerate() {
+                    let end = data
+                        .keys
+                        .get(index + 1)
+                        .map_or(duration, |next| next.time)
+                        .max(key.time);
+                    let x0 = layout.time_to_x(key.time).clamp(rect.left(), rect.right());
+                    let x1 = layout.time_to_x(end).clamp(rect.left(), rect.right());
+                    if x1 > x0 {
+                        painter.line_segment(
+                            [
+                                egui::pos2(x0, y + ROW_H / 2.0),
+                                egui::pos2(x1, y + ROW_H / 2.0),
+                            ],
+                            egui::Stroke::new(
+                                2.0,
+                                channel.gamma_multiply(if shown { 0.78 } else { 0.3 }),
+                            ),
+                        );
+                    }
+                }
                 for k in &data.keys {
                     let x = layout.time_to_x(k.time);
                     if x < rect.left() - DIAMOND_R || x > rect.right() + DIAMOND_R {
@@ -196,7 +235,7 @@ pub fn ui(
                         selected,
                         data.read_only || !shown,
                         &visuals,
-                        style.theme.channel_color(data.label),
+                        channel,
                     );
 
                     // A greyed row is not editable either: dragging a key you

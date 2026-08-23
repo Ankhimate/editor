@@ -5,14 +5,11 @@ use crate::session::{Selection, Tool, TransformTool, WorkMode};
 use crate::theme::{IconRole, Theme};
 use eframe::egui;
 
-pub const HEIGHT: f32 = 40.0;
+pub const HEIGHT: f32 = 34.0;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState, theme: &Theme) {
     egui::Frame::NONE
-        .fill(crate::theme::hex_to_color(&theme.panel_fill))
-        .stroke(egui::Stroke::new(1.0, theme.card_border()))
-        .corner_radius(8)
-        .inner_margin(egui::Margin::symmetric(8, 3))
+        .inner_margin(egui::Margin::symmetric(4, 1))
         .show(ui, |ui| {
             ui.set_height(26.0);
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);

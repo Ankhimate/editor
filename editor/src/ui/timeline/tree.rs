@@ -311,13 +311,13 @@ pub fn ui(
 pub fn band_color(visuals: &egui::Visuals, group: bool) -> egui::Color32 {
     if group {
         if visuals.dark_mode {
-            visuals.faint_bg_color.linear_multiply(2.1)
+            egui::Color32::from_rgb(62, 78, 79)
         } else {
-            visuals.faint_bg_color.linear_multiply(0.9)
+            egui::Color32::from_rgb(190, 207, 205)
         }
     } else if visuals.dark_mode {
-        visuals.faint_bg_color.linear_multiply(0.85)
+        egui::Color32::from_rgb(48, 49, 50)
     } else {
-        visuals.faint_bg_color.linear_multiply(1.4)
+        egui::Color32::from_rgb(218, 220, 220)
     }
 }

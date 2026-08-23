@@ -29,7 +29,7 @@ use eframe::egui;
 pub use transport::toggle_play;
 
 /// Row height for every property row and group header.
-pub const ROW_H: f32 = 20.0;
+pub const ROW_H: f32 = 22.0;
 /// Height of the frame ruler.
 pub const RULER_H: f32 = 24.0;
 
@@ -93,7 +93,7 @@ impl Default for ViewState {
         Self {
             px_per_sec: 120.0,
             scroll_sec: 0.0,
-            divider_w: 168.0,
+            divider_w: 220.0,
             mode: SheetMode::Dopesheet,
             scroll_y: 0.0,
             soloed: Default::default(),
