@@ -32,6 +32,7 @@ pub use transport::toggle_play;
 pub const ROW_H: f32 = 22.0;
 /// Height of the frame ruler.
 pub const RULER_H: f32 = 24.0;
+pub const SUMMARY_H: f32 = 18.0;
 
 const MIN_DIVIDER: f32 = 90.0;
 const MIN_PX_PER_SEC: f32 = 4.0;
@@ -230,11 +231,22 @@ fn panel(ui: &mut egui::Ui, state: &mut AppState, mode: SheetMode, style: Style<
     let ruler_rect = egui::Rect::from_min_size(body.min, egui::vec2(body.width(), RULER_H));
     ruler::ui(ui, state, &layout, ruler_rect, style);
 
+    let summary_bottom = if mode == SheetMode::Dopesheet {
+        let summary_rect = egui::Rect::from_min_size(
+            egui::pos2(body.left(), ruler_rect.bottom()),
+            egui::vec2(body.width(), SUMMARY_H),
+        );
+        sheet::summary_ui(ui, &model, &layout, summary_rect, style);
+        summary_rect.bottom()
+    } else {
+        ruler_rect.bottom()
+    };
+
     // ── Event lane, directly under the ruler (T-506) ─────────────────────
     // Events belong to the clip rather than to any bone, so they get a lane of
     // their own above the dopesheet instead of a row inside its group tree.
     let event_rect = egui::Rect::from_min_size(
-        egui::pos2(body.left(), ruler_rect.bottom()),
+        egui::pos2(body.left(), summary_bottom),
         egui::vec2(body.width(), events::LANE_HEIGHT),
     );
     events::ui(ui, state, &layout, event_rect, style);

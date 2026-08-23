@@ -17,6 +17,47 @@ use eframe::egui;
 const KEY_HIT_R: f32 = 5.0;
 const DELETE_DROP_MARGIN: f32 = 36.0;
 
+/// One clip-wide timing overview directly below the ruler.
+pub fn summary_ui(
+    ui: &mut egui::Ui,
+    model: &TimelineModel,
+    layout: &Layout,
+    rect: egui::Rect,
+    style: super::Style<'_>,
+) {
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(
+        rect,
+        0.0,
+        crate::theme::hex_to_color(&style.theme.faint_bg_color),
+    );
+    painter.text(
+        egui::pos2(rect.left() + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        "keys",
+        egui::FontId::proportional(style.text - 0.5),
+        ui.visuals().weak_text_color(),
+    );
+    for time in model.summary_times() {
+        let x = layout.time_to_x(time);
+        if x < layout.sheet_x0 - 4.0 || x > rect.right() + 4.0 {
+            continue;
+        }
+        let center = egui::pos2(x, rect.center().y);
+        let d = 4.0;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(center.x, center.y - d),
+                egui::pos2(center.x + d, center.y),
+                egui::pos2(center.x, center.y + d),
+                egui::pos2(center.x - d, center.y),
+            ],
+            style.theme.event_marker(),
+            egui::Stroke::NONE,
+        ));
+    }
+}
+
 /// Selected keys, in egui memory (UI state, never undoable).
 #[derive(Clone, Default)]
 pub struct Selection {
@@ -171,31 +212,15 @@ pub fn ui(
         let shown = row.is_soloed(&view.soloed);
 
         match row {
-            VisibleRow::Group { data, folded, .. } => {
-                // Summary diamonds: one per distinct child key time. When the
-                // group is folded these keep its timing visible.
-                for &t in &data.summary_times {
-                    let x = layout.time_to_x(t);
-                    if x < rect.left() - 4.0 || x > rect.right() + 4.0 {
-                        continue;
-                    }
-                    let dim = if *folded { 1.0 } else { 0.5 };
-                    let center = egui::pos2(x, y + ROW_H / 2.0);
-                    let d = 4.0;
-                    painter.add(egui::Shape::convex_polygon(
-                        vec![
-                            egui::pos2(center.x, center.y - d),
-                            egui::pos2(center.x + d, center.y),
-                            egui::pos2(center.x, center.y + d),
-                            egui::pos2(center.x - d, center.y),
-                        ],
-                        style.theme.event_marker().gamma_multiply(dim),
-                        egui::Stroke::NONE,
-                    ));
-                }
-            }
+            VisibleRow::Group { .. } => {}
             VisibleRow::Property { data, .. } => {
                 let channel = style.theme.channel_color(data.label);
+                let channel_selected = selection.keys.iter().any(|key| key.addr == data.addr);
+                let display_color = if channel_selected {
+                    style.theme.primary()
+                } else {
+                    channel
+                };
                 // A dopesheet describes held motion, not only isolated moments.
                 // Join each key to the next, and the final key to clip end, so a
                 // glance shows where a channel is active across time.
@@ -208,16 +233,18 @@ pub fn ui(
                     let x0 = layout.time_to_x(key.time).clamp(rect.left(), rect.right());
                     let x1 = layout.time_to_x(end).clamp(rect.left(), rect.right());
                     if x1 > x0 {
-                        painter.line_segment(
-                            [
-                                egui::pos2(x0, y + ROW_H / 2.0),
-                                egui::pos2(x1, y + ROW_H / 2.0),
-                            ],
-                            egui::Stroke::new(
-                                2.0,
-                                channel.gamma_multiply(if shown { 0.78 } else { 0.3 }),
-                            ),
-                        );
+                        let color = display_color.gamma_multiply(if shown { 0.9 } else { 0.3 });
+                        if let Some(next) = data.keys.get(index + 1) {
+                            draw_key_span(&painter, x0, x1, y + ROW_H / 2.0, next.interp, color);
+                        } else {
+                            painter.line_segment(
+                                [
+                                    egui::pos2(x0, y + ROW_H / 2.0),
+                                    egui::pos2(x1, y + ROW_H / 2.0),
+                                ],
+                                egui::Stroke::new(2.0, color),
+                            );
+                        }
                     }
                 }
                 for k in &data.keys {
@@ -239,7 +266,7 @@ pub fn ui(
                         selected,
                         data.read_only || !shown,
                         &visuals,
-                        channel,
+                        display_color,
                     );
 
                     // A greyed row is not editable either: dragging a key you
@@ -261,6 +288,21 @@ pub fn ui(
                         ui.id().with(("tl_key", i, data.addr.stable_id(), k.index)),
                         egui::Sense::click_and_drag(),
                     );
+                    if resp.hovered() || selected {
+                        painter.rect_stroke(
+                            egui::Rect::from_center_size(center, egui::vec2(9.0, ROW_H - 3.0)),
+                            2.0,
+                            egui::Stroke::new(
+                                if selected { 2.0 } else { 1.0 },
+                                if selected {
+                                    style.theme.primary()
+                                } else {
+                                    visuals.strong_text_color()
+                                },
+                            ),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
                     if resp.clicked() {
                         hit_any_key = true;
                         if ui.ctx().input(|i| i.modifiers.ctrl) {
@@ -431,6 +473,43 @@ fn draw_frame_grid(
             egui::Stroke::new(1.0, if on_second { second_line } else { line }),
         );
     }
+}
+
+fn draw_key_span(
+    painter: &egui::Painter,
+    x0: f32,
+    x1: f32,
+    y: f32,
+    interp: Interp,
+    color: egui::Color32,
+) {
+    let bend = 3.0;
+    let points = match interp {
+        Interp::Stepped => vec![
+            egui::pos2(x0, y + bend),
+            egui::pos2((x1 - bend).max(x0), y + bend),
+            egui::pos2(x1, y - bend),
+        ],
+        Interp::Linear => vec![egui::pos2(x0, y + bend), egui::pos2(x1, y - bend)],
+        Interp::Bezier {
+            out_handle,
+            in_handle,
+        } => (0..=12)
+            .map(|step| {
+                let t = step as f32 / 12.0;
+                let mt = 1.0 - t;
+                let bx =
+                    3.0 * mt * mt * t * out_handle.x + 3.0 * mt * t * t * in_handle.x + t * t * t;
+                let by =
+                    3.0 * mt * mt * t * out_handle.y + 3.0 * mt * t * t * in_handle.y + t * t * t;
+                egui::pos2(
+                    x0 + (x1 - x0) * bx.clamp(0.0, 1.0),
+                    y + bend - by * bend * 2.0,
+                )
+            })
+            .collect(),
+    };
+    painter.add(egui::Shape::line(points, egui::Stroke::new(2.0, color)));
 }
 
 /// Draw a compact vertical property-key tick.

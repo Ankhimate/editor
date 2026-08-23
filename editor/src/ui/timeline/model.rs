@@ -161,6 +161,18 @@ impl TimelineModel {
 
         Self { groups }
     }
+
+    /// Every keyed time in the clip, once, for the animation-wide summary row.
+    pub fn summary_times(&self) -> Vec<f32> {
+        let mut times: Vec<_> = self
+            .groups
+            .iter()
+            .flat_map(|group| group.summary_times.iter().copied())
+            .collect();
+        times.sort_by(f32::total_cmp);
+        times.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
+        times
+    }
 }
 
 /// One entry in the flattened, fold-aware visible row list.
@@ -503,6 +515,24 @@ mod solo_tests {
         TimelineAddr::SlotColor {
             slot: SlotId::from(KeyData::from_ffi(n)),
         }
+    }
+
+    #[test]
+    fn clip_summary_has_one_marker_per_keyed_time() {
+        let group = |times: Vec<f32>, id| Group {
+            label: String::new(),
+            icon: "",
+            tint: None,
+            rows: Vec::new(),
+            fold_id: id,
+            summary_times: times,
+            bone: None,
+            offset: 0.0,
+        };
+        let model = TimelineModel {
+            groups: vec![group(vec![0.0, 0.5], 1), group(vec![0.5, 1.0], 2)],
+        };
+        assert_eq!(model.summary_times(), vec![0.0, 0.5, 1.0]);
     }
 
     /// The empty set is "show everything", not "show nothing". Un-soloing the
