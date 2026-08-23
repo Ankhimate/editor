@@ -211,44 +211,34 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     // Key affordances only mean something against a clip (T-210).
     let animating = state.session.is_animating();
     let pending = state.session.pending_pose.contains(&bone_id);
-    let mut dot_action: Option<(BoneProperty, DotAction)> = None;
+    let mut dot_action: Option<(
+        BoneProperty,
+        Option<ankhimate_core::animation::Axis>,
+        DotAction,
+    )> = None;
 
-    let key_state = |state: &AppState, property: BoneProperty| {
+    let key_state = |state: &AppState,
+                     property: BoneProperty,
+                     axis: Option<ankhimate_core::animation::Axis>| {
         if pending {
             // An uncommitted pose applies to every channel the user moved; the
             // dot flags the bone, and keying commits what actually changed.
             return crate::edit_router::KeyState::Modified;
         }
-        // A property's dot covers both its tracks: "translate is keyed here"
-        // means either axis is. The dopesheet is where the axes are told apart.
-        axes_of(property)
-            .into_iter()
-            .map(|axis| {
-                crate::edit_router::key_state(
-                    &state.doc,
-                    &state.session,
-                    &TimelineAddr::Bone {
-                        bone: bone_id,
-                        property,
-                        axis,
-                    },
-                )
-            })
-            // The strongest state wins: one keyed axis makes the property
-            // keyed, and saying otherwise would offer to key what is already
-            // there.
-            .max_by_key(|k| match k {
-                crate::edit_router::KeyState::Keyed(_) => 3,
-                crate::edit_router::KeyState::Modified => 2,
-                crate::edit_router::KeyState::Unkeyed => 1,
-                crate::edit_router::KeyState::NoTimeline => 0,
-            })
-            .unwrap_or(crate::edit_router::KeyState::NoTimeline)
+        crate::edit_router::key_state(
+            &state.doc,
+            &state.session,
+            &TimelineAddr::Bone {
+                bone: bone_id,
+                property,
+                axis,
+            },
+        )
     };
 
     // Rotate — single field
     let rot_sel = state.session.active_transform_tool == TransformTool::Rotate;
-    let keyed = key_state(state, BoneProperty::Rotate);
+    let keyed = key_state(state, BoneProperty::Rotate, None);
     let (row_changed, action) = keyed_row(ui, animating, keyed, |ui| {
         transform_row_single(ui, "Rotate", &mut rot, 0.5, 2, SINGLE_COLOR, rot_sel)
     });
@@ -257,57 +247,90 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         state.session.active_transform_tool = TransformTool::Rotate;
     }
     if action != DotAction::None {
-        dot_action = Some((BoneProperty::Rotate, action));
+        dot_action = Some((BoneProperty::Rotate, None, action));
     }
     ui.add_space(ROW_GAP);
 
     // Translate
     let tr_sel = state.session.active_transform_tool == TransformTool::Translate;
-    let keyed = key_state(state, BoneProperty::Translate);
-    let (row_changed, action) = keyed_row(ui, animating, keyed, |ui| {
+    let keyed = [
+        key_state(
+            state,
+            BoneProperty::Translate,
+            Some(ankhimate_core::animation::Axis::X),
+        ),
+        key_state(
+            state,
+            BoneProperty::Translate,
+            Some(ankhimate_core::animation::Axis::Y),
+        ),
+    ];
+    let (row_changed, actions) = keyed_xy_row(ui, animating, keyed, |ui| {
         transform_row_xy(ui, "Translate", &mut tx, &mut ty, 0.5, 2, tr_sel)
     });
     if row_changed {
         changed = true;
         state.session.active_transform_tool = TransformTool::Translate;
     }
-    if action != DotAction::None {
-        dot_action = Some((BoneProperty::Translate, action));
+    if let Some((axis, action)) = axis_action(actions) {
+        dot_action = Some((BoneProperty::Translate, Some(axis), action));
     }
     ui.add_space(ROW_GAP);
 
     // Scale
     let sc_sel = state.session.active_transform_tool == TransformTool::Scale;
-    let keyed = key_state(state, BoneProperty::Scale);
-    let (row_changed, action) = keyed_row(ui, animating, keyed, |ui| {
+    let keyed = [
+        key_state(
+            state,
+            BoneProperty::Scale,
+            Some(ankhimate_core::animation::Axis::X),
+        ),
+        key_state(
+            state,
+            BoneProperty::Scale,
+            Some(ankhimate_core::animation::Axis::Y),
+        ),
+    ];
+    let (row_changed, actions) = keyed_xy_row(ui, animating, keyed, |ui| {
         transform_row_xy(ui, "Scale", &mut sx, &mut sy, 0.01, 3, sc_sel)
     });
     if row_changed {
         changed = true;
         state.session.active_transform_tool = TransformTool::Scale;
     }
-    if action != DotAction::None {
-        dot_action = Some((BoneProperty::Scale, action));
+    if let Some((axis, action)) = axis_action(actions) {
+        dot_action = Some((BoneProperty::Scale, Some(axis), action));
     }
     ui.add_space(ROW_GAP);
 
     // Shear — degrees, so it drags at the Rotate rate rather than the 0.01 step
     // that suited radians.
     let sh_sel = state.session.active_transform_tool == TransformTool::Shear;
-    let keyed = key_state(state, BoneProperty::Shear);
-    let (row_changed, action) = keyed_row(ui, animating, keyed, |ui| {
+    let keyed = [
+        key_state(
+            state,
+            BoneProperty::Shear,
+            Some(ankhimate_core::animation::Axis::X),
+        ),
+        key_state(
+            state,
+            BoneProperty::Shear,
+            Some(ankhimate_core::animation::Axis::Y),
+        ),
+    ];
+    let (row_changed, actions) = keyed_xy_row(ui, animating, keyed, |ui| {
         transform_row_xy(ui, "Shear", &mut shx, &mut shy, 0.5, 2, sh_sel)
     });
     if row_changed {
         changed = true;
         state.session.active_transform_tool = TransformTool::Shear;
     }
-    if action != DotAction::None {
-        dot_action = Some((BoneProperty::Shear, action));
+    if let Some((axis, action)) = axis_action(actions) {
+        dot_action = Some((BoneProperty::Shear, Some(axis), action));
     }
 
-    if let Some((property, action)) = dot_action {
-        apply_dot_action(state, bone_id, property, action);
+    if let Some((property, axis, action)) = dot_action {
+        apply_dot_action(state, bone_id, property, axis, action);
     }
 
     if changed {
@@ -2142,11 +2165,46 @@ fn keyed_row(
     (changed, action)
 }
 
+fn keyed_xy_row(
+    ui: &mut egui::Ui,
+    animating: bool,
+    keyed: [crate::edit_router::KeyState; 2],
+    body: impl FnOnce(&mut egui::Ui) -> bool,
+) -> (bool, [DotAction; 2]) {
+    if !animating {
+        return (body(ui), [DotAction::None; 2]);
+    }
+
+    const DOTS_W: f32 = 50.0;
+    let mut changed = false;
+    let mut actions = [DotAction::None; 2];
+    ui.horizontal(|ui| {
+        let width = (ui.available_width() - DOTS_W).max(60.0);
+        ui.allocate_ui(egui::vec2(width, FIELD_H), |ui| {
+            changed = body(ui);
+        });
+        ui.spacing_mut().item_spacing.x = 1.0;
+        for (index, (label, color)) in [("X", X_COLOR), ("Y", Y_COLOR)].into_iter().enumerate() {
+            ui.label(egui::RichText::new(label).size(8.5).color(color));
+            actions[index] = key_dot(ui, keyed[index]);
+        }
+    });
+    (changed, actions)
+}
+
+fn axis_action(actions: [DotAction; 2]) -> Option<(ankhimate_core::animation::Axis, DotAction)> {
+    use ankhimate_core::animation::Axis;
+    [(Axis::X, actions[0]), (Axis::Y, actions[1])]
+        .into_iter()
+        .find(|(_, action)| *action != DotAction::None)
+}
+
 /// Key or unkey one bone property at the playhead.
 fn apply_dot_action(
     ui_state: &mut AppState,
     bone: ankhimate_core::ids::BoneId,
     property: BoneProperty,
+    axis: Option<ankhimate_core::animation::Axis>,
     action: DotAction,
 ) {
     use ankhimate_core::animation::Interp;
@@ -2155,9 +2213,8 @@ fn apply_dot_action(
     let Some(anim) = ui_state.session.active_animation else {
         return;
     };
-    // One dot, both tracks: an animator keying "translate" means the property,
-    // and splitting the axes is a timeline concern rather than an inspector one.
-    for axis in axes_of(property) {
+    // Each inspector dot owns exactly the track beside it.
+    for axis in std::iter::once(axis) {
         let addr = TimelineAddr::Bone {
             bone,
             property,
@@ -2199,15 +2256,6 @@ fn apply_dot_action(
     }
     if matches!(action, DotAction::Key) {
         ui_state.session.clear_previews();
-    }
-}
-
-/// The tracks a property has: one per axis, or a single unaxed one for rotation.
-fn axes_of(property: BoneProperty) -> Vec<Option<ankhimate_core::animation::Axis>> {
-    use ankhimate_core::animation::Axis;
-    match property {
-        BoneProperty::Rotate => vec![None],
-        _ => vec![Some(Axis::X), Some(Axis::Y)],
     }
 }
 
@@ -3656,4 +3704,55 @@ fn colored_drag(
     );
 
     changed
+}
+
+#[cfg(test)]
+mod explicit_axis_key_tests {
+    use super::*;
+    use ankhimate_core::animation::{Axis, Timeline};
+    use ankhimate_core::skeleton::Bone;
+    use ankhimate_document::commands::bone_cmds::CreateBone;
+    use ankhimate_document::commands::key_cmds::CreateAnimation;
+
+    #[test]
+    fn translate_x_dot_keys_only_translate_x() {
+        let mut state = AppState::default();
+        state.dispatch(Box::new(CreateBone::new(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 10.0,
+            local_transform: Default::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        })));
+        let bone = state.doc.skeleton.update_order[0];
+        state.dispatch(Box::new(CreateAnimation::new("clip", 1.0)));
+        state.set_work_mode(crate::session::WorkMode::Animate);
+
+        apply_dot_action(
+            &mut state,
+            bone,
+            BoneProperty::Translate,
+            Some(Axis::X),
+            DotAction::Key,
+        );
+
+        let animation = state
+            .doc
+            .animations
+            .get(state.session.active_animation.unwrap())
+            .unwrap();
+        assert!(
+            animation
+                .timelines
+                .iter()
+                .any(|timeline| matches!(timeline, Timeline::BoneTranslate { axis: Axis::X, .. }))
+        );
+        assert!(
+            !animation
+                .timelines
+                .iter()
+                .any(|timeline| matches!(timeline, Timeline::BoneTranslate { axis: Axis::Y, .. }))
+        );
+    }
 }

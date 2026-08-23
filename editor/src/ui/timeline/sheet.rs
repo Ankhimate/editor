@@ -174,17 +174,6 @@ pub fn ui(
             VisibleRow::Group { .. } => {}
             VisibleRow::Property { data, .. } => {
                 let channel = style.theme.channel_color(data.label);
-                let values = data
-                    .channels
-                    .first()
-                    .map(|channel| channel.values.as_slice());
-                let value_range = values.and_then(value_range);
-                let channel_selected = selection.keys.iter().any(|key| key.addr == data.addr);
-                let display_color = if channel_selected {
-                    style.theme.primary()
-                } else {
-                    channel
-                };
                 // A dopesheet describes held motion, not only isolated moments.
                 // Join each key to the next, and the final key to clip end, so a
                 // glance shows where a channel is active across time.
@@ -197,15 +186,16 @@ pub fn ui(
                     let x0 = layout.time_to_x(key.time).clamp(rect.left(), rect.right());
                     let x1 = layout.time_to_x(end).clamp(rect.left(), rect.right());
                     if x1 > x0 {
-                        let color = display_color.gamma_multiply(if shown { 0.9 } else { 0.3 });
-                        let center_y = y + ROW_H / 2.0;
-                        let y0 = keyed_y(values, value_range, index, center_y);
-                        let y1 = if data.keys.get(index + 1).is_some() {
-                            keyed_y(values, value_range, index + 1, center_y)
+                        let selected = selection.keys.iter().any(|selected| {
+                            selected.addr == data.addr && selected.index == key.index
+                        });
+                        let color = if selected {
+                            style.theme.primary()
                         } else {
-                            y0
-                        };
-                        draw_key_span(&painter, x0, x1, y0, y1, key.interp, color);
+                            channel
+                        }
+                        .gamma_multiply(if shown { 0.9 } else { 0.3 });
+                        draw_key_span(&painter, x0, x1, y + ROW_H / 2.0, color);
                     }
                 }
                 for k in &data.keys {
@@ -228,7 +218,7 @@ pub fn ui(
                         selected,
                         data.read_only || !shown,
                         &visuals,
-                        display_color,
+                        channel,
                     );
 
                     // A greyed row is not editable either: dragging a key you
@@ -440,55 +430,18 @@ fn draw_frame_grid(
     }
 }
 
-fn value_range(values: &[f32]) -> Option<(f32, f32)> {
-    let min = values.iter().copied().reduce(f32::min)?;
-    let max = values.iter().copied().reduce(f32::max)?;
-    (max - min > f32::EPSILON).then_some((min, max))
-}
-
-fn keyed_y(values: Option<&[f32]>, range: Option<(f32, f32)>, index: usize, center_y: f32) -> f32 {
-    let Some(((min, max), value)) = range.zip(values.and_then(|values| values.get(index))) else {
-        return center_y;
-    };
-    let normalized = (*value - min) / (max - min);
-    center_y + (0.5 - normalized) * 8.0
-}
-
-fn draw_key_span(
-    painter: &egui::Painter,
-    x0: f32,
-    x1: f32,
-    y0: f32,
-    y1: f32,
-    interp: Interp,
-    color: egui::Color32,
-) {
-    let points = match interp {
-        Interp::Stepped => vec![egui::pos2(x0, y0), egui::pos2(x1, y0)],
-        Interp::Linear => vec![egui::pos2(x0, y0), egui::pos2(x1, y1)],
-        Interp::Bezier {
-            out_handle,
-            in_handle,
-        } => (0..=16)
-            .map(|step| {
-                let t = step as f32 / 16.0;
-                let mt = 1.0 - t;
-                let bx =
-                    3.0 * mt * mt * t * out_handle.x + 3.0 * mt * t * t * in_handle.x + t * t * t;
-                let by =
-                    3.0 * mt * mt * t * out_handle.y + 3.0 * mt * t * t * in_handle.y + t * t * t;
-                egui::pos2(x0 + (x1 - x0) * bx, y0 + (y1 - y0) * by)
-            })
-            .collect(),
-    };
-    painter.add(egui::Shape::line(points, egui::Stroke::new(2.0, color)));
+fn draw_key_span(painter: &egui::Painter, x0: f32, x1: f32, y: f32, color: egui::Color32) {
+    painter.line_segment(
+        [egui::pos2(x0, y), egui::pos2(x1, y)],
+        egui::Stroke::new(2.0, color),
+    );
 }
 
 /// Draw a compact vertical property-key tick.
 fn draw_key(
     painter: &egui::Painter,
     center: egui::Pos2,
-    interp: Interp,
+    _interp: Interp,
     selected: bool,
     read_only: bool,
     visuals: &egui::Visuals,
@@ -501,29 +454,14 @@ fn draw_key(
     } else {
         channel
     };
-    let stroke = egui::Stroke::new(if selected { 3.0 } else { 2.0 }, fill);
-    painter.line_segment(
-        [
-            egui::pos2(center.x, center.y - ROW_H * 0.42),
-            egui::pos2(center.x, center.y + ROW_H * 0.42),
-        ],
-        stroke,
+    painter.rect_filled(
+        egui::Rect::from_center_size(
+            center,
+            egui::vec2(if selected { 4.0 } else { 3.0 }, ROW_H * 0.84),
+        ),
+        1.0,
+        fill,
     );
-    let cap = if matches!(interp, Interp::Stepped) {
-        4.0
-    } else {
-        2.5
-    };
-    painter.line_segment(
-        [
-            egui::pos2(center.x, center.y - cap),
-            egui::pos2(center.x + cap, center.y - cap),
-        ],
-        stroke,
-    );
-    if matches!(interp, Interp::Bezier { .. }) {
-        painter.circle_filled(center, 1.7, visuals.extreme_bg_color);
-    }
 }
 
 fn key_context_menu(
@@ -548,18 +486,4 @@ fn key_context_menu(
             }
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn channel_values_use_the_rows_compact_vertical_range() {
-        let values = [10.0, 20.0, 30.0];
-        let range = value_range(&values);
-        assert_eq!(keyed_y(Some(&values), range, 0, 50.0), 54.0);
-        assert_eq!(keyed_y(Some(&values), range, 1, 50.0), 50.0);
-        assert_eq!(keyed_y(Some(&values), range, 2, 50.0), 46.0);
-    }
 }
