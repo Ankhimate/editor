@@ -69,7 +69,7 @@ pub fn ui(
         painter.rect_filled(
             row_rect,
             0.0,
-            band_color(&visuals, matches!(row, VisibleRow::Group { .. })),
+            band_color(style.theme, matches!(row, VisibleRow::Group { .. })),
         );
 
         match row {
@@ -308,16 +308,10 @@ pub fn ui(
 /// whenever they happened to land on the same parity, which is exactly the
 /// distinction the panel exists to draw. A header is a heading and its
 /// properties are its contents; two tones say so on every row, every time.
-pub fn band_color(visuals: &egui::Visuals, group: bool) -> egui::Color32 {
+pub fn band_color(theme: &crate::theme::Theme, group: bool) -> egui::Color32 {
     if group {
-        if visuals.dark_mode {
-            egui::Color32::from_rgb(62, 78, 79)
-        } else {
-            egui::Color32::from_rgb(190, 207, 205)
-        }
-    } else if visuals.dark_mode {
-        egui::Color32::from_rgb(48, 49, 50)
+        crate::theme::hex_to_color(&theme.faint_bg_color)
     } else {
-        egui::Color32::from_rgb(218, 220, 220)
+        crate::theme::hex_to_color(&theme.panel_fill)
     }
 }

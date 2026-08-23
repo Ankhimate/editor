@@ -1,4 +1,4 @@
-//! The dopesheet body: banded rows, group summary dots, key diamonds, playhead.
+//! The dopesheet body: banded rows, summary diamonds, key ticks, playhead.
 //!
 //! Iterates the same [`VisibleRow`] list as the name tree so every key sits on
 //! its label's row. Interactions: click/ctrl-click select, drag selected keys in
@@ -14,7 +14,7 @@ use ankhimate_core::ids::AnimationId;
 use ankhimate_document::commands::key_cmds::{DeleteKeys, KeyRef, MoveKeys, SetInterp};
 use eframe::egui;
 
-const DIAMOND_R: f32 = 5.0;
+const KEY_HIT_R: f32 = 5.0;
 const DELETE_DROP_MARGIN: f32 = 36.0;
 
 /// Selected keys, in egui memory (UI state, never undoable).
@@ -135,7 +135,7 @@ pub fn ui(
         // fill, so "where this animation stops" is visible without counting
         // frames on the ruler.
         let is_group = matches!(row, VisibleRow::Group { .. });
-        let band = band_color(&visuals, is_group);
+        let band = band_color(style.theme, is_group);
         let end_x = layout.time_to_x(duration).clamp(rect.left(), rect.right());
         painter.rect_filled(
             egui::Rect::from_min_max(row_rect.min, egui::pos2(end_x, row_rect.bottom())),
@@ -172,20 +172,26 @@ pub fn ui(
 
         match row {
             VisibleRow::Group { data, folded, .. } => {
-                // Summary dots: one per distinct child key time. When the group is
-                // folded these are the only markers, so the user still sees where
-                // its keys are.
+                // Summary diamonds: one per distinct child key time. When the
+                // group is folded these keep its timing visible.
                 for &t in &data.summary_times {
                     let x = layout.time_to_x(t);
                     if x < rect.left() - 4.0 || x > rect.right() + 4.0 {
                         continue;
                     }
                     let dim = if *folded { 1.0 } else { 0.5 };
-                    painter.circle_filled(
-                        egui::pos2(x, y + ROW_H / 2.0),
-                        2.5,
-                        visuals.weak_text_color().gamma_multiply(dim),
-                    );
+                    let center = egui::pos2(x, y + ROW_H / 2.0);
+                    let d = 4.0;
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(center.x, center.y - d),
+                            egui::pos2(center.x + d, center.y),
+                            egui::pos2(center.x, center.y + d),
+                            egui::pos2(center.x - d, center.y),
+                        ],
+                        style.theme.event_marker().gamma_multiply(dim),
+                        egui::Stroke::NONE,
+                    ));
                 }
             }
             VisibleRow::Property { data, .. } => {
@@ -216,7 +222,7 @@ pub fn ui(
                 }
                 for k in &data.keys {
                     let x = layout.time_to_x(k.time);
-                    if x < rect.left() - DIAMOND_R || x > rect.right() + DIAMOND_R {
+                    if x < rect.left() - KEY_HIT_R || x > rect.right() + KEY_HIT_R {
                         continue;
                     }
                     let center = egui::pos2(x, y + ROW_H / 2.0);
@@ -225,9 +231,7 @@ pub fn ui(
                         index: k.index,
                     };
                     let selected = selection.contains(&kref);
-                    // Keys wear their channel's colour, the same one the graph
-                    // plots that channel in — a green diamond and a green curve
-                    // being the same thing is the whole point of unifying them.
+                    // Keys wear the same channel colour as their graph curve.
                     draw_key(
                         &painter,
                         center,
@@ -246,7 +250,7 @@ pub fn ui(
                     }
                     key_positions.push((kref.clone(), center));
                     let hit =
-                        egui::Rect::from_center_size(center, egui::vec2(DIAMOND_R * 2.4, ROW_H));
+                        egui::Rect::from_center_size(center, egui::vec2(KEY_HIT_R * 2.4, ROW_H));
                     let resp = ui.interact(
                         hit,
                         // The row index is part of the id because a document may
@@ -429,7 +433,7 @@ fn draw_frame_grid(
     }
 }
 
-/// Draw a key marker by interpolation kind (diamond / square / bezier dot).
+/// Draw a compact vertical property-key tick.
 fn draw_key(
     painter: &egui::Painter,
     center: egui::Pos2,
@@ -446,30 +450,28 @@ fn draw_key(
     } else {
         channel
     };
-    let stroke = egui::Stroke::new(1.0, visuals.extreme_bg_color);
-    match interp {
-        Interp::Stepped => {
-            let rect =
-                egui::Rect::from_center_size(center, egui::vec2(DIAMOND_R * 1.7, DIAMOND_R * 1.7));
-            painter.rect_filled(rect, 1.0, fill);
-            painter.rect_stroke(rect, 1.0, stroke, egui::StrokeKind::Inside);
-        }
-        Interp::Linear | Interp::Bezier { .. } => {
-            let d = DIAMOND_R;
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    egui::pos2(center.x, center.y - d),
-                    egui::pos2(center.x + d, center.y),
-                    egui::pos2(center.x, center.y + d),
-                    egui::pos2(center.x - d, center.y),
-                ],
-                fill,
-                stroke,
-            ));
-            if matches!(interp, Interp::Bezier { .. }) {
-                painter.circle_filled(center, 1.6, visuals.extreme_bg_color);
-            }
-        }
+    let stroke = egui::Stroke::new(if selected { 3.0 } else { 2.0 }, fill);
+    painter.line_segment(
+        [
+            egui::pos2(center.x, center.y - ROW_H * 0.42),
+            egui::pos2(center.x, center.y + ROW_H * 0.42),
+        ],
+        stroke,
+    );
+    let cap = if matches!(interp, Interp::Stepped) {
+        4.0
+    } else {
+        2.5
+    };
+    painter.line_segment(
+        [
+            egui::pos2(center.x, center.y - cap),
+            egui::pos2(center.x + cap, center.y - cap),
+        ],
+        stroke,
+    );
+    if matches!(interp, Interp::Bezier { .. }) {
+        painter.circle_filled(center, 1.7, visuals.extreme_bg_color);
     }
 }
 

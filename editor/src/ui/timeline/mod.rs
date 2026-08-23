@@ -4,7 +4,7 @@
 //! ```text
 //! ┌ clip picker · transport · [Dopesheet|Graph] ─────────────────────────────┐
 //! ├ frame ruler ─────────────────────────────────────────────────────────────┤
-//! │ name tree        ┊  key sheet (diamonds) or graph (bezier curves)         │
+//! │ name tree        ┊  key sheet (ticks) or graph (bezier curves)            │
 //! │  ▼ arm           ┊     ◆      ◆         ◆                                  │
 //! │    rotate        ┊     ◆      ◆         ◆                                  │
 //! └──────────────────┴──────────────────────────────────────────────────────┘
