@@ -25,6 +25,7 @@ const BTN: f32 = 32.0;
 pub fn ui(
     ui: &mut egui::Ui,
     state: &mut AppState,
+    theme: &crate::theme::Theme,
     trigger_undo: &mut bool,
     trigger_redo: &mut bool,
 ) {
@@ -56,7 +57,7 @@ pub fn ui(
             ),
         ] {
             let (icon, key, name, value, enabled) = spec;
-            if rail_button(ui, icon, name, key, tool == value, enabled) {
+            if rail_button(ui, theme, icon, name, key, tool == value, enabled) {
                 state.session.tool = value;
             }
         }
@@ -94,7 +95,7 @@ pub fn ui(
             // Only lit under Select: the gizmo is not on screen under the other
             // tools, so showing it as the current mode would be a lie.
             let on = tool == Tool::Select && active == value;
-            if rail_button(ui, icon, name, key, on, true) {
+            if rail_button(ui, theme, icon, name, key, on, true) {
                 state.session.active_transform_tool = value;
                 state.session.tool = Tool::Select;
             }
@@ -104,6 +105,7 @@ pub fn ui(
         // ── Visibility ─────────────────────────────────────────────────
         if rail_button(
             ui,
+            theme,
             crate::ui::icons::IMAGE,
             "Show artwork",
             "1",
@@ -114,6 +116,7 @@ pub fn ui(
         }
         if rail_button(
             ui,
+            theme,
             crate::ui::icons::BONE,
             "Show bones",
             "2",
@@ -134,6 +137,7 @@ pub fn ui(
         let depth = state.history.undo_depth();
         if rail_button_enabled(
             ui,
+            theme,
             crate::ui::icons::UNDO,
             &format!("Undo (Ctrl+Z) — {depth} steps"),
             can_undo,
@@ -141,7 +145,7 @@ pub fn ui(
             *trigger_undo = true;
         }
         let can_redo = state.history.can_redo();
-        if rail_button_enabled(ui, crate::ui::icons::REDO, "Redo (Ctrl+Y)", can_redo) {
+        if rail_button_enabled(ui, theme, crate::ui::icons::REDO, "Redo (Ctrl+Y)", can_redo) {
             *trigger_redo = true;
         }
     });
@@ -162,6 +166,7 @@ fn gap(ui: &mut egui::Ui) {
 /// One rail button. Returns whether it was clicked.
 fn rail_button(
     ui: &mut egui::Ui,
+    theme: &crate::theme::Theme,
     icon: &str,
     name: &str,
     shortcut: &str,
@@ -173,14 +178,27 @@ fn rail_button(
     } else {
         format!("{name}  ({shortcut}) — Setup mode only")
     };
-    button(ui, icon, &hover, selected, enabled)
+    button(ui, theme, icon, &hover, selected, enabled)
 }
 
-fn rail_button_enabled(ui: &mut egui::Ui, icon: &str, hover: &str, enabled: bool) -> bool {
-    button(ui, icon, hover, false, enabled)
+fn rail_button_enabled(
+    ui: &mut egui::Ui,
+    theme: &crate::theme::Theme,
+    icon: &str,
+    hover: &str,
+    enabled: bool,
+) -> bool {
+    button(ui, theme, icon, hover, false, enabled)
 }
 
-fn button(ui: &mut egui::Ui, icon: &str, hover: &str, selected: bool, enabled: bool) -> bool {
+fn button(
+    ui: &mut egui::Ui,
+    theme: &crate::theme::Theme,
+    icon: &str,
+    hover: &str,
+    selected: bool,
+    enabled: bool,
+) -> bool {
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(BTN, BTN),
         if enabled {
@@ -201,12 +219,13 @@ fn button(ui: &mut egui::Ui, icon: &str, hover: &str, selected: bool, enabled: b
         ui.painter().rect_filled(rect, 6, visuals.faint_bg_color);
     }
 
+    let semantic = theme.icon_color(crate::ui::icons::role(icon));
     let color = if !enabled {
-        visuals.weak_text_color().gamma_multiply(0.45)
+        semantic.gamma_multiply(0.32)
     } else if selected {
-        accent
+        semantic
     } else {
-        visuals.text_color().gamma_multiply(0.85)
+        semantic.gamma_multiply(0.82)
     };
     ui.painter().text(
         rect.center(),

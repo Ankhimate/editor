@@ -92,6 +92,12 @@ impl<'a> Dialog<'a> {
     ) -> DialogResponse<T> {
         let visuals = ctx.global_style().visuals.clone();
         let mut close = false;
+        let entrance = super::motion::entrance(
+            ctx,
+            egui::Id::new(self.id).with("entrance"),
+            super::motion::Role::Enter,
+        );
+        let reduced_motion = super::motion::reduced(ctx);
 
         let modal = egui::Modal::new(egui::Id::new(self.id))
             // Darker than egui's default wash. The editor is already a dark UI,
@@ -105,6 +111,10 @@ impl<'a> Dialog<'a> {
                     .corner_radius(super::CARD_RADIUS),
             )
             .show(ctx, |ui| {
+                ui.multiply_opacity(entrance);
+                if !reduced_motion {
+                    ui.add_space((1.0 - entrance) * 4.0);
+                }
                 ui.set_width(self.width);
                 ui.spacing_mut().item_spacing.y = 0.0;
 
@@ -126,14 +136,23 @@ impl<'a> Dialog<'a> {
                 );
 
                 let text_pos = egui::pos2(header.min.x + 14.0, header.center().y);
-                let title = match self.icon {
-                    Some(icon) => format!("{icon}  {}", self.title),
-                    None => self.title.to_string(),
+                let title_x = match self.icon {
+                    Some(icon) => {
+                        ui.painter().text(
+                            text_pos,
+                            egui::Align2::LEFT_CENTER,
+                            icon,
+                            egui::FontId::proportional(13.5),
+                            theme.icon_color(super::icons::role(icon)),
+                        );
+                        text_pos.x + 23.0
+                    }
+                    None => text_pos.x,
                 };
                 ui.painter().text(
-                    text_pos,
+                    egui::pos2(title_x, text_pos.y),
                     egui::Align2::LEFT_CENTER,
-                    title,
+                    self.title,
                     egui::FontId::proportional(13.5),
                     visuals.text_color(),
                 );

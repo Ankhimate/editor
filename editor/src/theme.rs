@@ -1,6 +1,70 @@
 use eframe::egui::{Color32, Context, Visuals};
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IconRole {
+    Neutral,
+    Rig,
+    Attachment,
+    Constraint,
+    Mesh,
+    Animation,
+    Event,
+    Export,
+    Plugin,
+    Warning,
+    Destructive,
+    Translate,
+    Rotate,
+    Scale,
+    Shear,
+}
+
+#[derive(Clone)]
+struct IconPalette {
+    rig: Color32,
+    attachment: Color32,
+    constraint: Color32,
+    mesh: Color32,
+    animation: Color32,
+    event: Color32,
+    export: Color32,
+    plugin: Color32,
+    warning: Color32,
+    destructive: Color32,
+    translate: Color32,
+    rotate: Color32,
+    scale: Color32,
+    shear: Color32,
+}
+
+fn icon_palette_id() -> eframe::egui::Id {
+    eframe::egui::Id::new("ankhimate_icon_palette")
+}
+
+pub fn current_icon_color(ctx: &Context, role: IconRole) -> Color32 {
+    let Some(palette) = ctx.data(|data| data.get_temp::<IconPalette>(icon_palette_id())) else {
+        return Color32::GRAY;
+    };
+    match role {
+        IconRole::Neutral => Color32::GRAY,
+        IconRole::Rig => palette.rig,
+        IconRole::Attachment => palette.attachment,
+        IconRole::Constraint => palette.constraint,
+        IconRole::Mesh => palette.mesh,
+        IconRole::Animation => palette.animation,
+        IconRole::Event => palette.event,
+        IconRole::Export => palette.export,
+        IconRole::Plugin => palette.plugin,
+        IconRole::Warning => palette.warning,
+        IconRole::Destructive => palette.destructive,
+        IconRole::Translate => palette.translate,
+        IconRole::Rotate => palette.rotate,
+        IconRole::Scale => palette.scale,
+        IconRole::Shear => palette.shear,
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Theme {
     pub name: String,
@@ -72,6 +136,62 @@ pub struct Theme {
     /// two cards that happen to sit against each other, not to be seen.
     #[serde(default = "default_card_border")]
     pub card_border: String,
+
+    // ── Semantic icon families ──────────────────────────────────────────────
+    #[serde(default = "default_icon_rig")]
+    pub icon_rig: String,
+    #[serde(default = "default_icon_attachment")]
+    pub icon_attachment: String,
+    #[serde(default = "default_icon_constraint")]
+    pub icon_constraint: String,
+    #[serde(default = "default_icon_mesh")]
+    pub icon_mesh: String,
+    #[serde(default = "default_icon_animation")]
+    pub icon_animation: String,
+    #[serde(default = "default_icon_export")]
+    pub icon_export: String,
+    #[serde(default = "default_icon_plugin")]
+    pub icon_plugin: String,
+    #[serde(default = "default_icon_warning")]
+    pub icon_warning: String,
+    #[serde(default = "default_icon_destructive")]
+    pub icon_destructive: String,
+}
+
+fn default_icon_rig() -> String {
+    "#78dcff".into()
+}
+
+fn default_icon_attachment() -> String {
+    "#c4b5fd".into()
+}
+
+fn default_icon_constraint() -> String {
+    "#fb923c".into()
+}
+
+fn default_icon_mesh() -> String {
+    "#f472b6".into()
+}
+
+fn default_icon_animation() -> String {
+    "#a78bfa".into()
+}
+
+fn default_icon_export() -> String {
+    "#34d399".into()
+}
+
+fn default_icon_plugin() -> String {
+    "#2dd4bf".into()
+}
+
+fn default_icon_warning() -> String {
+    "#fbbf24".into()
+}
+
+fn default_icon_destructive() -> String {
+    "#f87171".into()
 }
 
 fn default_card_border() -> String {
@@ -217,6 +337,15 @@ impl Theme {
             ("Channel · scale", &mut self.channel_scale),
             ("Channel · shear", &mut self.channel_shear),
             ("Event marker", &mut self.event_marker),
+            ("Icon · rig", &mut self.icon_rig),
+            ("Icon · attachment", &mut self.icon_attachment),
+            ("Icon · constraint", &mut self.icon_constraint),
+            ("Icon · mesh", &mut self.icon_mesh),
+            ("Icon · animation", &mut self.icon_animation),
+            ("Icon · export", &mut self.icon_export),
+            ("Icon · plugin", &mut self.icon_plugin),
+            ("Icon · warning", &mut self.icon_warning),
+            ("Icon · destructive", &mut self.icon_destructive),
             ("Card border", &mut self.card_border),
         ]
     }
@@ -332,6 +461,26 @@ impl Theme {
         hex_to_color(&self.card_border)
     }
 
+    pub fn icon_color(&self, role: IconRole) -> Color32 {
+        match role {
+            IconRole::Neutral => Color32::GRAY,
+            IconRole::Rig => hex_to_color(&self.icon_rig),
+            IconRole::Attachment => hex_to_color(&self.icon_attachment),
+            IconRole::Constraint => hex_to_color(&self.icon_constraint),
+            IconRole::Mesh => hex_to_color(&self.icon_mesh),
+            IconRole::Animation => hex_to_color(&self.icon_animation),
+            IconRole::Event => self.event_marker(),
+            IconRole::Export => hex_to_color(&self.icon_export),
+            IconRole::Plugin => hex_to_color(&self.icon_plugin),
+            IconRole::Warning => hex_to_color(&self.icon_warning),
+            IconRole::Destructive => hex_to_color(&self.icon_destructive),
+            IconRole::Translate => hex_to_color(&self.channel_translate),
+            IconRole::Rotate => hex_to_color(&self.channel_rotate),
+            IconRole::Scale => hex_to_color(&self.channel_scale),
+            IconRole::Shear => hex_to_color(&self.channel_shear),
+        }
+    }
+
     /// What shows through between panel cards, and behind everything else.
     ///
     /// Named apart from `extreme_bg_color` because they answer different
@@ -378,6 +527,28 @@ impl Theme {
         let extreme_bg = hex_to_color(&self.extreme_bg_color);
         let primary = self.primary();
         let on_primary = self.on_primary();
+
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                icon_palette_id(),
+                IconPalette {
+                    rig: self.icon_color(IconRole::Rig),
+                    attachment: self.icon_color(IconRole::Attachment),
+                    constraint: self.icon_color(IconRole::Constraint),
+                    mesh: self.icon_color(IconRole::Mesh),
+                    animation: self.icon_color(IconRole::Animation),
+                    event: self.icon_color(IconRole::Event),
+                    export: self.icon_color(IconRole::Export),
+                    plugin: self.icon_color(IconRole::Plugin),
+                    warning: self.icon_color(IconRole::Warning),
+                    destructive: self.icon_color(IconRole::Destructive),
+                    translate: self.icon_color(IconRole::Translate),
+                    rotate: self.icon_color(IconRole::Rotate),
+                    scale: self.icon_color(IconRole::Scale),
+                    shear: self.icon_color(IconRole::Shear),
+                },
+            )
+        });
 
         visuals.panel_fill = panel_fill;
         visuals.window_fill = window_fill;
@@ -457,6 +628,31 @@ mod tests {
                 "{}",
                 theme.name
             );
+        }
+    }
+
+    #[test]
+    fn bundled_themes_define_semantic_icon_families() {
+        for source in [
+            include_str!("themes/default.json"),
+            include_str!("themes/nord.json"),
+            include_str!("themes/solarized_dark.json"),
+            include_str!("themes/catppuccin.json"),
+        ] {
+            let json: serde_json::Value = serde_json::from_str(source).unwrap();
+            for key in [
+                "icon_rig",
+                "icon_attachment",
+                "icon_constraint",
+                "icon_mesh",
+                "icon_animation",
+                "icon_export",
+                "icon_plugin",
+                "icon_warning",
+                "icon_destructive",
+            ] {
+                assert!(json.get(key).is_some(), "bundled theme is missing {key}");
+            }
         }
     }
 

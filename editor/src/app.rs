@@ -510,6 +510,7 @@ impl eframe::App for AnkhimateApp {
     #[allow(deprecated)]
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.theme.apply(ctx);
+        crate::ui::motion::configure(ctx, self.config.reduced_motion);
 
         if let Some(result) = self.marketplace.poll() {
             match result {
@@ -1292,7 +1293,13 @@ at startup.",
                     .inner_margin(egui::Margin::symmetric(4, 6)),
             )
             .show(ctx, |ui| {
-                crate::ui::toolbar::ui(ui, &mut self.state, &mut trigger_undo, &mut trigger_redo);
+                crate::ui::toolbar::ui(
+                    ui,
+                    &mut self.state,
+                    &self.theme,
+                    &mut trigger_undo,
+                    &mut trigger_redo,
+                );
             });
 
         // Animation panes are hidden in Setup mode.

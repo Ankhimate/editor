@@ -48,6 +48,9 @@ pub struct Config {
     /// not do that — a 20pt glyph at 1× is still rasterised once per pixel.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
+    /// Minimise non-essential interface movement while retaining short fades.
+    #[serde(default)]
+    pub reduced_motion: bool,
     /// Panes torn off into their own OS window, by tab name (T-910).
     ///
     /// Persisted because the layout is the point: someone who put the dopesheet
@@ -92,6 +95,7 @@ impl Default for Config {
             grid: GridSettings::default(),
             fonts: FontSettings::default(),
             ui_scale: default_ui_scale(),
+            reduced_motion: false,
             torn_off: Vec::new(),
             hover_labels: default_hover_labels(),
             keymap: crate::keymap::Keymap::builtin(),
@@ -375,6 +379,7 @@ mod settings_tests {
         assert_eq!(config.grid, GridSettings::default());
         assert_eq!(config.fonts, FontSettings::default());
         assert_eq!(config.theme_name, None);
+        assert!(!config.reduced_motion);
     }
 
     #[test]

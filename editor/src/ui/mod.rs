@@ -11,6 +11,7 @@ pub mod export;
 pub mod icon_font;
 pub mod icons;
 pub mod inspector;
+pub mod motion;
 pub mod plugin_panel;
 pub mod psd_import;
 pub mod rename;
@@ -267,8 +268,40 @@ pub fn action_button_enabled(
 ) -> egui::Response {
     ui.add_enabled(
         enabled,
-        egui::Button::new(format!("{icon}  {label}")).min_size(egui::vec2(0.0, CONTROL_HEIGHT)),
+        egui::Button::new(semantic_icon_label(ui, icon, label))
+            .min_size(egui::vec2(0.0, CONTROL_HEIGHT)),
     )
+}
+
+/// An icon and label whose icon keeps its semantic family colour.
+pub fn semantic_icon_label(ui: &egui::Ui, icon: &str, label: &str) -> egui::WidgetText {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let role = icons::role(icon);
+    let icon_color = if role == crate::theme::IconRole::Neutral {
+        ui.visuals().text_color()
+    } else {
+        crate::theme::current_icon_color(ui.ctx(), role)
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        icon,
+        0.0,
+        egui::TextFormat {
+            font_id: font_id.clone(),
+            color: icon_color,
+            ..Default::default()
+        },
+    );
+    job.append(
+        &format!("  {label}"),
+        0.0,
+        egui::TextFormat {
+            font_id,
+            color: ui.visuals().text_color(),
+            ..Default::default()
+        },
+    );
+    job.into()
 }
 
 /// A calm, right-aligned form label. Equal width is what stops forms reading as

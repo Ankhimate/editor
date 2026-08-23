@@ -19,6 +19,45 @@
 
 use super::icon_font as f;
 
+/// Stable semantic colour family for a glyph wherever it appears.
+pub fn role(icon: &str) -> crate::theme::IconRole {
+    use crate::theme::IconRole;
+
+    if [BONE, CREATE_BONE].contains(&icon) {
+        IconRole::Rig
+    } else if [SLOT, IMAGE, ATTACHMENT, ASSETS, SKIN].contains(&icon) {
+        IconRole::Attachment
+    } else if [MESH, WEIGHT_PAINT, SLOT_EDITOR].contains(&icon) {
+        IconRole::Mesh
+    } else if [CONSTRAINT, IK, TRANSFORM_CONSTRAINT, PHYSICS].contains(&icon) {
+        IconRole::Constraint
+    } else if [TRANSLATE, TOOL_TRANSLATE].contains(&icon) {
+        IconRole::Translate
+    } else if [ROTATE, TOOL_ROTATE].contains(&icon) {
+        IconRole::Rotate
+    } else if [SCALE, TOOL_SCALE].contains(&icon) {
+        IconRole::Scale
+    } else if [SHEAR, TOOL_SHEAR].contains(&icon) {
+        IconRole::Shear
+    } else if [EVENTS, LOSSY].contains(&icon) {
+        if icon == LOSSY {
+            IconRole::Warning
+        } else {
+            IconRole::Event
+        }
+    } else if [ANIMATIONS, DOPESHEET, GRAPH, KEY, ONION_SKIN].contains(&icon) {
+        IconRole::Animation
+    } else if [EXPORT, DOWNLOAD].contains(&icon) {
+        IconRole::Export
+    } else if icon == PLUGIN {
+        IconRole::Plugin
+    } else if [DELETE, CLEAR].contains(&icon) {
+        IconRole::Destructive
+    } else {
+        IconRole::Neutral
+    }
+}
+
 // ── Rig structure ───────────────────────────────────────────────────────────
 pub const BONE: &str = f::BONE;
 pub const SLOT: &str = f::CIRCLE_DASHED;

@@ -72,7 +72,10 @@ pub fn ui(
                     ("Plugins", crate::ui::icons::PLUGIN, Section::Plugins),
                 ] {
                     if ui
-                        .selectable_label(section == value, format!("{icon}  {label}"))
+                        .selectable_label(
+                            section == value,
+                            crate::ui::semantic_icon_label(ui, icon, label),
+                        )
                         .clicked()
                     {
                         section = value;
@@ -449,6 +452,11 @@ fn appearance(
                 }
             }
         });
+
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new("Motion").strong());
+    ui.checkbox(&mut config.reduced_motion, "Reduce interface motion")
+        .on_hover_text("Keep short fades, but remove movement and scaling transitions");
 
     ui.add_space(8.0);
     ui.label(egui::RichText::new("Colours").strong());

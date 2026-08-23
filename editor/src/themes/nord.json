@@ -22,5 +22,14 @@
   "channel_scale": "#ebcb8b",
   "channel_shear": "#bf616a",
   "event_marker": "#d08770",
+  "icon_rig": "#88c0d0",
+  "icon_attachment": "#b48ead",
+  "icon_constraint": "#d08770",
+  "icon_mesh": "#bf88b5",
+  "icon_animation": "#81a1c1",
+  "icon_export": "#a3be8c",
+  "icon_plugin": "#8fbcbb",
+  "icon_warning": "#ebcb8b",
+  "icon_destructive": "#bf616a",
   "card_border": "#4c566a"
 }
