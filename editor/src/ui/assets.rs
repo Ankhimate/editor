@@ -15,7 +15,7 @@ use ankhimate_document::commands::asset_cmds::{
 };
 use eframe::egui;
 
-const THUMB: f32 = 64.0;
+const THUMB: f32 = 44.0;
 
 /// Internal drag payload shared by the Assets panel, hierarchy, and canvas.
 #[derive(Clone, Copy, Debug)]
@@ -140,6 +140,9 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
     let mut reload: Option<AssetId> = None;
     let mut relink: Option<AssetId> = None;
 
+    let selection_id = ui.make_persistent_id("selected_asset");
+    let mut selected = ui.data(|d| d.get_temp::<AssetId>(selection_id));
+
     for id in ids {
         let Some(asset) = state.doc.assets.get(id) else {
             continue;
@@ -149,136 +152,179 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState) {
         let missing = asset.bytes.is_empty();
         let texture = thumbnail(ui.ctx(), state, id);
 
-        ui.horizontal(|ui| {
-            let draw_thumbnail = |ui: &mut egui::Ui| match &texture {
-                Some(handle) => {
-                    ui.add(
-                        egui::Image::new(handle)
-                            .fit_to_exact_size(egui::vec2(THUMB, THUMB))
-                            .maintain_aspect_ratio(true),
-                    );
-                }
-                None => {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(THUMB, THUMB), egui::Sense::hover());
-                    ui.painter().rect_filled(
-                        rect,
-                        egui::epaint::CornerRadius::same(3),
-                        ui.visuals().extreme_bg_color,
-                    );
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        if missing { "?" } else { "…" },
-                        egui::FontId::proportional(18.0),
-                        ui.visuals().weak_text_color(),
-                    );
-                }
-            };
-            if setup {
-                ui.dnd_drag_source(
-                    ui.make_persistent_id(("asset_drag", id)),
-                    AssetDrag(id),
-                    |ui| draw_thumbnail(ui),
-                )
-                .response
-                .on_hover_text("Drag onto a bone in the hierarchy or viewport");
+        let selected_row = selected == Some(id);
+        let mut row_clicked = false;
+        let row = egui::Frame::NONE
+            .fill(if selected_row {
+                ui.visuals().selection.bg_fill.gamma_multiply(0.16)
             } else {
-                draw_thumbnail(ui);
-            }
-
-            ui.vertical(|ui| {
-                let mut edited = name.clone();
-                let field = ui.add_enabled(
-                    setup,
-                    egui::TextEdit::singleline(&mut edited).desired_width(140.0),
-                );
-                if field.lost_focus() && edited != name && !edited.trim().is_empty() {
-                    rename = Some((id, edited.trim().to_string()));
-                }
-                ui.label(
-                    egui::RichText::new(if missing {
-                        format!("{dims} · pixels missing")
-                    } else {
-                        dims.clone()
-                    })
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
-                );
-                // Source status (T-306), only once the user has asked for a
-                // check — an unchecked asset says nothing rather than guessing.
-                if let Some(flag) = state.session.stale_assets.get(id).copied() {
-                    let (text, color) = match flag {
-                        true => (
-                            "source changed — reload to pick it up",
-                            egui::Color32::from_rgb(235, 170, 60),
+                egui::Color32::TRANSPARENT
+            })
+            .corner_radius(6)
+            .inner_margin(egui::Margin::symmetric(6, 4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let draw_thumbnail = |ui: &mut egui::Ui| match &texture {
+                        Some(handle) => ui.add(
+                            egui::Image::new(handle)
+                                .fit_to_exact_size(egui::vec2(THUMB, THUMB))
+                                .maintain_aspect_ratio(true),
                         ),
-                        false => ("source missing", egui::Color32::from_rgb(230, 90, 90)),
+                        None => {
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(THUMB, THUMB),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::epaint::CornerRadius::same(3),
+                                ui.visuals().extreme_bg_color,
+                            );
+                            ui.painter().text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                if missing { "?" } else { "…" },
+                                egui::FontId::proportional(18.0),
+                                ui.visuals().weak_text_color(),
+                            );
+                            response
+                        }
                     };
-                    ui.label(egui::RichText::new(text).small().color(color));
-                }
-
-                let action_width = ((ui.available_width() - 6.0) / 2.0).max(74.0);
-                ui.columns(2, |columns| {
-                    let can_attach = setup && state.session.active_bone().is_some();
-                    let btn = columns[0].add_enabled(
-                        can_attach,
-                        egui::Button::new(format!("{}  Attach", crate::ui::icons::ATTACHMENT))
-                            .min_size(egui::vec2(action_width, crate::ui::CONTROL_HEIGHT)),
-                    );
-                    let btn = if !setup {
-                        btn.on_hover_text("Switch to Setup mode to attach (Tab)")
-                    } else if !can_attach {
-                        btn.on_hover_text("Select a bone to attach this to")
+                    if setup {
+                        let thumbnail = ui
+                            .dnd_drag_source(
+                                ui.make_persistent_id(("asset_drag", id)),
+                                AssetDrag(id),
+                                |ui| draw_thumbnail(ui),
+                            )
+                            .response
+                            .on_hover_text("Drag onto a bone in the hierarchy or viewport");
+                        row_clicked |= thumbnail.clicked();
                     } else {
-                        btn.on_hover_text("Add a slot on the selected bone showing this image")
-                    };
-                    if btn.clicked() {
-                        attach = Some(id);
+                        row_clicked |= draw_thumbnail(ui).clicked();
                     }
-                    if columns[1]
-                        .add_enabled(
-                            setup,
-                            egui::Button::new(format!("{}  Delete", crate::ui::icons::DELETE))
-                                .min_size(egui::vec2(action_width, crate::ui::CONTROL_HEIGHT)),
-                        )
-                        .clicked()
-                    {
-                        delete = Some(id);
-                    }
+
+                    ui.vertical(|ui| {
+                        ui.set_min_width(100.0);
+                        let renaming =
+                            ui.data(|d| d.get_temp::<bool>(selection_id.with(id)).unwrap_or(false));
+                        if renaming {
+                            let buffer_id = selection_id.with((id, "name"));
+                            let mut edited = ui
+                                .data(|d| d.get_temp::<String>(buffer_id))
+                                .unwrap_or_else(|| name.clone());
+                            let field = ui.add(egui::TextEdit::singleline(&mut edited));
+                            ui.data_mut(|d| d.insert_temp(buffer_id, edited.clone()));
+                            let commit =
+                                field.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if commit {
+                                if edited.trim() != name && !edited.trim().is_empty() {
+                                    rename = Some((id, edited.trim().to_string()));
+                                }
+                                ui.data_mut(|d| {
+                                    d.remove::<bool>(selection_id.with(id));
+                                    d.remove::<String>(buffer_id);
+                                });
+                            }
+                        } else {
+                            let label = ui.add(
+                                egui::Label::new(egui::RichText::new(&name).strong())
+                                    .sense(egui::Sense::click()),
+                            );
+                            row_clicked |= label.clicked();
+                            if setup && label.double_clicked() {
+                                ui.data_mut(|d| d.insert_temp(selection_id.with(id), true));
+                            }
+                        }
+                        ui.label(
+                            egui::RichText::new(if missing {
+                                format!("{dims} · pixels missing")
+                            } else {
+                                dims.clone()
+                            })
+                            .small()
+                            .color(ui.visuals().weak_text_color()),
+                        );
+                        // Source status (T-306), only once the user has asked for a
+                        // check — an unchecked asset says nothing rather than guessing.
+                        if let Some(flag) = state.session.stale_assets.get(id).copied() {
+                            let (text, color) = match flag {
+                                true => (
+                                    "source changed — reload to pick it up",
+                                    egui::Color32::from_rgb(235, 170, 60),
+                                ),
+                                false => ("source missing", egui::Color32::from_rgb(230, 90, 90)),
+                            };
+                            ui.label(egui::RichText::new(text).small().color(color));
+                        }
+
+                        if selected_row {
+                            ui.horizontal(|ui| {
+                                let can_attach = setup && state.session.active_bone().is_some();
+                                let btn =
+                                    action_button(ui, crate::ui::icons::ATTACHMENT, can_attach);
+                                let btn = if !setup {
+                                    btn.on_hover_text("Switch to Setup mode to attach (Tab)")
+                                } else if !can_attach {
+                                    btn.on_hover_text("Select a bone to attach this to")
+                                } else {
+                                    btn.on_hover_text(
+                                        "Add a slot on the selected bone showing this image",
+                                    )
+                                };
+                                if btn.clicked() {
+                                    attach = Some(id);
+                                }
+                                if action_button(ui, crate::ui::icons::DELETE, setup)
+                                    .on_hover_text("Delete image")
+                                    .clicked()
+                                {
+                                    delete = Some(id);
+                                }
+                                let has_source = state
+                                    .doc
+                                    .assets
+                                    .get(id)
+                                    .is_some_and(|a| a.source_path.is_some());
+                                if action_button(ui, crate::ui::icons::REFRESH, setup && has_source)
+                                    .on_hover_text("Re-read the file this was imported from")
+                                    .clicked()
+                                {
+                                    reload = Some(id);
+                                }
+                                if action_button(ui, crate::ui::icons::RELINK, setup)
+                                    .on_hover_text(
+                                        "Point this asset at a different file, keeping its name",
+                                    )
+                                    .clicked()
+                                {
+                                    relink = Some(id);
+                                }
+                            });
+                        }
+                    });
+                })
+            })
+            .response;
+        if row_clicked {
+            selected = Some(id);
+            ui.data_mut(|d| d.insert_temp(selection_id, id));
+        }
+        row.context_menu(|ui| {
+            if setup && ui.button("Rename").clicked() {
+                selected = Some(id);
+                ui.data_mut(|d| {
+                    d.insert_temp(selection_id, id);
+                    d.insert_temp(selection_id.with(id), true);
                 });
-                ui.columns(2, |columns| {
-                    let has_source = state
-                        .doc
-                        .assets
-                        .get(id)
-                        .is_some_and(|a| a.source_path.is_some());
-                    if columns[0]
-                        .add_enabled(
-                            setup && has_source,
-                            egui::Button::new(format!("{}  Reload", crate::ui::icons::REFRESH))
-                                .min_size(egui::vec2(action_width, crate::ui::CONTROL_HEIGHT)),
-                        )
-                        .on_hover_text("Re-read the file this was imported from")
-                        .clicked()
-                    {
-                        reload = Some(id);
-                    }
-                    if columns[1]
-                        .add_enabled(
-                            setup,
-                            egui::Button::new(format!("{}  Relink…", crate::ui::icons::RELINK))
-                                .min_size(egui::vec2(action_width, crate::ui::CONTROL_HEIGHT)),
-                        )
-                        .on_hover_text("Point this asset at a different file, keeping its name")
-                        .clicked()
-                    {
-                        relink = Some(id);
-                    }
-                });
-            });
+                ui.close();
+            }
+            if setup && ui.button("Delete").clicked() {
+                delete = Some(id);
+                ui.close();
+            }
         });
-        ui.add_space(4.0);
+        ui.add_space(2.0);
     }
 
     if let Some((id, new_name)) = rename {

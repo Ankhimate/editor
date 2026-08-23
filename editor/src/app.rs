@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::theme;
 use crate::ui::{AppBehavior, Tab};
 use eframe::egui;
-use egui_tiles::{Tiles, Tree};
+use egui_tiles::{Linear, LinearDir, Tiles, Tree};
 
 pub struct AnkhimateApp {
     tree: Tree<Tab>,
@@ -359,28 +359,33 @@ impl AnkhimateApp {
         let slot_editor = tiles.insert_pane(Tab::SlotEditor);
         let uv_editor = tiles.insert_pane(Tab::UvEditor);
         let canvas_tab = tiles.insert_tab_tile(vec![canvas, slot_editor, uv_editor]);
-        // Properties gets its own tile rather than sharing tabs with Assets:
-        // the transform controls are used constantly, and hiding them behind a
-        // tab every time the image library is opened is the wrong trade.
         let weights = tiles.insert_pane(Tab::Weights);
         let inspector_tab = tiles.insert_tab_tile(vec![inspector, weights]);
-        // Assets and draw order are both "what is in the rig" browsers, so they
-        // can share.
-        // Export joins them: it is the same kind of question — "what is in the
-        // rig, and what leaves it" — and it is opened deliberately rather than
-        // watched, so a tab is the right cost.
+        // Browsers share the upper-right card. Properties remains visible below
+        // them, while the viewport owns most of the horizontal workbench.
         let library_tab =
-            tiles.insert_tab_tile(vec![assets, draw_order, skins, constraints, export]);
+            tiles.insert_tab_tile(vec![tree, assets, draw_order, skins, constraints, export]);
         // Animations and events share a tile with the timeline: all three answer
         // "what is in this clip", and the timeline is where you already are when
         // that question comes up.
         let timeline_group = vec![timeline, graph, animations, events];
-        let tree_tab = tiles.insert_tab_tile(vec![tree]);
         let timeline_tab = tiles.insert_tab_tile(timeline_group);
 
-        let right = tiles.insert_vertical_tile(vec![tree_tab, inspector_tab, library_tab]);
-        let center_row = tiles.insert_horizontal_tile(vec![canvas_tab, right]);
-        let root = tiles.insert_vertical_tile(vec![center_row, timeline_tab]);
+        let right = tiles.insert_container(Linear::new_binary(
+            LinearDir::Vertical,
+            [library_tab, inspector_tab],
+            0.55,
+        ));
+        let center_row = tiles.insert_container(Linear::new_binary(
+            LinearDir::Horizontal,
+            [canvas_tab, right],
+            0.65,
+        ));
+        let root = tiles.insert_container(Linear::new_binary(
+            LinearDir::Vertical,
+            [center_row, timeline_tab],
+            0.68,
+        ));
 
         Tree::new("ankhimate_tree", root, tiles)
     }

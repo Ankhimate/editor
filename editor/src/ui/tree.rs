@@ -643,6 +643,19 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
             }
         })
         .collect();
+    let has_slots = state
+        .doc
+        .skeleton
+        .slots
+        .iter()
+        .any(|(_, slot)| slot.bone == bone_id);
+    let has_constraints = state
+        .doc
+        .skeleton
+        .constraints
+        .iter()
+        .any(|(_, constraint)| constraint.affected_bones().contains(&bone_id));
+    let has_nested_rows = !children.is_empty() || has_slots || has_constraints;
 
     let id = ui.make_persistent_id(bone_id);
     // A filter forces every surviving branch open: a match buried in a collapsed
@@ -869,7 +882,7 @@ fn render_bone_node(ui: &mut egui::Ui, state: &mut AppState, bone_id: BoneId, de
 
     let mut cx = depth_guides(ui, rect, depth);
 
-    if !children.is_empty() {
+    if has_nested_rows {
         let toggle_rect =
             egui::Rect::from_min_size(egui::pos2(cx, rect.min.y), egui::vec2(14.0, row_height));
         let toggle_resp = ui.interact(toggle_rect, id.with("toggle"), egui::Sense::click());
