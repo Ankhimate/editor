@@ -58,10 +58,59 @@ fn check() -> Result<(), String> {
             "format specification does not name schema version {version}"
         ));
     }
+    check_schema_coverage(&spec)?;
     check_json(&root().join("docs/examples"))?;
     check_links(&root().join("docs"))?;
     check_status_metadata()?;
     println!("documentation checks passed");
+    Ok(())
+}
+
+/// Require one explicit marker for every serialized struct field and enum
+/// variant in the schema source. The prose owns the explanation; parsing the
+/// source here prevents a newly added field from silently escaping that prose.
+fn check_schema_coverage(spec: &str) -> Result<(), String> {
+    use syn::{Fields, Item};
+
+    let source =
+        fs::read_to_string(root().join("formats/src/schema.rs")).map_err(|e| e.to_string())?;
+    let file = syn::parse_file(&source).map_err(|e| format!("cannot parse schema.rs: {e}"))?;
+    let mut required = Vec::new();
+    for item in file.items {
+        match item {
+            Item::Struct(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                if let Fields::Named(fields) = item.fields {
+                    for field in fields.named {
+                        if matches!(field.vis, syn::Visibility::Public(_)) {
+                            required.push(format!("{}.{}", item.ident, field.ident.unwrap()));
+                        }
+                    }
+                }
+            }
+            Item::Enum(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                for variant in item.variants {
+                    let base = format!("{}.{}", item.ident, variant.ident);
+                    required.push(base.clone());
+                    if let Fields::Named(fields) = variant.fields {
+                        for field in fields.named {
+                            required.push(format!("{base}.{}", field.ident.unwrap()));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let missing: Vec<_> = required
+        .into_iter()
+        .filter(|name| !spec.contains(&format!("<!-- schema:{name} -->")))
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "format specification is missing schema coverage markers:\n  {}",
+            missing.join("\n  ")
+        ));
+    }
     Ok(())
 }
 

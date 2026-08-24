@@ -15,7 +15,7 @@ override feature status in `TASKS.md`.
 - [x] Site foundation: Bun/Starlight config, navigation, theme, status vocabulary, Pages workflow.
 - [x] Animator path: task-oriented rigging, animation, import/export, recipes, troubleshooting.
 - [x] Rust details removed from the product site; the separate `/api/` rustdoc project owns them.
-- [x] Format specification: v3 structure, migrations, export/runtime contracts, JSON example.
+- [x] Format specification: field-complete v3 structure, migrations, export/runtime contracts, JSON example.
 - [x] Plugin and MCP reference: generated registries plus security and workflow guides.
 - [x] Comparison and contributor path: dated evidence policy, architecture, extension guides.
 - [ ] Screenshot set: requires a deliberate running-editor capture pass at a fixed size.
@@ -26,6 +26,7 @@ override feature status in `TASKS.md`.
 
 - [x] `xtask docs-sync` generates registry-owned references.
 - [x] `xtask docs-check` checks generated pages, schema version, JSON, local links, and metadata.
+- [x] `xtask docs-check` parses `schema.rs` and requires a documentation marker for every public schema field and enum variant.
 - [x] `bun run check` and the combined Starlight/rustdoc `bun run build` verified locally.
 - [x] Workspace tests, format, and clippy exit successfully; clippy retains pre-existing warnings outside documentation tooling.
 

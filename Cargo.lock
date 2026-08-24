@@ -5461,6 +5461,7 @@ dependencies = [
  "ankhimate-formats",
  "ankhimate-mcp",
  "serde_json",
+ "syn 2.0.119",
 ]
 
 [[package]]
