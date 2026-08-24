@@ -26,10 +26,9 @@
 //! # The document round trip
 //!
 //! `Host::build_panel` wants an `Edit`, which owns its `Document`; `AppState`
-//! owns the live one and `Document` is deliberately not `Clone` — a rig with its
-//! images in it is not something to copy per frame. So the document is **moved
-//! into** an `Edit` for the call and moved back after, which is the same thing
-//! the plugin host does internally and for the same reason.
+//! owns the live one. Builds move it into an `Edit` and immediately return it.
+//! Actions take one explicit snapshot for a background worker so the renderer
+//! keeps the live document; this is per gesture, never per frame.
 
 use crate::app_state::AppState;
 use ankhimate_plugins::Host;
@@ -51,6 +50,19 @@ pub struct PanelCache {
     /// Kept in `Session` with the rest of the cache: a half-typed field is not
     /// part of the rig and has no business in a save file.
     state: std::collections::HashMap<String, serde_json::Map<String, serde_json::Value>>,
+    job: Option<PanelJob>,
+}
+
+struct PanelJob {
+    panel: String,
+    action: String,
+    revision: u64,
+    receiver: std::sync::mpsc::Receiver<PanelJobResult>,
+}
+
+struct PanelJobResult {
+    edit: ankhimate_document::Edit,
+    effect: Result<ankhimate_plugins::panel::PanelEffect, String>,
 }
 
 impl PanelCache {
@@ -69,6 +81,8 @@ impl PanelCache {
 
 /// Draw the panel `id`, and act on whatever the user touched.
 pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plugins, id: &str) {
+    poll_job(state);
+
     let Some(source) = plugins.source_for_panel(id).map(str::to_string) else {
         // A panel whose plugin is no longer loaded. Saying so beats an empty
         // card, which reads as a panel that is broken rather than absent.
@@ -124,6 +138,16 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plu
         }
     }
 
+    if state.session.panels.job.is_some() {
+        let phase = ((ui.input(|input| input.time) * 0.7) % 1.0) as f32;
+        ui.add_space(8.0);
+        ui.label("Importing item…");
+        ui.add(egui::ProgressBar::new(phase));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+        return;
+    }
+
     if let Some(mut action) = touched {
         let transient = widgets
             .iter()
@@ -141,19 +165,78 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plu
         }
         action.state = state_for_panel.clone();
 
-        let host = Host::new();
-        let mut edit = borrow_document(state);
-        let outcome = host.panel_action(&source, id, &action, &mut edit);
-        return_document(state, edit, &format!("{id}: {}", action.action));
-
-        match outcome {
-            Ok(effect) => {
-                apply_effect(state, effect);
-            }
-            Err(e) => state.session.set_status(format!("`{id}`: {e}")),
-        }
-        state.session.panels.invalidate(id);
+        start_job(state, source, id.to_string(), action);
     }
+}
+
+fn start_job(state: &mut AppState, source: String, panel: String, action: PanelAction) {
+    let revision = state.revision;
+    let action_name = action.action.clone();
+    let mode = match state.session.work_mode {
+        crate::session::WorkMode::Setup => ankhimate_document::WorkMode::Setup,
+        crate::session::WorkMode::Animate => ankhimate_document::WorkMode::Animate,
+    };
+    // The live document stays available to the renderer while the isolated
+    // snapshot is edited. The result is accepted only if that source revision
+    // is still current, so concurrent authoring can never be overwritten.
+    let mut edit = ankhimate_document::Edit::new(state.doc.clone());
+    edit.mode = mode;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker_panel = panel.clone();
+    std::thread::spawn(move || {
+        let effect = Host::new()
+            .panel_action(&source, &worker_panel, &action, &mut edit)
+            .map_err(|error| error.to_string());
+        let _ = sender.send(PanelJobResult { edit, effect });
+    });
+    state.session.panels.job = Some(PanelJob {
+        panel,
+        action: action_name,
+        revision,
+        receiver,
+    });
+}
+
+fn poll_job(state: &mut AppState) {
+    let received = match state
+        .session
+        .panels
+        .job
+        .as_ref()
+        .map(|job| job.receiver.try_recv())
+    {
+        Some(Ok(result)) => Some(Ok(result)),
+        Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => Some(Err(())),
+        Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => None,
+    };
+    let Some(received) = received else { return };
+    let job = state.session.panels.job.take().expect("job was polled");
+    let Ok(result) = received else {
+        state
+            .session
+            .set_status("Plugin worker stopped unexpectedly");
+        return;
+    };
+    if state.revision != job.revision {
+        state.session.set_status(format!(
+            "`{}` import was not applied because the rig changed while it loaded",
+            job.panel
+        ));
+        state.session.panels.invalidate(&job.panel);
+        return;
+    }
+    return_document(
+        state,
+        result.edit,
+        &format!("{}: {}", job.panel, job.action),
+    );
+    match result.effect {
+        Ok(effect) => apply_effect(state, effect),
+        Err(error) => state
+            .session
+            .set_status(format!("`{}`: {error}", job.panel)),
+    }
+    state.session.panels.invalidate(&job.panel);
 }
 
 fn apply_effect(state: &mut AppState, effect: ankhimate_plugins::panel::PanelEffect) {
@@ -712,6 +795,53 @@ mod tests {
             },
         );
         assert!(!state.session.hidden_slots.contains(&slot));
+    }
+
+    #[test]
+    fn a_panel_action_leaves_the_live_document_available_until_completion() {
+        let source = r#"
+          ankhimate.registerPanel({
+            id: "test.background", title: "Background",
+            build: () => [],
+            on: () => ops.invoke("bone.create", { name: "arrived" })
+          });
+        "#;
+        let mut state = AppState::default();
+        start_job(
+            &mut state,
+            source.into(),
+            "test.background".into(),
+            PanelAction {
+                action: "import".into(),
+                ..Default::default()
+            },
+        );
+        assert!(state.session.panels.job.is_some());
+        assert!(
+            state.doc.skeleton.bones.is_empty(),
+            "live rig was not moved"
+        );
+
+        for _ in 0..200 {
+            poll_job(&mut state);
+            if state.session.panels.job.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(state.session.panels.job.is_none());
+        assert!(
+            state
+                .doc
+                .skeleton
+                .bones
+                .values()
+                .any(|bone| bone.name == "arrived")
+        );
+        assert!(
+            state.history.can_undo(),
+            "the async action remains undoable"
+        );
     }
 
     #[test]

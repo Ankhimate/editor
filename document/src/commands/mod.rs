@@ -83,7 +83,7 @@ impl IdRemap {
 }
 
 /// A reversible edit to the document.
-pub trait EditCommand {
+pub trait EditCommand: Send {
     /// Apply the edit. Called once when dispatched, and again on redo.
     fn apply(&mut self, doc: &mut Document);
     /// Restore the document to its pre-[`apply`](Self::apply) state.

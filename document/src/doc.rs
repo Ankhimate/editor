@@ -32,7 +32,7 @@ impl Default for DocumentMeta {
 }
 
 /// The undoable state of an open project.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Document {
     pub skeleton: Skeleton,
     pub animations: SlotMap<AnimationId, Animation>,
