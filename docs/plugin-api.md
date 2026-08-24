@@ -478,6 +478,13 @@ Package resources are separate: a directory named `<plugin>/plugin.js` may
 bundle templates or data beneath that directory. `resource`/`resourceBytes`
 read only that load-time map. Flat `.js` plugins have no package resources.
 
+A panel may ask the host to show a user-controlled file picker with
+`{ file: "Import", on: "import", extensions: ["pack"], multiple: true }`.
+Its action value is an array of `{ name, bytes_base64 }` objects. These bytes
+exist only for that action and are not retained in panel state. This is still
+not filesystem access: the script can read only the files the user explicitly
+selected in the native dialog.
+
 ### Marketplace installation
 
 The editor fetches `marketplace.json` from the

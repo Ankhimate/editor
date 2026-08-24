@@ -36,15 +36,13 @@ fn community_packages_restore_the_external_format_registries() {
         importer_ids.contains(&"import.dragonbones"),
         "{importer_ids:?}"
     );
-    assert!(importer_ids.contains(&"import.twitem"), "{importer_ids:?}");
     assert!(exporter_ids.contains(&"export.spine"), "{exporter_ids:?}");
     let twitem = plugins
         .iter()
-        .flat_map(|plugin| &plugin.importers)
-        .find(|importer| importer.id == "import.twitem")
-        .expect("Tweegee Item importer");
-    assert_eq!(ankhimate_formats::Importer::extensions(twitem), ["twitem"]);
-    assert!(twitem.binary);
+        .flat_map(|plugin| &plugin.panels)
+        .find(|panel| panel.id == "tweegee.items")
+        .expect("Tweegee Items panel");
+    assert_eq!(twitem.title, "Tweegee Items");
 }
 
 #[test]
@@ -63,32 +61,50 @@ fn tweegee_item_plugin_reads_a_stored_package() {
     }
 
     let manifest = br#"{"version":1,"itemId":"hat","assetScale":2,"targets":[{"name":"front","bone":"avatar_head.item_front","transform":{"a":-1,"d":1,"tx":0,"ty":0},"layers":[{"kind":"merged","file":"front.png","width":179,"height":11,"pivotX":0.25,"pivotY":0.75}]}]}"#;
+    let mut png = Vec::new();
+    image::DynamicImage::new_rgba8(179, 11)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("png fixture");
     let mut package = Vec::new();
     entry("item.json", manifest, &mut package);
-    entry("images/front.png", &[1, 2, 3], &mut package);
+    entry("images/front.png", &png, &mut package);
     let dir = tempfile::tempdir().expect("temp");
     let path = dir.path().join("hat.twitem");
     std::fs::write(&path, package).expect("fixture");
 
-    let importer = Host::new()
-        .importers(TWEEGEE_ITEM)
-        .expect("plugin loads")
-        .remove(0);
-    let loaded = Importer::read(&importer, &path).expect("item imports");
+    let mut edit = ankhimate_document::Edit::default();
+    Host::new()
+        .run(
+            r#"
+            ops.invoke("bone.create", { name: "avatar_head" });
+            ops.invoke("bone.create", { name: "avatar_head.item_front", parent: "avatar_head" });
+            "#,
+            &mut edit,
+        )
+        .expect("avatar fixture");
+    let host = Host::new();
+    let action = ankhimate_plugins::panel::PanelAction {
+        action: "import".into(),
+        value: serde_json::json!([{
+            "name": "hat.twitem",
+            "bytes_base64": ankhimate_plugins::importer::encode_base64(
+                &std::fs::read(&path).expect("fixture bytes")
+            ),
+        }]),
+        state: Default::default(),
+    };
+    host.panel_action(TWEEGEE_ITEM, "tweegee.items", &action, &mut edit)
+        .expect("item imports into avatar");
 
-    assert_eq!(
-        loaded.skeleton.bones.len(),
-        2,
-        "the dotted target becomes a chain"
-    );
-    assert_eq!(loaded.assets.images.len(), 1);
-    let image = loaded.assets.images.values().next().expect("image asset");
+    assert_eq!(edit.doc.assets.images.len(), 1);
+    let image = edit.doc.assets.images.values().next().expect("image asset");
     assert_eq!(
         (image.width, image.height),
         (179, 11),
         "pixels stay integral"
     );
-    let attachment = loaded
+    let attachment = edit
+        .doc
         .skeleton
         .skins
         .values()
@@ -104,6 +120,29 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         region.local_scale.y, -1.0,
         "reflection survives matrix decomposition"
     );
+    let slot = edit
+        .doc
+        .skeleton
+        .slots
+        .values()
+        .find(|slot| slot.name.starts_with("twitem."))
+        .expect("equipment slot");
+    assert_eq!(slot.attachment.as_deref(), Some("twitem.hat"));
+
+    let toggle = ankhimate_plugins::panel::PanelAction {
+        action: "toggle:items:hat".into(),
+        ..Default::default()
+    };
+    host.panel_action(TWEEGEE_ITEM, "tweegee.items", &toggle, &mut edit)
+        .expect("item toggles off");
+    let slot = edit
+        .doc
+        .skeleton
+        .slots
+        .values()
+        .find(|slot| slot.name.starts_with("twitem."))
+        .expect("equipment slot");
+    assert_eq!(slot.attachment, None);
 }
 
 fn spine_import(json: &str) -> ankhimate_formats::Loaded {

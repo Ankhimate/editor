@@ -116,6 +116,9 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plu
     }
 
     if let Some(mut action) = touched {
+        let transient = widgets
+            .iter()
+            .any(|widget| matches!(widget, Widget::File { on, .. } if on == &action.action));
         // Remembered before the handler runs, so a plugin reading `state.name`
         // sees what the user just typed rather than the value from last time.
         let state_for_panel = state
@@ -124,7 +127,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plu
             .state
             .entry(id.to_string())
             .or_default();
-        if !action.value.is_null() {
+        if !transient && !action.value.is_null() {
             state_for_panel.insert(action.action.clone(), action.value.clone());
         }
         action.state = state_for_panel.clone();
@@ -248,6 +251,50 @@ fn draw(
             response.clicked().then(|| PanelAction {
                 action: on.clone(),
                 value: serde_json::Value::Null,
+                ..Default::default()
+            })
+        }
+        Widget::File {
+            file,
+            on,
+            extensions,
+            multiple,
+            tooltip,
+        } => {
+            let response = ui.button(file);
+            let response = match tooltip {
+                Some(text) => response.on_hover_text(text),
+                None => response,
+            };
+            if !response.clicked() {
+                return None;
+            }
+            let mut dialog = rfd::FileDialog::new().set_title(file);
+            if !extensions.is_empty() {
+                let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
+                dialog = dialog.add_filter(file, &extensions);
+            }
+            let paths = if *multiple {
+                dialog.pick_files().unwrap_or_default()
+            } else {
+                dialog.pick_file().into_iter().collect()
+            };
+            if paths.is_empty() {
+                return None;
+            }
+            let files: Vec<serde_json::Value> = paths
+                .into_iter()
+                .filter_map(|path| {
+                    let bytes = std::fs::read(&path).ok()?;
+                    Some(serde_json::json!({
+                        "name": path.file_name()?.to_str()?,
+                        "bytes_base64": ankhimate_plugins::importer::encode_base64(&bytes),
+                    }))
+                })
+                .collect();
+            Some(PanelAction {
+                action: on.clone(),
+                value: serde_json::Value::Array(files),
                 ..Default::default()
             })
         }

@@ -73,6 +73,18 @@ pub enum Widget {
         #[serde(default)]
         tooltip: Option<String>,
     },
+    /// A host-mediated file picker. The action value is an array of
+    /// `{ name, bytes_base64 }` objects and is never retained as panel state.
+    File {
+        file: String,
+        on: String,
+        #[serde(default)]
+        extensions: Vec<String>,
+        #[serde(default)]
+        multiple: bool,
+        #[serde(default)]
+        tooltip: Option<String>,
+    },
     /// A tick box.
     Checkbox {
         checkbox: String,
@@ -207,6 +219,7 @@ impl Widget {
         match self {
             Widget::Heading { .. } | Widget::Text { .. } | Widget::Separator { .. } => None,
             Widget::Button { on, .. }
+            | Widget::File { on, .. }
             | Widget::Checkbox { on, .. }
             | Widget::Number { on, .. }
             | Widget::Text_ { on, .. }
@@ -236,6 +249,10 @@ mod tests {
             parse(r#"{"button":"Go","on":"go"}"#),
             Widget::Button { .. }
         ));
+        assert!(matches!(
+            parse(r#"{"file":"Import","on":"import","extensions":["pack"]}"#),
+            Widget::File { .. }
+        ));
         assert!(matches!(parse(r#"{"text":"hello"}"#), Widget::Text { .. }));
         assert!(matches!(
             parse(r#"{"heading":"Options"}"#),
@@ -250,6 +267,7 @@ mod tests {
         // being broken.
         let interactive = [
             parse(r#"{"button":"Go","on":"go"}"#),
+            parse(r#"{"file":"Import","on":"import","extensions":["pack"]}"#),
             parse(r#"{"checkbox":"On","on":"on"}"#),
             parse(r#"{"number":"Count","on":"count"}"#),
             parse(r#"{"field":"Name","on":"name"}"#),
