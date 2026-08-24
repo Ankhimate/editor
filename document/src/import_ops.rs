@@ -142,7 +142,16 @@ impl DocOperator for CreateRegion {
             local_scale: glam::vec2(args.f32_or("scale_x", 1.0)?, args.f32_or("scale_y", 1.0)?),
             width: args.f32_or("width", image_w)?,
             height: args.f32_or("height", image_h)?,
-            uv_rect: Rect::default(),
+            // A newly imported image uses the whole texture. `Rect::default()`
+            // is all zeroes, which collapses every UV onto the transparent
+            // top-left pixel: the attachment remains selectable by its geometry
+            // but paints no image.
+            uv_rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
             pivot: glam::vec2(args.f32_or("pivot_x", 0.5)?, args.f32_or("pivot_y", 0.5)?),
             sequence: None,
         });
@@ -546,6 +555,49 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_created_region_samples_the_whole_image() {
+        use ankhimate_core::{
+            assets::ImageAsset, math::Transform, skeleton::Bone, slot::Slot, transforms::Inherit,
+        };
+
+        let mut edit = Edit::new(crate::Document::new());
+        let bone = edit.doc.skeleton.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 1.0,
+            local_transform: Transform::default(),
+            inherit: Inherit::default(),
+            color: Bone::default_color(),
+        });
+        let slot = edit.doc.skeleton.add_slot(Slot::new("item".into(), bone));
+        edit.doc
+            .assets
+            .add(ImageAsset::new("pixels", vec![1], 8, 4));
+
+        CreateRegion
+            .invoke(
+                &mut edit,
+                &Args::from_json(json!({
+                    "slot": "item",
+                    "name": "region",
+                    "texture": "pixels"
+                })),
+            )
+            .unwrap();
+
+        let attachment = edit
+            .doc
+            .skeleton
+            .resolve_slot(edit.doc.skeleton.default_skin, slot)
+            .unwrap();
+        let Attachment::Region(region) = attachment else {
+            panic!("created attachment is a region");
+        };
+        assert_eq!([region.uv_rect.x, region.uv_rect.y], [0.0, 0.0]);
+        assert_eq!([region.uv_rect.w, region.uv_rect.h], [1.0, 1.0]);
+    }
 
     #[test]
     fn base64_round_trips_a_png_header() {
