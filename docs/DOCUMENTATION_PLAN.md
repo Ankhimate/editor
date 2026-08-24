@@ -17,6 +17,7 @@ override feature status in `TASKS.md`.
 - [x] Rigging fundamentals deep pass: modes, hierarchy, selection, bones, slots, rigid attachments, assets, and draw order verified against the editor UI.
 - [x] Mesh and deformation deep pass: topology, tracing, UVs, binding, every weight control, deform keys, and current linked/per-influence limitations verified against implementation.
 - [x] Animation deep pass: clips, transport, explicit and pending keying, dopesheet, graph curves, slot tracks, events, markers, offsets, retiming, onion skin, and current editing limitations verified against implementation.
+- [x] Constraints deep pass: solve order, IK, transform, path, physics, setup and simulation controls, recipes, failure cases, and current animation-authoring limitations verified against implementation.
 - [x] Rust details removed from the product site; the separate `/api/` rustdoc project owns them.
 - [x] Format specification: field-complete v3 structure, migrations, export/runtime contracts, JSON example.
 - [x] Plugin and MCP reference: generated registries plus security and workflow guides.

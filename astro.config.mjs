@@ -18,7 +18,7 @@ export default defineConfig({
           label: 'Animator manual',
           items: [
             'animator', 'animator/workspace', 'animator/rigging',
-            'animator/deformation', 'animator/animation', 'animator/import-export',
+            'animator/deformation', 'animator/constraints', 'animator/animation', 'animator/import-export',
             'animator/recipes', 'animator/troubleshooting',
             { label: 'Rigging walkthrough', slug: 'rigging-walkthrough' },
             { label: 'PSD import', slug: 'psd-import' },
