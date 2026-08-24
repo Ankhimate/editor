@@ -5,6 +5,7 @@ use ankhimate_plugins::Host;
 
 const SPINE: &str = include_str!("../../community-plugins/spine/plugin.js");
 const DRAGONBONES: &str = include_str!("../../community-plugins/dragonbones/plugin.js");
+const TWEEGEE_ITEM: &str = include_str!("../../community-plugins/tweegee-item/plugin.js");
 
 fn spine_host() -> Host {
     Host::new().with_resources(std::collections::BTreeMap::from([(
@@ -17,7 +18,7 @@ fn spine_host() -> Host {
 fn community_packages_restore_the_external_format_registries() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../community-plugins");
     let plugins = ankhimate_plugins::discovery::load(&root);
-    assert_eq!(plugins.len(), 2, "{root:?}");
+    assert_eq!(plugins.len(), 3, "{root:?}");
     assert!(plugins.iter().all(|plugin| plugin.is_loaded()));
 
     let importer_ids: Vec<&str> = plugins
@@ -35,12 +36,66 @@ fn community_packages_restore_the_external_format_registries() {
         importer_ids.contains(&"import.dragonbones"),
         "{importer_ids:?}"
     );
+    assert!(importer_ids.contains(&"import.twitem"), "{importer_ids:?}");
     assert!(exporter_ids.contains(&"export.spine"), "{exporter_ids:?}");
-    assert!(
-        plugins
-            .iter()
-            .flat_map(|plugin| &plugin.importers)
-            .all(|importer| ankhimate_formats::Importer::extensions(importer) == ["json"])
+    let twitem = plugins
+        .iter()
+        .flat_map(|plugin| &plugin.importers)
+        .find(|importer| importer.id == "import.twitem")
+        .expect("Tweegee Item importer");
+    assert_eq!(ankhimate_formats::Importer::extensions(twitem), ["twitem"]);
+    assert!(twitem.binary);
+}
+
+#[test]
+fn tweegee_item_plugin_reads_a_stored_package() {
+    fn entry(name: &str, contents: &[u8], out: &mut Vec<u8>) {
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&[0; 4]); // versions and flags
+        out.extend_from_slice(&0u16.to_le_bytes()); // stored
+        out.extend_from_slice(&[0; 8]); // time, date, crc
+        out.extend_from_slice(&(contents.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(contents.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(contents);
+    }
+
+    let manifest = br#"{"version":1,"itemId":"hat","assetScale":2,"targets":[{"name":"front","bone":"avatar_head.item_front","transform":{"a":-1,"d":1,"tx":0,"ty":0},"layers":[{"kind":"merged","file":"front.png","width":20,"height":10,"pivotX":0.25,"pivotY":0.75}]}]}"#;
+    let mut package = Vec::new();
+    entry("item.json", manifest, &mut package);
+    entry("images/front.png", &[1, 2, 3], &mut package);
+    let dir = tempfile::tempdir().expect("temp");
+    let path = dir.path().join("hat.twitem");
+    std::fs::write(&path, package).expect("fixture");
+
+    let importer = Host::new()
+        .importers(TWEEGEE_ITEM)
+        .expect("plugin loads")
+        .remove(0);
+    let loaded = Importer::read(&importer, &path).expect("item imports");
+
+    assert_eq!(
+        loaded.skeleton.bones.len(),
+        2,
+        "the dotted target becomes a chain"
+    );
+    assert_eq!(loaded.assets.images.len(), 1);
+    let attachment = loaded
+        .skeleton
+        .skins
+        .values()
+        .flat_map(|skin| skin.entries.values())
+        .next()
+        .expect("attachment");
+    let ankhimate_core::attachment::Attachment::Region(region) = attachment else {
+        panic!("region attachment expected");
+    };
+    assert_eq!(region.local_scale.x, 1.0);
+    assert_eq!(
+        region.local_scale.y, -1.0,
+        "reflection survives matrix decomposition"
     );
 }
 
