@@ -91,13 +91,22 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plu
         return;
     }
 
-    let widgets = state
+    let mut widgets = state
         .session
         .panels
         .built
         .get(id)
         .map(|(_, widgets)| widgets.clone())
         .unwrap_or_default();
+    if let Some(values) = state.session.panels.state.get(id) {
+        for widget in &mut widgets {
+            if let Widget::Choice { on, value, .. } = widget
+                && let Some(serde_json::Value::String(saved)) = values.get(on)
+            {
+                *value = saved.clone();
+            }
+        }
+    }
 
     // Thumbnails are resolved before drawing, because loading one needs `&mut
     // AppState` and drawing takes `&AppState`. Done once per frame for the whole
@@ -137,10 +146,32 @@ pub fn ui(ui: &mut egui::Ui, state: &mut AppState, plugins: &crate::plugins::Plu
         let outcome = host.panel_action(&source, id, &action, &mut edit);
         return_document(state, edit, &format!("{id}: {}", action.action));
 
-        if let Err(e) = outcome {
-            state.session.set_status(format!("`{id}`: {e}"));
+        match outcome {
+            Ok(effect) => {
+                apply_effect(state, effect);
+            }
+            Err(e) => state.session.set_status(format!("`{id}`: {e}")),
         }
         state.session.panels.invalidate(id);
+    }
+}
+
+fn apply_effect(state: &mut AppState, effect: ankhimate_plugins::panel::PanelEffect) {
+    let slots: std::collections::HashMap<String, _> = state
+        .doc
+        .skeleton
+        .slots
+        .iter()
+        .map(|(slot, data)| (data.name.clone(), slot))
+        .collect();
+    for (name, visible) in effect.slot_visibility {
+        if let Some(slot) = slots.get(&name).copied() {
+            if visible {
+                state.session.hidden_slots.remove(&slot);
+            } else {
+                state.session.hidden_slots.insert(slot);
+            }
+        }
     }
 }
 
@@ -646,6 +677,42 @@ fn thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_panel_visibility_effect_is_transient_session_state() {
+        use ankhimate_core::{math::Transform, skeleton::Bone, slot::Slot};
+
+        let mut state = AppState::default();
+        let bone = state.doc.skeleton.add_bone(Bone {
+            name: "root".into(),
+            parent: None,
+            length: 1.0,
+            local_transform: Transform::default(),
+            inherit: Default::default(),
+            color: Bone::default_color(),
+        });
+        let slot = state
+            .doc
+            .skeleton
+            .add_slot(Slot::new("rear_item".into(), bone));
+
+        apply_effect(
+            &mut state,
+            ankhimate_plugins::panel::PanelEffect {
+                slot_visibility: [("rear_item".into(), false)].into(),
+            },
+        );
+        assert!(state.session.hidden_slots.contains(&slot));
+        assert_eq!(state.doc.skeleton.slots[slot].color, [1.0; 4]);
+
+        apply_effect(
+            &mut state,
+            ankhimate_plugins::panel::PanelEffect {
+                slot_visibility: [("rear_item".into(), true)].into(),
+            },
+        );
+        assert!(!state.session.hidden_slots.contains(&slot));
+    }
 
     #[test]
     fn a_short_list_does_not_reserve_space_for_rows_it_does_not_have() {

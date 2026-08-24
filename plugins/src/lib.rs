@@ -216,9 +216,13 @@ impl Host {
         id: &str,
         action: &panel::PanelAction,
         edit: &mut Edit,
-    ) -> Result<(), PluginError> {
-        self.call_panel(script, id, edit, Some(action))?;
-        Ok(())
+    ) -> Result<panel::PanelEffect, PluginError> {
+        let json = self.call_panel(script, id, edit, Some(action))?;
+        serde_json::from_str(&json).map_err(|e| {
+            PluginError::Script(format!(
+                "that panel action returned something unreadable: {e}"
+            ))
+        })
     }
 
     /// Run a script and then call into one of its panels.
@@ -240,8 +244,7 @@ impl Host {
                 json_string(id)
             ),
             Some(action) => format!(
-                "__ankhimate_panel_action({}, {}, {}, {});\n\
-                 globalThis.__ankhimate_panel_result = \"null\";",
+                "globalThis.__ankhimate_panel_result = __ankhimate_panel_action({}, {}, {}, {});",
                 json_string(id),
                 json_string(&action.action),
                 action.value,
@@ -791,7 +794,9 @@ impl Host {
                   // handler stored on `this` is already gone — reading it back
                   // is how a panel ends up seeing `undefined` for a field the
                   // user filled in.
-                  if (typeof panel.on === "function") panel.on(action, value, state ?? {});
+                  const effect = typeof panel.on === "function"
+                    ? panel.on(action, value, state ?? {}) : null;
+                  return JSON.stringify(effect ?? {});
                 };
 
                 let __exporters = {};

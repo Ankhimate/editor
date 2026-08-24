@@ -32,6 +32,17 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Transient editor-view changes requested by a panel action.
+///
+/// These are deliberately not document verbs: hiding artwork for a preview is
+/// session state, so it must not be saved, keyed, or placed on the undo stack.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PanelEffect {
+    /// Slot name to visible state. Names keep the plugin boundary stable.
+    #[serde(default)]
+    pub slot_visibility: std::collections::BTreeMap<String, bool>,
+}
+
 /// A panel a plugin contributes, as declared on load.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PanelSpec {

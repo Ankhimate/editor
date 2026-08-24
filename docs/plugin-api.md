@@ -485,6 +485,14 @@ exist only for that action and are not retained in panel state. This is still
 not filesystem access: the script can read only the files the user explicitly
 selected in the native dialog.
 
+A panel action may return `{ slot_visibility: { slot_name: boolean } }` to
+change transient viewport visibility by slot name. This is intentionally an
+effect rather than a verb: it updates the editor session, is not saved or
+undone, writes no animation key, and therefore works in both Setup and Animate.
+Unknown slot names are ignored. It is suitable for previews such as choosing a
+front/back equipment facing; authored visibility still uses document verbs and
+timelines.
+
 ### Marketplace installation
 
 The editor fetches `marketplace.json` from the
