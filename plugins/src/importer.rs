@@ -133,6 +133,8 @@ pub struct JsImporter {
     pub id: String,
     pub label: String,
     pub extensions: Vec<String>,
+    /// Pass the primary file to `read` and `canRead` as base64 rather than UTF-8.
+    pub binary: bool,
     /// The script that registered it, kept so `read` can run it again.
     ///
     /// Held as source rather than as a compiled function: a QuickJS value
@@ -145,8 +147,15 @@ pub struct JsImporter {
 impl JsImporter {
     /// Run this importer over `path`, building the rig by verb calls.
     pub fn read(&self, path: &Path) -> Result<Edit, crate::PluginError> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| crate::PluginError::Script(format!("could not read the file: {e}")))?;
+        let input = if self.binary {
+            let bytes = std::fs::read(path)
+                .map_err(|e| crate::PluginError::Script(format!("could not read the file: {e}")))?;
+            encode_base64(&bytes)
+        } else {
+            std::fs::read_to_string(path).map_err(|e| {
+                crate::PluginError::Script(format!("could not read the file as UTF-8: {e}"))
+            })?
+        };
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
         let file_name = path
             .file_name()
@@ -166,7 +175,7 @@ impl JsImporter {
             "{}\n__ankhimate_run_import({}, {}, {});",
             self.source,
             serde_json::Value::String(self.id.clone()),
-            serde_json::Value::String(text),
+            serde_json::Value::String(input),
             serde_json::Value::String(file_name),
         );
         host.run(&script, &mut edit)?;

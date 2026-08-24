@@ -67,6 +67,37 @@ fn a_javascript_plugin_declares_a_format_the_binary_never_heard_of() {
     assert_eq!(declared[0].id, "import.toy");
     assert_eq!(declared[0].label, "Toy Rig");
     assert_eq!(declared[0].extensions, ["toy"]);
+    assert!(!declared[0].binary, "text is the compatible default");
+}
+
+#[test]
+fn a_binary_importer_receives_the_primary_file_as_base64() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hero.pack");
+    std::fs::write(&path, [0, 255, 1]).unwrap();
+    let plugin = r#"
+    ankhimate.registerImporter({
+      id: "import.pack", label: "Packed", extensions: ["pack"], binary: true,
+      canRead(base64, fileName) {
+        return base64 === "AP8B" && fileName === "hero.pack";
+      },
+      read(base64) {
+        if (base64 !== "AP8B") throw new Error("binary payload changed");
+        ops.invoke("bone.create", { name: "root" });
+      },
+    });
+    "#;
+
+    let importer = Host::new()
+        .importers(plugin)
+        .expect("plugin loads")
+        .into_iter()
+        .next()
+        .expect("one importer");
+
+    assert!(importer.binary);
+    let edit = importer.read(&path).expect("binary import runs");
+    assert_eq!(edit.doc.skeleton.bones.len(), 1);
 }
 
 #[test]

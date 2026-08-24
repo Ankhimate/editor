@@ -364,6 +364,22 @@ ankhimate.registerImporter({
 });
 ```
 
+For a binary primary file, set `binary: true`. The `read` and optional
+`canRead` callbacks then receive its bytes as standard base64 instead of UTF-8
+text. `fileName` remains the second argument:
+
+```js
+ankhimate.registerImporter({
+  id: "import.packed", label: "Packed Rig", extensions: ["pack"], binary: true,
+  canRead(base64, fileName) { return base64.startsWith("UEsDB"); },
+  read(base64, fileName) { /* parse the confined primary file */ },
+});
+```
+
+Binary mode changes only the primary argument; sidecars and package resources
+keep using their existing text/base64 functions. Text remains the default for
+backward compatibility.
+
 Small importers build a rig by calling verbs. A format that needs the complete
 schema can instead call `ankhimate.importProject(project, images, report)`.
 `project` is the name-keyed shape documented by the `.ankh` schema, `images` is

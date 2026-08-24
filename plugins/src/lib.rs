@@ -70,8 +70,8 @@ impl std::error::Error for PluginError {}
 /// `None` is which, and the compiler cannot tell you when two get swapped.
 #[derive(Default)]
 struct Sinks {
-    /// Importers declared, as `(id, label, extensions)`.
-    declared: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String, Vec<String>)>>>>,
+    /// Importers declared, as `(id, label, extensions, binary)`.
+    declared: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String, Vec<String>, bool)>>>>,
     /// Exporters declared, as `(id, label)`.
     exporters: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>>>,
     /// Files an exporter wrote.
@@ -290,10 +290,11 @@ impl Host {
         let found = declared.borrow().clone();
         Ok(found
             .into_iter()
-            .map(|(id, label, extensions)| importer::JsImporter {
+            .map(|(id, label, extensions, binary)| importer::JsImporter {
                 id,
                 label,
                 extensions,
+                binary,
                 source: script.to_string(),
                 resources: self.resources.clone(),
             })
@@ -312,7 +313,7 @@ impl Host {
         &self,
         script: &str,
         edit: &mut Edit,
-        declared: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String, Vec<String>)>>>>,
+        declared: Option<std::rc::Rc<std::cell::RefCell<Vec<(String, String, Vec<String>, bool)>>>>,
     ) -> Result<Vec<String>, PluginError> {
         self.run_with(
             script,
@@ -475,9 +476,9 @@ impl Host {
                 "declareImporter",
                 Function::new(
                     ctx.clone(),
-                    move |id: String, label: String, extensions: Vec<String>| {
+                    move |id: String, label: String, extensions: Vec<String>, binary: bool| {
                         if let Some(sink) = &sink {
-                            sink.borrow_mut().push((id, label, extensions));
+                            sink.borrow_mut().push((id, label, extensions, binary));
                         }
                     },
                 )?,
@@ -747,7 +748,7 @@ impl Host {
                   registerImporter(spec) {
                     __importers[spec.id] = spec;
                     __ankhimate.declareImporter(
-                      spec.id, spec.label ?? spec.id, spec.extensions ?? []);
+                      spec.id, spec.label ?? spec.id, spec.extensions ?? [], spec.binary === true);
                   },
                   sidecar: (name) => __ankhimate.sidecar(name),
                   sidecarBytes: (name) => __ankhimate.sidecarBytes(name),
