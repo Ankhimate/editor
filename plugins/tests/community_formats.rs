@@ -182,6 +182,40 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         }),
         "facing is transient and does not unequip either variant"
     );
+
+    // Hair's front/back names describe depth around the head, not avatar
+    // facing. Flash draws both pieces together in either direction.
+    let hair_manifest = std::str::from_utf8(manifest)
+        .unwrap()
+        .replace(r#""itemId":"hat""#, r#""itemId":"hair""#)
+        .replace(r#""assetScale":2"#, r#""section":"hair","assetScale":2"#);
+    let mut hair_package = Vec::new();
+    entry("item.json", hair_manifest.as_bytes(), &mut hair_package);
+    entry("images/front.png", &png, &mut hair_package);
+    entry("images/back.png", &png, &mut hair_package);
+    let import_hair = ankhimate_plugins::panel::PanelAction {
+        action: "import".into(),
+        value: serde_json::json!([{
+            "name": "hair.twitem",
+            "bytes_base64": ankhimate_plugins::importer::encode_base64(&hair_package),
+        }]),
+        state: Default::default(),
+    };
+    edit.mode = ankhimate_document::WorkMode::Setup;
+    host.panel_action(TWEEGEE_ITEM, "tweegee.items", &import_hair, &mut edit)
+        .expect("hair imports");
+    edit.mode = ankhimate_document::WorkMode::Animate;
+    let effect = host
+        .panel_action(TWEEGEE_ITEM, "tweegee.items", &face_back, &mut edit)
+        .expect("back facing keeps both hair depth layers");
+    assert_eq!(
+        effect.slot_visibility.get("twitem.hair.front.0"),
+        Some(&true)
+    );
+    assert_eq!(
+        effect.slot_visibility.get("twitem.hair.back.0"),
+        Some(&true)
+    );
     edit.mode = ankhimate_document::WorkMode::Setup;
 
     let toggle = ankhimate_plugins::panel::PanelAction {
