@@ -60,7 +60,7 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         out.extend_from_slice(contents);
     }
 
-    let manifest = br#"{"version":1,"itemId":"hat","assetScale":2,"targets":[{"name":"front","bone":"avatar_head.item_front","transform":{"a":-1,"d":1,"tx":0,"ty":0},"layers":[{"kind":"merged","file":"front.png","width":179,"height":11,"pivotX":0.25,"pivotY":0.75}]}]}"#;
+    let manifest = br#"{"version":1,"itemId":"hat","assetScale":2,"targets":[{"name":"front","bone":"avatar_head.item_front","transform":{"a":-1,"d":1,"tx":0,"ty":0},"layers":[{"kind":"merged","file":"front.png","width":179,"height":11,"pivotX":0.25,"pivotY":0.75}]},{"name":"back","bone":"avatar_head.item_back","transform":{"a":-1,"d":1,"tx":0,"ty":0},"layers":[{"kind":"merged","file":"back.png","width":179,"height":11,"pivotX":0.25,"pivotY":0.75}]}]}"#;
     let mut png = Vec::new();
     image::DynamicImage::new_rgba8(179, 11)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -68,6 +68,7 @@ fn tweegee_item_plugin_reads_a_stored_package() {
     let mut package = Vec::new();
     entry("item.json", manifest, &mut package);
     entry("images/front.png", &png, &mut package);
+    entry("images/back.png", &png, &mut package);
     let dir = tempfile::tempdir().expect("temp");
     let path = dir.path().join("hat.twitem");
     std::fs::write(&path, package).expect("fixture");
@@ -78,8 +79,10 @@ fn tweegee_item_plugin_reads_a_stored_package() {
             r#"
             ops.invoke("bone.create", { name: "avatar_head" });
             ops.invoke("bone.create", { name: "avatar_head.item_front", parent: "avatar_head" });
+            ops.invoke("bone.create", { name: "avatar_head.item_back", parent: "avatar_head" });
             ops.invoke("bone.create", { name: "foreground", parent: "avatar_head" });
             ops.invoke("slot.create", { name: "avatar_head.item_front_slot", bone: "avatar_head.item_front" });
+            ops.invoke("slot.create", { name: "avatar_head.item_back_slot", bone: "avatar_head.item_back" });
             ops.invoke("slot.create", { name: "foreground_slot", bone: "foreground" });
             "#,
             &mut edit,
@@ -99,7 +102,7 @@ fn tweegee_item_plugin_reads_a_stored_package() {
     host.panel_action(TWEEGEE_ITEM, "tweegee.items", &action, &mut edit)
         .expect("item imports into avatar");
 
-    assert_eq!(edit.doc.assets.images.len(), 1);
+    assert_eq!(edit.doc.assets.images.len(), 2);
     let image = edit.doc.assets.images.values().next().expect("image asset");
     assert_eq!(
         (image.width, image.height),
@@ -148,6 +151,8 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         order,
         [
             "avatar_head.item_front_slot",
+            "avatar_head.item_back_slot",
+            "twitem.items.back.0",
             "twitem.items.front.0",
             "foreground_slot"
         ],
