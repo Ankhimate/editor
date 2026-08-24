@@ -277,8 +277,11 @@ pub struct Session {
     /// `AssetId`: slotmap keys are recycled across documents, and an id-keyed
     /// cache would draw the previous project's pixels.
     pub texture_keys: SecondaryMap<AssetId, u64>,
-    /// Hashes already uploaded to the renderer this session.
-    pub uploaded_textures: HashSet<u64>,
+    /// Hashes the renderer has confirmed are resident on the GPU.
+    ///
+    /// Shared with the paint callback so a skipped callback does not leave an
+    /// asset permanently marked as uploaded when no texture was created.
+    pub uploaded_textures: std::sync::Arc<std::sync::Mutex<HashSet<u64>>>,
     /// Asset-panel thumbnails, keyed by name+size (see `ui::assets`).
     pub thumbnails: std::collections::HashMap<String, eframe::egui::TextureHandle>,
     /// Assets whose source file differs from what we hold (T-306). `true` means
@@ -475,7 +478,7 @@ impl Session {
             active_skin,
             layered_skins: Vec::new(),
             texture_keys: SecondaryMap::new(),
-            uploaded_textures: HashSet::new(),
+            uploaded_textures: Default::default(),
             thumbnails: std::collections::HashMap::new(),
             stale_assets: SecondaryMap::new(),
             bone_width_pixels: 7.0,

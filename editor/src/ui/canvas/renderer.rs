@@ -149,12 +149,10 @@ pub fn prepare_textures(state: &mut AppState) -> Vec<SpriteUpload> {
     use std::hash::{Hash, Hasher};
 
     let mut uploads = Vec::new();
+    let mut scheduled = std::collections::HashSet::new();
     let ids: Vec<_> = state.doc.assets.images.keys().collect();
 
     for id in ids {
-        if state.session.texture_keys.contains_key(id) {
-            continue;
-        }
         let Some(asset) = state.doc.assets.get(id) else {
             continue;
         };
@@ -162,14 +160,27 @@ pub fn prepare_textures(state: &mut AppState) -> Vec<SpriteUpload> {
             continue;
         }
 
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        asset.bytes.hash(&mut hasher);
-        asset.width.hash(&mut hasher);
-        asset.height.hash(&mut hasher);
-        let key = hasher.finish();
-        state.session.texture_keys.insert(id, key);
+        let key = match state.session.texture_keys.get(id).copied() {
+            Some(key) => key,
+            None => {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                asset.bytes.hash(&mut hasher);
+                asset.width.hash(&mut hasher);
+                asset.height.hash(&mut hasher);
+                let key = hasher.finish();
+                state.session.texture_keys.insert(id, key);
+                key
+            }
+        };
 
-        if state.session.uploaded_textures.contains(&key) {
+        if state
+            .session
+            .uploaded_textures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(&key)
+            || !scheduled.insert(key)
+        {
             continue;
         }
 
@@ -183,7 +194,6 @@ pub fn prepare_textures(state: &mut AppState) -> Vec<SpriteUpload> {
                     height: h,
                     rgba: rgba.into_raw(),
                 });
-                state.session.uploaded_textures.insert(key);
             }
             Err(e) => {
                 // A file we cannot decode is a user-visible problem, not a crash:
@@ -1923,6 +1933,7 @@ pub fn render_bones(
         mesh_draws,
         sprite_draws,
         sprite_uploads,
+        uploaded_textures: state.session.uploaded_textures.clone(),
     };
 
     // Into the slot reserved before anything was drawn, so the artwork lands
@@ -1950,5 +1961,45 @@ mod onion_tests {
             samples,
             vec![(0.0, OnionSide::Past, 1), (0.2, OnionSide::Future, 1)]
         );
+    }
+}
+
+#[cfg(test)]
+mod texture_tests {
+    use super::*;
+    use ankhimate_core::assets::ImageAsset;
+    use std::io::Cursor;
+
+    fn one_pixel_png() -> Vec<u8> {
+        let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([10, 20, 30, 255]));
+        let mut bytes = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        bytes.into_inner()
+    }
+
+    /// Regression: a dock/layout frame may build a callback that egui never
+    /// prepares. The next frame must retry instead of believing pixels reached
+    /// the GPU merely because their content hash was memoized.
+    #[test]
+    fn texture_upload_retries_until_renderer_acknowledges_it() {
+        let mut state = AppState::default();
+        state
+            .doc
+            .assets
+            .add(ImageAsset::new("item", one_pixel_png(), 1, 1));
+
+        let first = prepare_textures(&mut state);
+        assert_eq!(first.len(), 1);
+        let key = first[0].key;
+
+        assert_eq!(
+            prepare_textures(&mut state).len(),
+            1,
+            "skipped callback retries"
+        );
+        state.session.uploaded_textures.lock().unwrap().insert(key);
+        assert!(prepare_textures(&mut state).is_empty());
     }
 }

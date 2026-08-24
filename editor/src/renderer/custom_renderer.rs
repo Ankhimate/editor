@@ -460,6 +460,8 @@ pub struct CustomCallback {
     pub sprite_draws: Vec<SpriteDraw>,
     /// Images the canvas found were not in the texture cache yet.
     pub sprite_uploads: Vec<SpriteUpload>,
+    /// GPU-resident content hashes, acknowledged only after upload succeeds.
+    pub uploaded_textures: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
 }
 
 impl egui_wgpu::CallbackTrait for CustomCallback {
@@ -478,6 +480,10 @@ impl egui_wgpu::CallbackTrait for CustomCallback {
         {
             for upload in &self.sprite_uploads {
                 renderer.upload_texture(device, queue, upload);
+                self.uploaded_textures
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(upload.key);
             }
         }
 
