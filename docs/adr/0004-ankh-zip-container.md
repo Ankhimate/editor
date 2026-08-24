@@ -5,6 +5,10 @@
 - **Decision owner:** Ankhimate core team
 - **Records:** PLAN §6.1, §1.2 (defect D8)
 
+> ADR 0008 proposes superseding the default writer and embedded-image rule with
+> v4 binary/JSON profiles and external assets. This ADR remains the contract for
+> readable v1–v3 files and their compatibility reader until that rollout lands.
+
 ## Context
 
 The original save path serialized `SlotMap` keys via `bincode` + serde on the
