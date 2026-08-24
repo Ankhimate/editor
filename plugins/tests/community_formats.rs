@@ -159,6 +159,43 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         "equipment draws at the animation's target depth rather than at the end"
     );
 
+    let alpha = |edit: &ankhimate_document::Edit, name: &str| {
+        edit.doc
+            .skeleton
+            .slots
+            .values()
+            .find(|slot| slot.name == name)
+            .map(|slot| slot.color[3])
+            .expect("equipment slot")
+    };
+    assert_eq!(alpha(&edit, "twitem.items.front.0"), 1.0);
+    assert_eq!(alpha(&edit, "twitem.items.back.0"), 0.0);
+
+    let face_back = ankhimate_plugins::panel::PanelAction {
+        action: "facing".into(),
+        value: serde_json::json!("Back"),
+        ..Default::default()
+    };
+    host.panel_action(TWEEGEE_ITEM, "tweegee.items", &face_back, &mut edit)
+        .expect("facing switches to the back variants");
+    assert_eq!(alpha(&edit, "twitem.items.front.0"), 0.0);
+    assert_eq!(alpha(&edit, "twitem.items.back.0"), 1.0);
+    assert!(
+        edit.doc.skeleton.slots.values().all(|slot| {
+            !slot.name.starts_with("twitem.") || slot.attachment.as_deref() == Some("twitem.hat")
+        }),
+        "facing hides by alpha without unequipping either variant"
+    );
+
+    let widgets = host
+        .build_panel(TWEEGEE_ITEM, "tweegee.items", &mut edit)
+        .expect("panel rebuilds");
+    assert!(widgets.iter().any(|widget| matches!(
+        widget,
+        ankhimate_plugins::panel::Widget::Choice { choice, value, .. }
+            if choice == "Facing" && value == "Back"
+    )));
+
     let toggle = ankhimate_plugins::panel::PanelAction {
         action: "toggle:items:hat".into(),
         ..Default::default()
