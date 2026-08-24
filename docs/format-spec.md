@@ -20,7 +20,7 @@ profile identifier. Conversion between profiles must preserve the logical model.
 |---|---|---|
 | Binary | `.ankh` | Default editor and pipeline format |
 | Readable JSON | `.ankh.json` | Review, debugging, hand editing |
-| Compact JSON | `.ankh.cjson` | Text-only transfer with minimum overhead |
+| Minified JSON | `.ankh.min.json` | Standard JSON with minimum text overhead |
 
 Binary is the canonical default, not a serialization of in-memory slotmap keys.
 It encodes the same name-keyed schema as JSON. The binary codec and its canonical
@@ -28,7 +28,7 @@ ordering are part of the public format contract; changing Rust structs alone mus
 never change bytes on disk.
 
 Readable JSON uses descriptive field names and no insignificant whitespace is
-required. Editors may pretty-print it. Compact JSON is always minified and uses
+required. Editors may pretty-print it. Minified JSON is always minified and uses
 the stable tags below. Compact tags are aliases, not a second data model.
 
 ## External assets
@@ -95,7 +95,7 @@ skipped and preserved when the codec can retain their raw value.
 Compression is an envelope concern. Writers enable it only when it makes the
 payload smaller; readers must support both flag states.
 
-## Compact JSON tags
+## Minified JSON tags
 
 Top-level tags are stable and never reused:
 
@@ -122,7 +122,7 @@ schema implementation. A tag's meaning is scoped by its record type. Tags may be
 one or two ASCII characters; once published they are never renamed or reused.
 Unknown tags survive readable/compact/binary round trips.
 
-Compact JSON contains no indentation or line breaks. It is UTF-8 and must use
+Minified JSON contains no indentation or line breaks. It is UTF-8 and must use
 JSON numbers and booleans normally; numeric values are not converted to strings.
 
 ## Compatibility and rollout
@@ -143,11 +143,10 @@ remain available during the compatibility window but must not be labeled v4.
 
 ## Acceptance
 
-- Binary, readable JSON, and compact JSON decode to value-equal projects.
+- Binary, readable JSON, and minified JSON decode to value-equal projects.
 - Saving the same project twice produces identical project bytes.
 - Existing v1–v3 fixtures still load, including embedded images.
 - A v4 save contains no image bytes and every URI stays inside the project tree.
 - Duplicate image contents produce one external asset file.
 - Missing assets are reported without failing the rig load.
 - Interrupted saves leave the old project readable.
-

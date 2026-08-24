@@ -22,7 +22,8 @@ Adopt the three v4 profiles defined by `docs/format-spec.md`:
 
 - compact deterministic binary as the `.ankh` default;
 - descriptive JSON as an explicit interchange/debug profile;
-- minified tagged JSON as an explicit compact text profile.
+- minified tagged standard JSON (`.ankh.min.json`) as an explicit compact text
+  profile.
 
 Images become confined external relative assets. The default layout is a sibling
 content-addressed `<project-stem>.assets/` directory. Existing ZIP projects remain
@@ -52,4 +53,3 @@ readable and are never destructively upgraded on open.
   portability ambiguous. Legacy ZIP remains the explicit compatibility path.
 - **Serialize Rust memory/slotmap ids:** compact but version-fragile and not
   implementable by other runtimes.
-
