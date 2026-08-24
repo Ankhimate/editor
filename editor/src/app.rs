@@ -51,6 +51,65 @@ pub struct AnkhimateApp {
     /// An autosave newer than its project, found at startup and not yet
     /// answered. `Some` means the recovery prompt is up.
     recovery: Option<crate::autosave::Recovery>,
+    /// A reader running away from the UI thread. Importers can parse large
+    /// atlases and execute plugin JavaScript; neither may stall egui's frame.
+    file_load: Option<FileLoad>,
+}
+
+#[cfg(test)]
+mod background_file_tests {
+    use super::*;
+
+    /// Starting an open must leave the current document in place until the
+    /// worker completes; this is the behavioral difference from the old,
+    /// frame-blocking path.
+    #[test]
+    fn open_loads_in_background_then_hands_off_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("background.ankh");
+        let mut source = AppState::default();
+        source.doc.meta.name = "loaded".into();
+        assert!(matches!(
+            crate::fileops::write_to(&source, &path),
+            crate::fileops::FileOutcome::Saved(_)
+        ));
+
+        let mut app = AnkhimateApp::default();
+        app.state.doc.meta.name = "still-editable".into();
+        app.start_open(path.clone());
+        assert!(app.file_load.is_some(), "a worker owns the read");
+        assert_eq!(app.state.doc.meta.name, "still-editable");
+
+        for _ in 0..200 {
+            app.poll_file_load();
+            if app.file_load.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            app.file_load.is_none(),
+            "worker completed within one second"
+        );
+        assert_eq!(app.state.doc.meta.name, "loaded");
+        assert_eq!(app.current_path.as_deref(), Some(path.as_path()));
+    }
+}
+
+struct FileLoad {
+    label: String,
+    receiver: std::sync::mpsc::Receiver<BackgroundLoad>,
+}
+
+enum BackgroundLoad {
+    Opened(
+        std::path::PathBuf,
+        Result<ankhimate_formats::Loaded, String>,
+    ),
+    Imported(
+        std::path::PathBuf,
+        Result<ankhimate_formats::Loaded, String>,
+    ),
 }
 
 /// One window control. Returns whether it was clicked.
@@ -417,6 +476,7 @@ impl Default for AnkhimateApp {
             operators: crate::registry::Registry::with_builtins(),
             autosave: crate::autosave::Autosave::default(),
             recovery: None,
+            file_load: None,
         }
     }
 }
@@ -516,6 +576,8 @@ impl eframe::App for AnkhimateApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.theme.apply(ctx);
         crate::ui::motion::configure(ctx, self.config.reduced_motion);
+
+        self.poll_file_load();
 
         if let Some(result) = self.marketplace.poll() {
             match result {
@@ -1377,6 +1439,23 @@ at startup.",
         crate::ui::atlas::ui(ctx, &mut self.state, &self.theme);
         crate::ui::psd_import::ui(ctx, &mut self.state, &self.theme);
 
+        if let Some(load) = &self.file_load {
+            let phase = ((ctx.input(|input| input.time) * 0.7) % 1.0) as f32;
+            egui::Area::new(egui::Id::new("background_file_load"))
+                .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -28.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_width(300.0);
+                        ui.label(&load.label);
+                        // Importers expose no meaningful item count. An
+                        // indeterminate bar is honest; "50%" would not be.
+                        ui.add(egui::ProgressBar::new(phase));
+                    });
+                });
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+
         // ── Import summary (T-303) ───────────────────────────────────────
         // A conversion that quietly drops half a rig is worse than one that
         // says what it left behind, so this is a dialog, not a status line.
@@ -1979,11 +2058,40 @@ impl AnkhimateApp {
                 self.status = Some("New document".to_string());
                 return;
             }
-            FileAction::Open => fileops::open(&mut self.state),
-            FileAction::OpenPath(path) => fileops::open_path(&mut self.state, &path),
+            FileAction::Open => {
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Ankhimate project", &["ankh"])
+                    .pick_file()
+                else {
+                    return;
+                };
+                self.start_open(path);
+                return;
+            }
+            FileAction::OpenPath(path) => {
+                self.start_open(path);
+                return;
+            }
             FileAction::Save => fileops::save(&self.state, &self.current_path),
             FileAction::SaveAs => fileops::save_as(&self.state),
-            FileAction::Import(id) => fileops::import_with(&mut self.state, &self.plugins, &id),
+            FileAction::Import(id) => {
+                let importers = fileops::importers_with(&self.plugins);
+                let Some(importer) = importers.get(&id) else {
+                    self.status = Some(format!("no importer named `{id}`"));
+                    return;
+                };
+                let label = importer.label().to_string();
+                let extensions = importer.extensions();
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter(&label, &extensions)
+                    .set_title(format!("Import {label}"))
+                    .pick_file()
+                else {
+                    return;
+                };
+                self.start_import(path, id, importers, label);
+                return;
+            }
         };
         match outcome {
             FileOutcome::Saved(path) => {
@@ -2033,6 +2141,130 @@ impl AnkhimateApp {
             }
             FileOutcome::Cancelled => {}
             FileOutcome::Error(msg) => self.status = Some(msg),
+        }
+    }
+
+    fn start_open(&mut self, path: std::path::PathBuf) {
+        if self.file_load.is_some() {
+            self.status = Some("A file is already loading".into());
+            return;
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker_path = path.clone();
+        std::thread::spawn(move || {
+            let result = ankhimate_formats::load(&worker_path)
+                .map(|(loaded, _)| loaded)
+                .map_err(|error| format!("open failed: {error}"));
+            let _ = sender.send(BackgroundLoad::Opened(worker_path, result));
+        });
+        self.file_load = Some(FileLoad {
+            label: format!(
+                "Opening {}…",
+                path.file_name().and_then(|n| n.to_str()).unwrap_or("file")
+            ),
+            receiver,
+        });
+    }
+
+    fn start_import(
+        &mut self,
+        path: std::path::PathBuf,
+        id: String,
+        importers: ankhimate_formats::Importers,
+        label: String,
+    ) {
+        if self.file_load.is_some() {
+            self.status = Some("A file is already loading".into());
+            return;
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker_path = path.clone();
+        std::thread::spawn(move || {
+            let result = importers
+                .get(&id)
+                .expect("importer existed before worker started")
+                .read(&worker_path)
+                .map_err(|error| format!("{}: {error}", worker_path.display()));
+            let _ = sender.send(BackgroundLoad::Imported(worker_path, result));
+        });
+        self.file_load = Some(FileLoad {
+            label: format!("Importing {label}…"),
+            receiver,
+        });
+    }
+
+    fn poll_file_load(&mut self) {
+        let result = match self.file_load.as_ref().map(|load| load.receiver.try_recv()) {
+            Some(Ok(result)) => result,
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.file_load = None;
+                self.status = Some("File loader stopped unexpectedly".into());
+                return;
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => return,
+        };
+        self.file_load = None;
+        let outcome = match result {
+            BackgroundLoad::Opened(path, Ok(loaded)) => {
+                // Native open and foreign import share the same atomic handoff:
+                // the old document remains usable until the worker is done.
+                let report = loaded.report.clone();
+                let outcome = crate::fileops::adopt(&mut self.state, loaded, &path);
+                match outcome {
+                    crate::fileops::FileOutcome::Imported { .. } => {
+                        if !report.is_clean() {
+                            let unresolved = report
+                                .dangling
+                                .iter()
+                                .map(|(kind, name)| format!("{kind} '{name}'"))
+                                .collect::<Vec<_>>();
+                            self.state.session.set_status(format!(
+                                "Opened with unresolved: {}",
+                                unresolved.join(", ")
+                            ));
+                        }
+                        crate::fileops::FileOutcome::Opened(path)
+                    }
+                    other => other,
+                }
+            }
+            BackgroundLoad::Imported(path, Ok(loaded)) => {
+                crate::fileops::adopt(&mut self.state, loaded, &path)
+            }
+            BackgroundLoad::Opened(_, Err(error)) | BackgroundLoad::Imported(_, Err(error)) => {
+                crate::fileops::FileOutcome::Error(error)
+            }
+        };
+        self.finish_file_outcome(outcome);
+    }
+
+    fn finish_file_outcome(&mut self, outcome: crate::fileops::FileOutcome) {
+        use crate::fileops::FileOutcome;
+        match outcome {
+            FileOutcome::Opened(path) => {
+                self.status = Some(format!("Opened {}", path.display()));
+                self.config.touch_recent(&path);
+                self.current_path = Some(path);
+                self.autosave.reset();
+            }
+            FileOutcome::Imported { path, report } => {
+                let name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("rig")
+                    .to_string();
+                self.status = Some(format!("Imported {name}"));
+                self.current_path = None;
+                if !report.is_clean() {
+                    self.import_report = Some(ImportReport {
+                        file: name,
+                        dangling: report.dangling,
+                        lossy: report.lossy,
+                    });
+                }
+            }
+            FileOutcome::Error(message) => self.status = Some(message),
+            FileOutcome::Saved(_) | FileOutcome::Cancelled => {}
         }
     }
 }

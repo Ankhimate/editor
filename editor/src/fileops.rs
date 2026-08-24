@@ -174,7 +174,11 @@ pub fn import_path_with(
 /// from there the editor does not care which reader produced it. Keeping this in
 /// one place is what stops a new importer quietly forgetting to carry the report
 /// across — the part of an import the user most needs to see.
-fn adopt(state: &mut AppState, loaded: ankhimate_formats::Loaded, path: &Path) -> FileOutcome {
+pub(crate) fn adopt(
+    state: &mut AppState,
+    loaded: ankhimate_formats::Loaded,
+    path: &Path,
+) -> FileOutcome {
     let report = loaded.report;
     state.replace_document(Document {
         skeleton: loaded.skeleton,

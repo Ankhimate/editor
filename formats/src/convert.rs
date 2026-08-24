@@ -66,7 +66,7 @@ pub struct Loaded {
 }
 
 /// Non-fatal problems encountered while loading.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct LoadReport {
     /// References to entities that were not in the file (`what`, `name`).
     pub dangling: Vec<(&'static str, String)>,
