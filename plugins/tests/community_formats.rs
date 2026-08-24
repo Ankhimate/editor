@@ -62,7 +62,7 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         out.extend_from_slice(contents);
     }
 
-    let manifest = br#"{"version":1,"itemId":"hat","assetScale":2,"targets":[{"name":"front","bone":"avatar_head.item_front","transform":{"a":-1,"d":1,"tx":0,"ty":0},"layers":[{"kind":"merged","file":"front.png","width":20,"height":10,"pivotX":0.25,"pivotY":0.75}]}]}"#;
+    let manifest = br#"{"version":1,"itemId":"hat","assetScale":2,"targets":[{"name":"front","bone":"avatar_head.item_front","transform":{"a":-1,"d":1,"tx":0,"ty":0},"layers":[{"kind":"merged","file":"front.png","width":179,"height":11,"pivotX":0.25,"pivotY":0.75}]}]}"#;
     let mut package = Vec::new();
     entry("item.json", manifest, &mut package);
     entry("images/front.png", &[1, 2, 3], &mut package);
@@ -82,6 +82,12 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         "the dotted target becomes a chain"
     );
     assert_eq!(loaded.assets.images.len(), 1);
+    let image = loaded.assets.images.values().next().expect("image asset");
+    assert_eq!(
+        (image.width, image.height),
+        (179, 11),
+        "pixels stay integral"
+    );
     let attachment = loaded
         .skeleton
         .skins
@@ -93,6 +99,7 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         panic!("region attachment expected");
     };
     assert_eq!(region.local_scale.x, 1.0);
+    assert_eq!((region.width, region.height), (89.5, 5.5));
     assert_eq!(
         region.local_scale.y, -1.0,
         "reflection survives matrix decomposition"
