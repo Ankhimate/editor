@@ -15,6 +15,7 @@ override feature status in `TASKS.md`.
 - [x] Site foundation: Bun/Starlight config, navigation, theme, status vocabulary, Pages workflow.
 - [x] Animator path: task-oriented rigging, animation, import/export, recipes, troubleshooting.
 - [x] Rigging fundamentals deep pass: modes, hierarchy, selection, bones, slots, rigid attachments, assets, and draw order verified against the editor UI.
+- [x] Mesh and deformation deep pass: topology, tracing, UVs, binding, every weight control, deform keys, and current linked/per-influence limitations verified against implementation.
 - [x] Rust details removed from the product site; the separate `/api/` rustdoc project owns them.
 - [x] Format specification: field-complete v3 structure, migrations, export/runtime contracts, JSON example.
 - [x] Plugin and MCP reference: generated registries plus security and workflow guides.
