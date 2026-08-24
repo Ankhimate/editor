@@ -40,7 +40,7 @@ fn main() {
     let (skeleton, animations) = build();
 
     let assets = ankhimate_core::assets::AssetDb::new();
-    let json = ankhimate_formats::to_json(&ankhimate_formats::ProjectRef {
+    let project = ankhimate_formats::ProjectRef {
         skeleton: &skeleton,
         animations: &animations,
         assets: &assets,
@@ -48,11 +48,10 @@ fn main() {
         fps: 30,
         export_presets: &[],
         psd_layer_paths: &Default::default(),
-    })
-    .unwrap();
+    };
 
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tentacle.ankh");
-    ankhimate_formats::container::write(std::path::Path::new(path), &json, &[]).unwrap();
+    ankhimate_formats::save(std::path::Path::new(path), &project, &[]).unwrap();
     println!("wrote {path}");
 }
 

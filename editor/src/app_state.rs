@@ -2251,8 +2251,11 @@ mod tests {
             .unwrap()
             .join("samples")
             .join("skellina.ankh");
-        if !path.exists() {
-            eprintln!("skipping: no local import at {}", path.display());
+        if std::fs::read(&path)
+            .ok()
+            .is_none_or(|bytes| !bytes.starts_with(b"ANKH"))
+        {
+            eprintln!("skipping: no local v1 import at {}", path.display());
             return;
         }
         let mut state = AppState::default();

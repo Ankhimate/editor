@@ -10,4 +10,3 @@ ankhimate-document = { path = "../document" }
 ankhimate-formats = { path = "../formats" }
 ankhimate-mcp = { path = "../mcp" }
 serde_json = "1"
-syn = { version = "2", features = ["full"] }

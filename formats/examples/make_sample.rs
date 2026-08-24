@@ -485,7 +485,7 @@ fn main() {
     });
 
     // ── Write it ─────────────────────────────────────────────────────────
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("walker.ankh");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples/walker.ankh");
     ankhimate_formats::save(
         &path,
         &ProjectRef {

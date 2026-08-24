@@ -413,7 +413,7 @@ mod tests {
               id: "import.toy", label: "Toy", extensions: ["toy"],
               read(text, fileName) {
                 ankhimate.importProject({
-                  version: 3, name: JSON.parse(text).name, fps: 30,
+                  version: 1, name: JSON.parse(text).name, fps: 30,
                   assets: [], bones: [{ name: "root", length: 1 }], slots: [],
                   draw_order: [], skins: [{ name: "default", entries: [] }],
                   default_skin: "default", constraints: [], constraint_order: [], animations: []

@@ -16,9 +16,9 @@ A GPU supporting Vulkan, Metal, DirectX 12, or OpenGL is required by wgpu. From
 the startup screen, create a project or open one of `samples/minimal.ankh`,
 `samples/walker.ankh`, or `samples/tentacle.ankh`.
 
-Save a new project with **File → Save As** and choose a `.ankh` path. Keep the
-source artwork beside your normal project backups; embedded images make the file
-portable, but are not a version-control strategy. The editor binary is locked on
+Save a new project with **File → Save As** and choose a `.ankh` path. Keep its
+matching `<name>.assets/` directory beside it when moving or backing up the
+project. External assets are not a version-control strategy. The editor binary is locked on
 Windows while running, so close it before `cargo build`; `cargo check` is unaffected.
 
 Build this website with the locked Bun dependencies:

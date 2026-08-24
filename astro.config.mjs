@@ -25,7 +25,7 @@ export default defineConfig({
             { label: 'Graph editor', slug: 'graph-editor' },
           ],
         },
-        { label: 'Formats and export', items: ['formats', 'formats/ankh-v3', 'formats/migrations', 'formats/export-runtime', 'export-context'] },
+        { label: 'Formats and export', items: ['formats', 'format-spec', 'formats/export-runtime', 'export-context'] },
         { label: 'Plugins and automation', items: ['automation', 'automation/plugins', 'plugin-api', 'reference/document-verbs', 'automation/mcp', 'mcp', 'reference/mcp-tools'] },
         { label: 'Project', items: ['comparison', 'developer', 'appendices', 'documentation-plan'] },
         { label: 'Rust API', link: '/api/' },

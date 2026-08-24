@@ -32,7 +32,9 @@ pub enum FileOutcome {
 }
 
 fn dialog() -> rfd::FileDialog {
-    rfd::FileDialog::new().add_filter(FILTER_NAME, &[EXT])
+    rfd::FileDialog::new()
+        .add_filter(FILTER_NAME, &[EXT])
+        .add_filter("Ankhimate readable JSON", &["json"])
 }
 
 /// File▸New — replace the document with an empty one. No dialog, no path.
@@ -58,7 +60,14 @@ pub fn save_as(state: &AppState) -> FileOutcome {
     };
     // rfd honors the filter but a user can still type a bare name; make sure the
     // extension is present so the file is recognizable.
-    if path.extension().and_then(|e| e.to_str()) != Some(EXT) {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if !name.ends_with(".ankh")
+        && !name.ends_with(".ankh.json")
+        && !name.ends_with(".ankh.min.json")
+    {
         path.set_extension(EXT);
     }
     write_to(state, &path)

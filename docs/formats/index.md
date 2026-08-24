@@ -10,4 +10,5 @@ authoring file preserves editable rig structure and embedded artwork. Runtime
 output is generated from a user-authored preset and contains only what a target
 engine contract asks for.
 
-![The ankh archive contains project JSON and image entries.](../diagrams/container.svg)
+The authoring contract is documented in [Ankh v1](../format-spec.md): binary by
+default, standard JSON by option, and external content-addressed images.

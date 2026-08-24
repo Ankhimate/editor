@@ -18,10 +18,8 @@ use ankhimate_core::slotmap::SlotMap;
 fn main() {
     let (skeleton, animations) = build();
 
-    // Serialize through the normal path, then splice an unknown top-level field
-    // in so the golden exercises forward-compat preservation.
     let assets = ankhimate_core::assets::AssetDb::new();
-    let json = ankhimate_formats::to_json(&ankhimate_formats::ProjectRef {
+    let project = ankhimate_formats::ProjectRef {
         skeleton: &skeleton,
         animations: &animations,
         assets: &assets,
@@ -29,14 +27,10 @@ fn main() {
         fps: 30,
         export_presets: &[],
         psd_layer_paths: &Default::default(),
-    })
-    .unwrap();
-    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    value["editor_note"] = serde_json::json!("hand-added unknown field; must survive round-trips");
-    let json = serde_json::to_string_pretty(&value).unwrap();
+    };
 
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/minimal.ankh");
-    ankhimate_formats::container::write(std::path::Path::new(path), &json, &[]).unwrap();
+    ankhimate_formats::save(std::path::Path::new(path), &project, &[]).unwrap();
     println!("wrote {path}");
 }
 

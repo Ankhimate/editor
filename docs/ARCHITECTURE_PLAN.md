@@ -402,20 +402,17 @@ bone-centric model these features come from.
 
 ### 6.1 `.ankh` project (editor save)
 
-Zip container (like ora/docx — good for forward-compat):
+Binary Ankh v1 with external content-addressed images:
 
 ```
-project.ankh (zip)
-├─ project.json      # version, name, fps, document (schema below)
-├─ images/…          # original source PNGs (referenced by asset id)
-└─ thumbs/cover.png  # optional, for startup window
+project.ankh
+project.assets/
+└─ <sha256-prefix>/<sha256>.<ext>
 ```
 
-`project.json` schema notes: entities keyed by **name strings** (`"bones": [{"name": "arm",
+The logical schema notes: entities keyed by **name strings** (`"bones": [{"name": "arm",
 "parent": "shoulder", …}]`), never slotmap keys; `"version": 1` mandatory; unknown fields must be
-preserved on round-trip where feasible (serde `flatten` capture). Migration lives in
-`formats/src/migrate.rs` (every editor in this space grows a backwards-compatibility layer — plan
-it from day 1).
+preserved on readable/compact round-trips where feasible (serde `flatten` capture).
 
 ### 6.2 `.ankh.runtime` (game runtime export)
 

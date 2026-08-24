@@ -1,151 +1,147 @@
-//! The `.ankh` zip container (PLAN §6.1, ADR 0004).
-//!
-//! An `.ankh` file is a zip archive, not a bare JSON file. The layout is:
-//!
-//! ```text
-//! project.json      the document (schema::Project, pretty JSON)
-//! images/…          referenced textures, path-preserved
-//! ```
-//!
-//! Bundling images into the project keeps a character a single portable file
-//! rather than a `.json` plus a loose folder that goes missing on copy. Images
-//! are stored uncompressed-metadata but deflate-compressed like the rest; PNGs
-//! are already compressed, so the ratio is ~1 and the cost is the CRC pass.
+//! Ankh v1 binary envelope and external asset storage.
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
-/// The document entry name inside the archive.
-pub const PROJECT_ENTRY: &str = "project.json";
-/// Directory prefix for bundled textures.
-pub const IMAGES_PREFIX: &str = "images/";
+pub const MAGIC: &[u8; 4] = b"ANKH";
+pub const VERSION: u16 = 1;
+const CODEC_MESSAGEPACK: u8 = 1;
+const FLAG_DEFLATE: u8 = 1;
+const HEADER_LEN: usize = 16;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ContainerError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("zip error: {0}")]
-    Zip(#[from] zip::result::ZipError),
-    #[error("archive has no `{PROJECT_ENTRY}` entry")]
-    MissingProject,
+    #[error("not an Ankh v1 binary file")]
+    BadMagic,
+    #[error("unsupported Ankh version {0}")]
+    UnsupportedVersion(u16),
+    #[error("unsupported Ankh codec {0}")]
+    UnsupportedCodec(u8),
+    #[error("invalid Ankh payload length")]
+    BadLength,
+    #[error("Ankh payload checksum mismatch")]
+    BadChecksum,
+    #[error("asset path is not confined: {0}")]
+    UnsafeAssetPath(String),
 }
 
-/// A named binary blob (a texture) to bundle alongside the document.
-pub struct ImageBlob {
-    /// Path relative to `images/`, e.g. `arm.png` or `parts/head.png`.
-    pub rel_path: String,
-    pub bytes: Vec<u8>,
+pub fn encode(payload: &[u8]) -> Result<Vec<u8>, ContainerError> {
+    let mut encoder =
+        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(payload)?;
+    let compressed = encoder.finish()?;
+    let (flags, body) = if compressed.len() < payload.len() {
+        (FLAG_DEFLATE, compressed.as_slice())
+    } else {
+        (0, payload)
+    };
+    let mut out = Vec::with_capacity(HEADER_LEN + body.len());
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&VERSION.to_le_bytes());
+    out.push(CODEC_MESSAGEPACK);
+    out.push(flags);
+    out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    out.extend_from_slice(&crc32fast::hash(payload).to_le_bytes());
+    out.extend_from_slice(body);
+    Ok(out)
 }
 
-/// The raw contents read out of a container: the document JSON plus any images.
-pub struct Contents {
-    pub project_json: String,
-    pub images: Vec<ImageBlob>,
-}
-
-fn options() -> zip::write::SimpleFileOptions {
-    // Deflate matches the crate's single enabled feature. No compression level
-    // knob is exposed: default is the right trade for text + already-compressed
-    // PNGs.
-    zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated)
-}
-
-/// Write `project.json` + images to a zip container at `path`.
-pub fn write(path: &Path, project_json: &str, images: &[ImageBlob]) -> Result<(), ContainerError> {
-    let file = std::fs::File::create(path)?;
-    let mut zip = zip::ZipWriter::new(file);
-
-    zip.start_file(PROJECT_ENTRY, options())?;
-    zip.write_all(project_json.as_bytes())?;
-
-    for image in images {
-        let name = format!("{IMAGES_PREFIX}{}", image.rel_path);
-        zip.start_file(name, options())?;
-        zip.write_all(&image.bytes)?;
+pub fn decode(bytes: &[u8]) -> Result<Vec<u8>, ContainerError> {
+    if bytes.len() < HEADER_LEN || &bytes[..4] != MAGIC {
+        return Err(ContainerError::BadMagic);
     }
+    let version = u16::from_le_bytes([bytes[4], bytes[5]]);
+    if version != VERSION {
+        return Err(ContainerError::UnsupportedVersion(version));
+    }
+    if bytes[6] != CODEC_MESSAGEPACK {
+        return Err(ContainerError::UnsupportedCodec(bytes[6]));
+    }
+    let flags = bytes[7];
+    let raw_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let checksum = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+    let payload = if flags & FLAG_DEFLATE != 0 {
+        let mut decoded = Vec::with_capacity(raw_len);
+        flate2::read::DeflateDecoder::new(&bytes[HEADER_LEN..]).read_to_end(&mut decoded)?;
+        decoded
+    } else {
+        bytes[HEADER_LEN..].to_vec()
+    };
+    if payload.len() != raw_len {
+        return Err(ContainerError::BadLength);
+    }
+    if crc32fast::hash(&payload) != checksum {
+        return Err(ContainerError::BadChecksum);
+    }
+    Ok(payload)
+}
 
-    zip.finish()?;
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ContainerError> {
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project");
+    let temp = path.with_file_name(format!(".{file_name}.tmp"));
+    std::fs::write(&temp, bytes)?;
+    if path.exists() {
+        let backup = path.with_file_name(format!(".{file_name}.bak-{}", std::process::id()));
+        std::fs::rename(path, &backup)?;
+        if let Err(error) = std::fs::rename(&temp, path) {
+            let _ = std::fs::rename(&backup, path);
+            return Err(error.into());
+        }
+        std::fs::remove_file(backup)?;
+    } else {
+        std::fs::rename(temp, path)?;
+    }
     Ok(())
 }
 
-/// Read `project.json` + images back out of a container.
-pub fn read(path: &Path) -> Result<Contents, ContainerError> {
-    let file = std::fs::File::open(path)?;
-    let mut zip = zip::ZipArchive::new(file)?;
+pub fn asset_root(project: &Path) -> PathBuf {
+    let name = project
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project");
+    let stem = name
+        .strip_suffix(".ankh.min.json")
+        .or_else(|| name.strip_suffix(".ankh.json"))
+        .or_else(|| name.strip_suffix(".ankh"))
+        .unwrap_or(name);
+    project.with_file_name(format!("{stem}.assets"))
+}
 
-    let mut project_json: Option<String> = None;
-    let mut images = Vec::new();
-
-    for i in 0..zip.len() {
-        let mut entry = zip.by_index(i)?;
-        // Directory entries carry no bytes; skip them.
-        if entry.is_dir() {
-            continue;
-        }
-        let name = entry.name().to_string();
-        if name == PROJECT_ENTRY {
-            let mut s = String::new();
-            entry.read_to_string(&mut s)?;
-            project_json = Some(s);
-        } else if let Some(rel) = name.strip_prefix(IMAGES_PREFIX) {
-            let mut bytes = Vec::new();
-            entry.read_to_end(&mut bytes)?;
-            images.push(ImageBlob {
-                rel_path: rel.to_string(),
-                bytes,
-            });
-        }
-        // Anything else is ignored so a newer writer's extra entries survive an
-        // older reader without erroring.
+pub fn confined_asset(root: &Path, uri: &str) -> Result<PathBuf, ContainerError> {
+    let relative = Path::new(uri);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err(ContainerError::UnsafeAssetPath(uri.into()));
     }
-
-    Ok(Contents {
-        project_json: project_json.ok_or(ContainerError::MissingProject)?,
-        images,
-    })
+    Ok(root.join(relative))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn round_trips_document_and_images() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("c.ankh");
-        let imgs = vec![
-            ImageBlob {
-                rel_path: "arm.png".into(),
-                bytes: vec![1, 2, 3, 4],
-            },
-            ImageBlob {
-                rel_path: "parts/head.png".into(),
-                bytes: vec![9, 8, 7],
-            },
-        ];
-        write(&path, "{\"hi\":1}", &imgs).unwrap();
-
-        let got = read(&path).unwrap();
-        assert_eq!(got.project_json, "{\"hi\":1}");
-        assert_eq!(got.images.len(), 2);
-        // Order is archive order, which matches write order here.
-        assert_eq!(got.images[0].rel_path, "arm.png");
-        assert_eq!(got.images[0].bytes, vec![1, 2, 3, 4]);
-        assert_eq!(got.images[1].rel_path, "parts/head.png");
+    fn envelope_round_trips_and_detects_corruption() {
+        let raw = vec![b'a'; 10_000];
+        let encoded = encode(&raw).unwrap();
+        assert!(encoded.len() < raw.len());
+        assert_eq!(decode(&encoded).unwrap(), raw);
+        let mut corrupt = encoded;
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert!(decode(&corrupt).is_err());
     }
-
     #[test]
-    fn missing_project_is_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("empty.ankh");
-        write(&path, "{}", &[]).unwrap();
-        // Overwrite with an archive that has only an image.
-        let file = std::fs::File::create(&path).unwrap();
-        let mut zip = zip::ZipWriter::new(file);
-        zip.start_file("images/x.png", options()).unwrap();
-        zip.write_all(&[0u8]).unwrap();
-        zip.finish().unwrap();
-
-        assert!(matches!(read(&path), Err(ContainerError::MissingProject)));
+    fn asset_paths_cannot_escape() {
+        let root = Path::new("assets");
+        assert!(confined_asset(root, "ab/hash.png").is_ok());
+        assert!(confined_asset(root, "../secret.png").is_err());
+        assert!(confined_asset(root, "C:/secret.png").is_err());
     }
 }

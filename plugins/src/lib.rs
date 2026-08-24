@@ -1027,7 +1027,7 @@ mod tests {
         host.run(
             r#"
             ankhimate.importProject({
-              version: 3,
+              version: 1,
               name: "complete",
               fps: 24,
               assets: [{ name: "missing", file: "missing.png", width: 16, height: 16 }],
@@ -1112,7 +1112,7 @@ mod tests {
 
         let error = host
             .run(
-                r#"ankhimate.importProject({ version: 3, name: "broken" });"#,
+                r#"ankhimate.importProject({ version: 1, name: "broken" });"#,
                 &mut edit,
             )
             .expect_err("missing required schema fields");

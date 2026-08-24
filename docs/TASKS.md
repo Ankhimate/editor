@@ -56,7 +56,7 @@
 **Deps:** none · **Refs:** PLAN §2, §6
 - Create `docs/adr/template.md` and ADRs 001–005 summarizing decisions already made in the PLAN:
   001 slotmap IDs, 002 Affine2 math (no Mat4 decompose in hot path), 003 skin/attachment
-  resolution model, 004 `.ankh` zip container, 005 licensing/clean-room policy.
+  resolution model, 004 binary `.ankh` with external assets, 005 licensing/clean-room policy.
 **Accept:** 5 ADRs exist, each ≤1 page, each linking the PLAN section it records.
 
 ---
@@ -124,8 +124,9 @@ follow.
 
 ### ✅ T-108 `formats` crate + .ankh v1 save/load (R8)
 **Deps:** T-107 · **Refs:** PLAN §1.2 D8, §6.1
-- Crate `formats/`: zip container (`project.json` + `images/`), entities keyed by **name**,
-  `version: 1`, `migrate.rs` scaffold, rename-on-collision in core. File▸Open/Save/Save-As via `rfd`.
+- Crate `formats/`: binary Ankh v1 plus readable/minified JSON profiles, external
+  content-addressed images, entities keyed by **name**, and rename-on-collision
+  in core. File▸Open/Save/Save-As via `rfd`.
 **Accept:** round-trip golden test on `samples/minimal.ankh`; unknown top-level fields survive.
 
 ---

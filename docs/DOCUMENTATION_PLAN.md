@@ -40,7 +40,7 @@ override feature status in `TASKS.md`.
 |---|---|
 | Feature completion | `docs/TASKS.md`, tests, editor UI |
 | Rust APIs and algorithms | Separate `/api/` rustdoc site |
-| Authoring schema | `formats/src/schema.rs`, `convert.rs`, `migrate.rs` |
+| Authoring schema | `formats/src/schema.rs`, `convert.rs`, `compact.rs` |
 | Document verbs | `DocOps::builtin()`; generated reference |
 | MCP tools | `mcp::tools::all()`; generated reference |
 | Plugin API | `plugins/src`, plugin tests, `docs/plugin-api.md` |

@@ -54,7 +54,7 @@ pub struct Loaded {
     pub skeleton: Skeleton,
     pub animations: SlotMap<AnimationId, anim::Animation>,
     /// Assets with their metadata. Bytes are empty until the container binds
-    /// them ([`crate::load`]) — `project.json` holds the index, not the pixels.
+    /// them ([`crate::load`]) — the project holds the index, not the pixels.
     pub assets: AssetDb,
     pub name: String,
     pub fps: u32,
@@ -233,6 +233,7 @@ fn interp_from_schema(interp: schema::Interp) -> anim::Interp {
 /// only matters to whoever decodes the file, and a wrong extension on a
 /// correctly-encoded file is a lie a future importer would trip over.
 pub fn asset_file_name(asset: &ImageAsset) -> String {
+    use sha2::Digest;
     let ext = if asset.bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
         "png"
     } else if asset.bytes.starts_with(&[0xFF, 0xD8]) {
@@ -245,7 +246,8 @@ pub fn asset_file_name(asset: &ImageAsset) -> String {
     } else {
         "bin"
     };
-    format!("{}.{ext}", asset.name)
+    let hash = format!("{:x}", sha2::Sha256::digest(&asset.bytes));
+    format!("{}/{}.{ext}", &hash[..2], hash)
 }
 
 /// Build the on-disk project from the in-memory document.

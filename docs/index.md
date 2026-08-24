@@ -29,7 +29,7 @@ not enough.
 - **Animators:** [install the editor](/editor/getting-started/install/), learn the
   [workspace](/editor/animator/workspace/), then build a first rig with the
   [recipes](/editor/animator/recipes/).
-- **Integrators:** choose the [format](/editor/formats/ankh-v3/),
+- **Integrators:** read the [Ankh v1 format](format-spec.md),
   [plugin](/editor/automation/plugins/), [MCP](/editor/automation/mcp/), or
   [runtime export](/editor/formats/export-runtime/) contract.
 - **Rust contributors:** use the [Rust API reference](/editor/api/) for functions,

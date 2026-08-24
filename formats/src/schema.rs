@@ -1,4 +1,4 @@
-//! The on-disk `project.json` schema (PLAN §6.1, ADR 0004).
+//! The logical Ankh v1 schema shared by binary and JSON profiles.
 //!
 //! Every entity is keyed by **name**, never by slotmap key: keys are not stable
 //! across sessions or crate versions, and a serialized slotmap embeds internal
@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 pub type Extra = BTreeMap<String, serde_json::Value>;
 
 /// The current schema version. Bump on any breaking change and add a migration.
-pub const CURRENT_VERSION: u32 = 3;
+pub const CURRENT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {

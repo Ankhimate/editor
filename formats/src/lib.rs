@@ -1,24 +1,9 @@
-//! `.ankh` file format: read and write Ankhimate projects (T-108, ADR 0004).
-//!
-//! The stack, outermost to innermost:
-//!
-//! ```text
-//! save(path, ..)                          load(path)
-//!   convert::to_schema  (core → schema)     container::read   (zip → json)
-//!   serde_json          (schema → json)     serde_json        (json → schema)
-//!   container::write    (json → zip)        migrate           (→ current ver)
-//!                                           convert::from_schema (schema → core)
-//! ```
-//!
-//! * [`schema`] is the on-disk shape — name-keyed, degrees, unknown-field-tolerant.
-//! * [`convert`] is the only place ids↔names and radians↔degrees cross.
-//! * [`migrate`] steps an old file forward before it reaches the core model.
-//! * [`container`] is the zip wrapper (`project.json` + `images/`).
+//! Ankh v1: compact binary projects, optional JSON profiles, external images.
 
+mod compact;
 pub mod container;
 pub mod convert;
 pub mod importer;
-pub mod migrate;
 pub mod psd;
 pub mod psd_infer;
 pub mod psd_read;
@@ -27,21 +12,29 @@ pub mod schema;
 
 use std::path::Path;
 
-pub use container::ImageBlob;
 pub use convert::{LoadReport, Loaded, ProjectRef};
 pub use importer::{ImportError, Importer, Importers};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
     #[error(transparent)]
     Container(#[from] container::ContainerError),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
-    #[error(transparent)]
-    Migrate(#[from] migrate::MigrateError),
+    #[error("messagepack error: {0}")]
+    MessagePack(String),
+    #[error("project schema version {found} is not supported; expected version 1")]
+    Version { found: u32 },
 }
 
-/// Serialize a document to `project.json` bytes (pretty-printed).
+pub struct ImageBlob {
+    pub rel_path: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Serialize a document to readable, descriptive JSON.
 ///
 /// Split out from [`save`] so callers with their own container strategy — tests,
 /// exporters — can reach the JSON without touching the filesystem. Asset *bytes*
@@ -51,16 +44,24 @@ pub fn to_json(project: &ProjectRef<'_>) -> Result<String, Error> {
     Ok(serde_json::to_string_pretty(&schema)?)
 }
 
-/// Parse `project.json` bytes into a document, migrating older versions forward.
+/// Serialize standard, minified JSON using the stable short-key v1 profile.
+pub fn to_min_json(project: &ProjectRef<'_>) -> Result<String, Error> {
+    let value = serde_json::to_value(convert::to_schema(project))?;
+    Ok(serde_json::to_string(&compact::contract(value))?)
+}
+
+/// Parse either readable or short-key Ankh v1 JSON.
 pub fn from_json(json: &str) -> Result<Loaded, Error> {
-    // Migrate the **untyped** tree first. A step that changes a field's shape —
-    // v1's paired `keys: [{time, x, y}]` becoming two scalar tracks — produces
-    // values the current types cannot parse, so deserializing before migrating
-    // fails on exactly the files migration exists to rescue.
-    let raw: serde_json::Value = serde_json::from_str(json)?;
-    let raw = migrate::migrate_json(raw)?;
+    let mut raw: serde_json::Value = serde_json::from_str(json)?;
+    if raw.get("version").is_none() {
+        raw = compact::expand(raw);
+    }
     let project: schema::Project = serde_json::from_value(raw)?;
-    let project = migrate::migrate(project)?;
+    if project.version != schema::CURRENT_VERSION {
+        return Err(Error::Version {
+            found: project.version,
+        });
+    }
     Ok(convert::from_schema(&project))
 }
 
@@ -74,73 +75,81 @@ pub fn save(
     project: &ProjectRef<'_>,
     extra_images: &[ImageBlob],
 ) -> Result<(), Error> {
-    let json = to_json(project)?;
-    let mut images: Vec<ImageBlob> = project
+    let schema = convert::to_schema(project);
+    let root = container::asset_root(path);
+    for asset in project
         .assets
         .images
-        .iter()
-        .filter(|(_, a)| !a.bytes.is_empty())
-        .map(|(_, a)| ImageBlob {
-            rel_path: convert::asset_file_name(a),
-            bytes: a.bytes.clone(),
-        })
-        .collect();
-    for blob in extra_images {
-        images.push(ImageBlob {
-            rel_path: blob.rel_path.clone(),
-            bytes: blob.bytes.clone(),
-        });
+        .values()
+        .filter(|asset| !asset.bytes.is_empty())
+    {
+        write_asset(&root, &convert::asset_file_name(asset), &asset.bytes)?;
     }
-    container::write(path, &json, &images)?;
+    for blob in extra_images {
+        write_asset(&root, &blob.rel_path, &blob.bytes)?;
+    }
+    let bytes = if path.to_string_lossy().ends_with(".ankh.min.json") {
+        serde_json::to_vec(&compact::contract(serde_json::to_value(&schema)?))?
+    } else if path.to_string_lossy().ends_with(".ankh.json") {
+        serde_json::to_vec_pretty(&schema)?
+    } else {
+        let compact = compact::contract(serde_json::to_value(&schema)?);
+        let payload = rmp_serde::to_vec(&compact).map_err(|e| Error::MessagePack(e.to_string()))?;
+        container::encode(&payload)?
+    };
+    container::atomic_write(path, &bytes)?;
+    Ok(())
+}
+
+fn write_asset(root: &Path, uri: &str, bytes: &[u8]) -> Result<(), Error> {
+    let path = container::confined_asset(root, uri)?;
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    container::atomic_write(&path, bytes)?;
     Ok(())
 }
 
 /// Read an `.ankh` container from `path`.
 ///
-/// Asset bytes are bound back onto [`Loaded::assets`] by matching each blob's
-/// path against the index in `project.json`; blobs that match no asset are
-/// returned as-is rather than dropped, so a newer writer's extras survive.
+/// Asset bytes are loaded from the project's confined sibling asset directory.
 pub fn load(path: &Path) -> Result<(Loaded, Vec<ImageBlob>), Error> {
-    let contents = container::read(path)?;
-    let mut loaded = from_json(&contents.project_json)?;
-
-    // file → name, from the asset index in `project.json`.
-    //
-    // Read out of the raw tree rather than by re-deserializing: a file whose
-    // *shape* needs migrating — v1's paired animation keys — cannot parse into
-    // the current types at all. This used to `serde_json::from_str::<Project>`
-    // here and swallow the failure with `Err(_) => Default::default()`, so on
-    // such a file the index came back empty and every image silently lost its
-    // binding while the rig itself loaded fine.
-    let index: std::collections::HashMap<String, String> =
-        serde_json::from_str::<serde_json::Value>(&contents.project_json)
-            .ok()
-            .and_then(|v| v.get("assets").and_then(|a| a.as_array()).cloned())
-            .map(|assets| {
-                assets
-                    .iter()
-                    .filter_map(|a| {
-                        Some((
-                            a.get("file")?.as_str()?.to_string(),
-                            a.get("name")?.as_str()?.to_string(),
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-    let mut unclaimed = Vec::new();
-    for blob in contents.images {
-        match index
-            .get(&blob.rel_path)
-            .and_then(|name| loaded.assets.by_name(name))
+    let bytes = std::fs::read(path)?;
+    let value = if bytes.starts_with(container::MAGIC) {
+        let payload = container::decode(&bytes)?;
+        let compact: serde_json::Value =
+            rmp_serde::from_slice(&payload).map_err(|e| Error::MessagePack(e.to_string()))?;
+        compact::expand(compact)
+    } else {
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        if value.get("version").is_some() {
+            value
+        } else {
+            compact::expand(value)
+        }
+    };
+    let project: schema::Project = serde_json::from_value(value)?;
+    if project.version != schema::CURRENT_VERSION {
+        return Err(Error::Version {
+            found: project.version,
+        });
+    }
+    let index: Vec<(String, String)> = project
+        .assets
+        .iter()
+        .map(|asset| (asset.file.clone(), asset.name.clone()))
+        .collect();
+    let mut loaded = convert::from_schema(&project);
+    let root = container::asset_root(path);
+    for (uri, name) in index {
+        let asset_path = container::confined_asset(&root, &uri)?;
+        if let Ok(bytes) = std::fs::read(asset_path)
+            && let Some(id) = loaded.assets.by_name(&name)
         {
-            Some(id) => {
-                if let Some(asset) = loaded.assets.images.get_mut(id) {
-                    asset.bytes = blob.bytes;
-                }
-            }
-            None => unclaimed.push(blob),
+            loaded.assets.images[id].bytes = bytes;
         }
     }
 
@@ -156,7 +165,7 @@ pub fn load(path: &Path) -> Result<(Loaded, Vec<ImageBlob>), Error> {
         loaded.report.dangling.push(("asset image", name));
     }
 
-    Ok((loaded, unclaimed))
+    Ok((loaded, Vec::new()))
 }
 
 #[cfg(test)]
@@ -543,6 +552,66 @@ mod tests {
         assert!((arm.local_transform.rotation - 15.0_f32.to_radians()).abs() < 1e-4);
     }
 
+    #[test]
+    fn all_profiles_are_equal_and_images_are_external_and_deduplicated() {
+        let dir = tempfile::tempdir().unwrap();
+        let skeleton = sample_skeleton();
+        let animations = SlotMap::with_key();
+        let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 7, 8, 9];
+        let mut assets = AssetDb::new();
+        assets.add(ImageAsset::new("same-a", png.clone(), 2, 3));
+        assets.add(ImageAsset::new("same-b", png.clone(), 2, 3));
+        let source = project(&skeleton, &animations, &assets, "profiles", 24);
+        let paths = [
+            dir.path().join("hero.ankh"),
+            dir.path().join("hero-readable.ankh.json"),
+            dir.path().join("hero-minified.ankh.min.json"),
+        ];
+        for path in &paths {
+            save(path, &source, &[]).unwrap();
+        }
+
+        let binary = std::fs::read(&paths[0]).unwrap();
+        assert!(binary.starts_with(b"ANKH"));
+        assert!(
+            !binary.windows(png.len()).any(|window| window == png),
+            "encoded image bytes never enter the project"
+        );
+        let files: Vec<_> = walkdir_for_test(&container::asset_root(&paths[0]));
+        assert_eq!(files.len(), 1, "equal image contents share one hash file");
+
+        let canonical = to_json(&source).unwrap();
+        for path in &paths {
+            let (loaded, _) = load(path).unwrap();
+            let reopened = to_json(&project(
+                &loaded.skeleton,
+                &loaded.animations,
+                &loaded.assets,
+                &loaded.name,
+                loaded.fps,
+            ))
+            .unwrap();
+            assert_eq!(reopened, canonical, "{} is value-equal", path.display());
+        }
+    }
+
+    fn walkdir_for_test(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut files = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(path) = pending.pop() {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() {
+                        pending.push(entry.path());
+                    } else {
+                        files.push(entry.path());
+                    }
+                }
+            }
+        }
+        files
+    }
+
     /// The checked-in golden. Regenerate with the `gen_minimal` example.
     const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/minimal.ankh");
 
@@ -639,9 +708,22 @@ mod tests {
 
     #[test]
     fn unknown_top_level_field_survives_round_trip() {
-        // The golden carries a hand-added `editor_note` the schema does not know.
-        let contents = container::read(std::path::Path::new(GOLDEN)).unwrap();
-        let project: schema::Project = serde_json::from_str(&contents.project_json).unwrap();
+        let skeleton = sample_skeleton();
+        let animations = SlotMap::with_key();
+        let assets = AssetDb::new();
+        let psd_paths = Default::default();
+        let mut value = serde_json::to_value(convert::to_schema(&ProjectRef {
+            skeleton: &skeleton,
+            animations: &animations,
+            assets: &assets,
+            psd_layer_paths: &psd_paths,
+            name: "unknown",
+            fps: 30,
+            export_presets: &[],
+        }))
+        .unwrap();
+        value["editor_note"] = serde_json::json!("preserve me");
+        let project: schema::Project = serde_json::from_value(value).unwrap();
         assert!(
             project.extra.contains_key("editor_note"),
             "unknown field captured into `extra`"

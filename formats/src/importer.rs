@@ -38,9 +38,8 @@ impl Importer for AnkhImporter {
         crate::load(path)
             .map(|(loaded, _)| loaded)
             .map_err(|error| match error {
-                crate::Error::Container(crate::container::ContainerError::Io(error)) => {
-                    ImportError::Io(error.to_string())
-                }
+                crate::Error::Container(crate::container::ContainerError::Io(error))
+                | crate::Error::Io(error) => ImportError::Io(error.to_string()),
                 other => ImportError::Malformed(other.to_string()),
             })
     }
