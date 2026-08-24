@@ -78,6 +78,9 @@ fn tweegee_item_plugin_reads_a_stored_package() {
             r#"
             ops.invoke("bone.create", { name: "avatar_head" });
             ops.invoke("bone.create", { name: "avatar_head.item_front", parent: "avatar_head" });
+            ops.invoke("bone.create", { name: "foreground", parent: "avatar_head" });
+            ops.invoke("slot.create", { name: "avatar_head.item_front_slot", bone: "avatar_head.item_front" });
+            ops.invoke("slot.create", { name: "foreground_slot", bone: "foreground" });
             "#,
             &mut edit,
         )
@@ -128,6 +131,28 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         .find(|slot| slot.name.starts_with("twitem."))
         .expect("equipment slot");
     assert_eq!(slot.attachment.as_deref(), Some("twitem.hat"));
+    let order: Vec<&str> = edit
+        .doc
+        .skeleton
+        .draw_order
+        .iter()
+        .filter_map(|id| {
+            edit.doc
+                .skeleton
+                .slots
+                .get(*id)
+                .map(|slot| slot.name.as_str())
+        })
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "avatar_head.item_front_slot",
+            "twitem.items.front.0",
+            "foreground_slot"
+        ],
+        "equipment draws at the animation's target depth rather than at the end"
+    );
 
     let toggle = ankhimate_plugins::panel::PanelAction {
         action: "toggle:items:hat".into(),
