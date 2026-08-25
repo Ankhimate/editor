@@ -839,7 +839,11 @@ impl AppState {
         // afterwards, so constraints see them: dragging an IK target has to move
         // the chain *during* the drag, not on release.
         let dt = session.physics_dt.take().unwrap_or(0.0);
-        let overrides = &session.preview_locals;
+        let mut combined_overrides = session.panel_preview_locals.clone();
+        for (bone, local) in &session.preview_locals {
+            combined_overrides.insert(bone, *local);
+        }
+        let overrides = &combined_overrides;
         match (dt > 0.0, overrides.is_empty()) {
             (true, true) => {
                 ankhimate_core::pose::evaluate_with(&doc.skeleton, &animations, physics, dt, pose)
@@ -856,6 +860,9 @@ impl AppState {
             (false, false) => {
                 ankhimate_core::pose::evaluate_posed(&doc.skeleton, &animations, overrides, pose)
             }
+        }
+        if let Some(order) = &session.panel_draw_order {
+            pose.draw_order.clone_from(order);
         }
     }
 }

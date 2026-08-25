@@ -41,6 +41,12 @@ pub struct PanelEffect {
     /// Slot name to visible state. Names keep the plugin boundary stable.
     #[serde(default)]
     pub slot_visibility: std::collections::BTreeMap<String, bool>,
+    /// Absolute local X scale overrides, by bone name.
+    #[serde(default)]
+    pub bone_scale_x: std::collections::BTreeMap<String, f32>,
+    /// Optional complete transient slot order, back to front.
+    #[serde(default)]
+    pub draw_order: Option<Vec<String>>,
 }
 
 /// A panel a plugin contributes, as declared on load.

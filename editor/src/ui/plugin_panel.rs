@@ -256,6 +256,40 @@ fn apply_effect(state: &mut AppState, effect: ankhimate_plugins::panel::PanelEff
             }
         }
     }
+    let bones: std::collections::HashMap<String, _> = state
+        .doc
+        .skeleton
+        .bones
+        .iter()
+        .map(|(bone, data)| (data.name.clone(), bone))
+        .collect();
+    if !effect.bone_scale_x.is_empty() {
+        state.session.panel_preview_locals.clear();
+        for (name, scale_x) in effect.bone_scale_x {
+            if let Some(bone) = bones.get(&name).copied()
+                && let Some(data) = state.doc.skeleton.bones.get(bone)
+            {
+                let mut local = data.local_transform;
+                local.scale.x = scale_x;
+                state.session.panel_preview_locals.insert(bone, local);
+            }
+        }
+    }
+    if let Some(names) = effect.draw_order {
+        state.session.panel_draw_order = Some({
+            let mut order: Vec<_> = names
+                .iter()
+                .filter_map(|name| slots.get(name).copied())
+                .collect();
+            for slot in &state.doc.skeleton.draw_order {
+                if !order.contains(slot) {
+                    order.push(*slot);
+                }
+            }
+            order
+        });
+    }
+    state.refresh_pose();
 }
 
 /// Rebuild the widget list if the document has moved since it was made.
@@ -778,20 +812,30 @@ mod tests {
             .doc
             .skeleton
             .add_slot(Slot::new("rear_item".into(), bone));
+        let front = state
+            .doc
+            .skeleton
+            .add_slot(Slot::new("front_item".into(), bone));
 
         apply_effect(
             &mut state,
             ankhimate_plugins::panel::PanelEffect {
                 slot_visibility: [("rear_item".into(), false)].into(),
+                bone_scale_x: [("root".into(), -1.0)].into(),
+                draw_order: Some(vec!["front_item".into(), "rear_item".into()]),
             },
         );
         assert!(state.session.hidden_slots.contains(&slot));
         assert_eq!(state.doc.skeleton.slots[slot].color, [1.0; 4]);
+        assert_eq!(state.doc.skeleton.bones[bone].local_transform.scale.x, 1.0);
+        assert_eq!(state.pose.locals[bone].scale.x, -1.0);
+        assert_eq!(state.pose.draw_order, [front, slot]);
 
         apply_effect(
             &mut state,
             ankhimate_plugins::panel::PanelEffect {
                 slot_visibility: [("rear_item".into(), true)].into(),
+                ..Default::default()
             },
         );
         assert!(!state.session.hidden_slots.contains(&slot));

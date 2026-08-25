@@ -236,6 +236,9 @@ pub struct Session {
     /// Live drag overrides, applied on top of the evaluated pose so a drag never
     /// touches the `Document` until mouse-up (PLAN §3.2, defect D7).
     pub preview_locals: SecondaryMap<BoneId, Transform>,
+    /// Plugin-owned view overrides, separate from pending authoring previews.
+    pub panel_preview_locals: SecondaryMap<BoneId, Transform>,
+    pub panel_draw_order: Option<Vec<SlotId>>,
     pub weight_paint_settings: WeightPaintSettings,
     /// Weights copied off a mesh, waiting to be pasted onto another.
     ///
@@ -465,6 +468,8 @@ impl Session {
             drag_start_world_pos: None,
             preview_bone: None,
             preview_locals: SecondaryMap::new(),
+            panel_preview_locals: SecondaryMap::new(),
+            panel_draw_order: None,
             weight_paint_settings: WeightPaintSettings::default(),
             weight_clipboard: None,
             active_animation: None,

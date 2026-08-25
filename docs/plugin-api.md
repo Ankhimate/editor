@@ -485,13 +485,18 @@ exist only for that action and are not retained in panel state. This is still
 not filesystem access: the script can read only the files the user explicitly
 selected in the native dialog.
 
-A panel action may return `{ slot_visibility: { slot_name: boolean } }` to
-change transient viewport visibility by slot name. This is intentionally an
-effect rather than a verb: it updates the editor session, is not saved or
-undone, writes no animation key, and therefore works in both Setup and Animate.
-Unknown slot names are ignored. It is suitable for previews such as choosing a
-front/back equipment facing; authored visibility still uses document verbs and
-timelines.
+A panel action may return transient viewport effects:
+
+- `slot_visibility: { slot_name: boolean }` changes visibility by slot name;
+- `bone_scale_x: { bone_name: number }` overrides a bone's local X scale;
+- `draw_order: [slot_name, ...]` supplies a complete back-to-front view order.
+
+These are effects rather than verbs: they update editor session state, are not
+saved or undone, write no animation keys, and therefore work in both Setup and
+Animate. Unknown names are ignored; omitted slots in `draw_order` are appended
+in authored order. They suit previews such as a facing change that combines
+visibility, reflection, and stacking. Authored state still uses document verbs
+and timelines.
 
 ### Marketplace installation
 

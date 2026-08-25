@@ -170,11 +170,24 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         .expect("facing switches to the back variants");
     assert_eq!(
         effect.slot_visibility.get("twitem.items.front.0"),
-        Some(&false)
+        Some(&true),
+        "head-front is a depth layer, not a facing variant"
     );
     assert_eq!(
         effect.slot_visibility.get("twitem.items.back.0"),
-        Some(&true)
+        Some(&true),
+        "head-back remains paired with head-front"
+    );
+    assert_eq!(effect.bone_scale_x.get("avatar_head"), Some(&-1.0));
+    let facing_order = effect.draw_order.as_ref().expect("transient facing order");
+    assert!(
+        facing_order
+            .iter()
+            .position(|name| name == "twitem.items.front.0")
+            < facing_order
+                .iter()
+                .position(|name| name == "avatar_head.item_back_slot"),
+        "back facing moves front head equipment below the head"
     );
     assert!(
         edit.doc.skeleton.slots.values().all(|slot| {
@@ -232,6 +245,76 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         .find(|slot| slot.name.starts_with("twitem."))
         .expect("equipment slot");
     assert_eq!(slot.attachment, None);
+}
+
+#[test]
+fn tweegee_facing_matches_the_legacy_visibility_and_depth_transition() {
+    let mut edit = ankhimate_document::Edit::default();
+    Host::new()
+        .run(
+            r#"
+            ops.invoke("bone.create", { name: "root" });
+            ops.invoke("bone.create", { name: "avatar_back", parent: "root" });
+            ops.invoke("bone.create", { name: "avatar_back.hair_back", parent: "avatar_back" });
+            ops.invoke("bone.create", { name: "avatar_back.item_left_front", parent: "avatar_back" });
+            ops.invoke("bone.create", { name: "avatar_back.item_left_back", parent: "avatar_back" });
+            ops.invoke("bone.create", { name: "avatar_head", parent: "root" });
+            ops.invoke("bone.create", { name: "avatar_head.item_front", parent: "avatar_head" });
+            ops.invoke("bone.create", { name: "avatar_head.face", parent: "avatar_head" });
+            ops.invoke("bone.create", { name: "avatar_head.skin", parent: "avatar_head" });
+            ops.invoke("bone.create", { name: "avatar_front", parent: "root" });
+            ops.invoke("bone.create", { name: "avatar_front.item_center_back", parent: "avatar_front" });
+            ops.invoke("slot.create", { name: "rear_hair", bone: "avatar_back.hair_back" });
+            ops.invoke("slot.create", { name: "rear_left_front", bone: "avatar_back.item_left_front" });
+            ops.invoke("slot.create", { name: "rear_left_back", bone: "avatar_back.item_left_back" });
+            ops.invoke("slot.create", { name: "head_item", bone: "avatar_head.item_front" });
+            ops.invoke("slot.create", { name: "face", bone: "avatar_head.face" });
+            ops.invoke("slot.create", { name: "skin", bone: "avatar_head.skin" });
+            ops.invoke("slot.create", { name: "front_container_back_variant", bone: "avatar_front.item_center_back" });
+            "#,
+            &mut edit,
+        )
+        .expect("legacy-shaped fixture");
+    edit.mode = ankhimate_document::WorkMode::Animate;
+    let effect = Host::new()
+        .panel_action(
+            TWEEGEE_ITEM,
+            "tweegee.items",
+            &ankhimate_plugins::panel::PanelAction {
+                action: "facing".into(),
+                value: serde_json::json!("Back"),
+                ..Default::default()
+            },
+            &mut edit,
+        )
+        .expect("back-facing effect");
+
+    assert_eq!(effect.bone_scale_x.get("root"), Some(&-1.0));
+    assert_eq!(effect.slot_visibility.get("rear_hair"), Some(&true));
+    assert_eq!(effect.slot_visibility.get("head_item"), Some(&true));
+    assert_eq!(effect.slot_visibility.get("face"), Some(&false));
+    assert_eq!(effect.slot_visibility.get("rear_left_front"), Some(&true));
+    assert_eq!(effect.slot_visibility.get("rear_left_back"), None);
+    assert_eq!(
+        effect.slot_visibility.get("front_container_back_variant"),
+        Some(&true)
+    );
+    assert_eq!(effect.slot_visibility.get("skin"), None);
+    let order = effect.draw_order.expect("depth override");
+    assert!(
+        order
+            .iter()
+            .position(|name| name == "front_container_back_variant")
+            < order.iter().position(|name| name == "skin")
+    );
+    assert!(
+        order.iter().position(|name| name == "head_item")
+            < order.iter().position(|name| name == "skin")
+    );
+    assert!(
+        order.iter().position(|name| name == "skin")
+            < order.iter().position(|name| name == "rear_hair")
+    );
 }
 
 fn spine_import(json: &str) -> ankhimate_formats::Loaded {
