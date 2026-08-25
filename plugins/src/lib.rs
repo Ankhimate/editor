@@ -593,6 +593,12 @@ impl Host {
                     }
                 })?,
             )?;
+            ank.set(
+                "inflateRaw",
+                Function::new(ctx.clone(), move |base64: String| -> String {
+                    inflate_raw(&base64)
+                })?,
+            )?;
 
             // ── Exporters ────────────────────────────────────────────────
             let exporter_sink = exporters.clone();
@@ -764,6 +770,7 @@ impl Host {
                   cropImage: (base64, options) =>
                     __unwrap(__ankhimate.cropImage(base64, JSON.stringify(options ?? {}))),
                   imageInfo: (base64) => __unwrap(__ankhimate.imageInfo(base64)),
+                  inflateRaw: (base64) => __unwrap(__ankhimate.inflateRaw(base64)),
 
                   // Structure reading. Each throws on failure rather than
                   // returning an error object: a plugin that ignored a returned
@@ -1200,6 +1207,20 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+fn inflate_raw(base64: &str) -> String {
+    use std::io::Read;
+    let Some(bytes) = decode_base64(base64) else {
+        return error_json("compressed payload is not valid base64");
+    };
+    let mut decoded = Vec::new();
+    if let Err(error) =
+        flate2::read::DeflateDecoder::new(bytes.as_slice()).read_to_end(&mut decoded)
+    {
+        return error_json(&format!("could not inflate payload: {error}"));
+    }
+    serde_json::Value::String(importer::encode_base64(&decoded)).to_string()
 }
 
 /// Replace an importer's working document from the public `.ankh` project

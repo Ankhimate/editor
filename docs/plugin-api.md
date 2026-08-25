@@ -485,6 +485,13 @@ exist only for that action and are not retained in panel state. This is still
 not filesystem access: the script can read only the files the user explicitly
 selected in the native dialog.
 
+Formats whose selected metadata owns external assets may add `assets: true` to
+the widget. Each action object then includes an `assets` map of filename to
+base64 bytes from the sibling `<stem>.assets` directory. Only regular files in
+that one directory are bundled; the plugin receives no paths or filesystem
+handle. The Tweegee Item panel uses this for binary `.twitem` metadata and its
+external atlas pages.
+
 A panel action may return transient viewport effects:
 
 - `slot_visibility: { slot_name: boolean }` changes visibility by slot name;

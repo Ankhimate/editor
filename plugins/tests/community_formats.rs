@@ -46,32 +46,40 @@ fn community_packages_restore_the_external_format_registries() {
 }
 
 #[test]
-fn tweegee_item_plugin_reads_a_stored_package() {
-    fn entry(name: &str, contents: &[u8], out: &mut Vec<u8>) {
-        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
-        out.extend_from_slice(&[0; 4]); // versions and flags
-        out.extend_from_slice(&0u16.to_le_bytes()); // stored
-        out.extend_from_slice(&[0; 8]); // time, date, crc
-        out.extend_from_slice(&(contents.len() as u32).to_le_bytes());
-        out.extend_from_slice(&(contents.len() as u32).to_le_bytes());
-        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(name.as_bytes());
-        out.extend_from_slice(contents);
+fn tweegee_item_plugin_reads_binary_metadata_and_an_external_atlas() {
+    fn twit(value: &serde_json::Value) -> Vec<u8> {
+        use std::io::Write;
+        let payload = rmp_serde::to_vec(value).expect("MessagePack fixture");
+        let mut encoder =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&payload).expect("compress fixture");
+        let body = encoder.finish().expect("compressed fixture");
+        let mut out = b"TWIT".to_vec();
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&[1, 1]);
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(&crc32fast::hash(&payload).to_le_bytes());
+        out.extend_from_slice(&body);
+        out
     }
 
-    let manifest = br#"{"version":1,"itemId":"hat","assetScale":2,"targets":[{"name":"front","bone":"avatar_head.item_front","transform":{"a":-1,"d":1,"tx":0,"ty":0},"layers":[{"kind":"merged","file":"front.png","width":179,"height":11,"pivotX":0.25,"pivotY":0.75}]},{"name":"back","bone":"avatar_head.item_back","transform":{"a":-1,"d":1,"tx":0,"ty":0},"layers":[{"kind":"merged","file":"back.png","width":179,"height":11,"pivotX":0.25,"pivotY":0.75}]}]}"#;
+    let manifest = serde_json::json!({
+        "v": 1, "i": "hat", "z": 2, "p": [{"f":"atlas.png", "w":179, "h":11}],
+        "t": [
+            {"n":"front", "b":"avatar_head.item_front", "m":[-1,0,0,1,0,0],
+             "l":[{"k":0,"q":0,"x":0,"y":0,"w":179,"h":11,"o":[0,0],"d":[179,11],"r":[0.25,0.75]}]},
+            {"n":"back", "b":"avatar_head.item_back", "m":[-1,0,0,1,0,0],
+             "l":[{"k":0,"q":0,"x":0,"y":0,"w":179,"h":11,"o":[0,0],"d":[179,11],"r":[0.25,0.75]}]}
+        ]
+    });
     let mut png = Vec::new();
     image::DynamicImage::new_rgba8(179, 11)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .expect("png fixture");
-    let mut package = Vec::new();
-    entry("item.json", manifest, &mut package);
-    entry("images/front.png", &png, &mut package);
-    entry("images/back.png", &png, &mut package);
+    let package = twit(&manifest);
     let dir = tempfile::tempdir().expect("temp");
     let path = dir.path().join("hat.twitem");
-    std::fs::write(&path, package).expect("fixture");
+    std::fs::write(&path, &package).expect("fixture");
 
     let mut edit = ankhimate_document::Edit::default();
     Host::new()
@@ -93,9 +101,8 @@ fn tweegee_item_plugin_reads_a_stored_package() {
         action: "import".into(),
         value: serde_json::json!([{
             "name": "hat.twitem",
-            "bytes_base64": ankhimate_plugins::importer::encode_base64(
-                &std::fs::read(&path).expect("fixture bytes")
-            ),
+            "bytes_base64": ankhimate_plugins::importer::encode_base64(&package),
+            "assets": {"atlas.png": ankhimate_plugins::importer::encode_base64(&png)},
         }]),
         state: Default::default(),
     };
@@ -198,19 +205,16 @@ fn tweegee_item_plugin_reads_a_stored_package() {
 
     // Hair's front/back names describe depth around the head, not avatar
     // facing. Flash draws both pieces together in either direction.
-    let hair_manifest = std::str::from_utf8(manifest)
-        .unwrap()
-        .replace(r#""itemId":"hat""#, r#""itemId":"hair""#)
-        .replace(r#""assetScale":2"#, r#""section":"hair","assetScale":2"#);
-    let mut hair_package = Vec::new();
-    entry("item.json", hair_manifest.as_bytes(), &mut hair_package);
-    entry("images/front.png", &png, &mut hair_package);
-    entry("images/back.png", &png, &mut hair_package);
+    let mut hair_manifest = manifest.clone();
+    hair_manifest["i"] = serde_json::json!("hair");
+    hair_manifest["s"] = serde_json::json!("hair");
+    let hair_package = twit(&hair_manifest);
     let import_hair = ankhimate_plugins::panel::PanelAction {
         action: "import".into(),
         value: serde_json::json!([{
             "name": "hair.twitem",
             "bytes_base64": ankhimate_plugins::importer::encode_base64(&hair_package),
+            "assets": {"atlas.png": ankhimate_plugins::importer::encode_base64(&png)},
         }]),
         state: Default::default(),
     };

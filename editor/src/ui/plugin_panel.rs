@@ -407,6 +407,7 @@ fn draw(
             on,
             extensions,
             multiple,
+            assets,
             tooltip,
         } => {
             let response = ui.button(file);
@@ -434,9 +435,15 @@ fn draw(
                 .into_iter()
                 .filter_map(|path| {
                     let bytes = std::fs::read(&path).ok()?;
+                    let bundled = if *assets {
+                        bundled_assets(&path)
+                    } else {
+                        serde_json::Map::new()
+                    };
                     Some(serde_json::json!({
                         "name": path.file_name()?.to_str()?,
                         "bytes_base64": ankhimate_plugins::importer::encode_base64(&bytes),
+                        "assets": bundled,
                     }))
                 })
                 .collect();
@@ -626,6 +633,48 @@ fn draw(
     }
 }
 
+/// Read the explicitly requested sibling `<stem>.assets` directory. The plugin
+/// receives bytes, never paths, so panel scripts retain no filesystem access.
+fn bundled_assets(path: &std::path::Path) -> serde_json::Map<String, serde_json::Value> {
+    let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+        return serde_json::Map::new();
+    };
+    let Some(parent) = path.parent() else {
+        return serde_json::Map::new();
+    };
+    let Ok(parent) = parent.canonicalize() else {
+        return serde_json::Map::new();
+    };
+    let Ok(directory) = parent.join(format!("{stem}.assets")).canonicalize() else {
+        return serde_json::Map::new();
+    };
+    if !directory.starts_with(&parent) {
+        return serde_json::Map::new();
+    }
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return serde_json::Map::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let kind = entry.file_type().ok()?;
+            if !kind.is_file() {
+                return None;
+            }
+            let name = entry.file_name().to_str()?.to_string();
+            let resolved = entry.path().canonicalize().ok()?;
+            if !resolved.starts_with(&directory) {
+                return None;
+            }
+            let bytes = std::fs::read(resolved).ok()?;
+            Some((
+                name,
+                serde_json::Value::String(ankhimate_plugins::importer::encode_base64(&bytes)),
+            ))
+        })
+        .collect()
+}
+
 /// Loaded thumbnails for this frame, by asset name.
 type Textures = std::collections::HashMap<String, egui::TextureHandle>;
 
@@ -794,6 +843,27 @@ fn thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_asset_file_picker_bundles_only_the_sibling_asset_directory() {
+        let root = tempfile::tempdir().expect("temp");
+        let item = root.path().join("hat.twitem");
+        std::fs::write(&item, b"TWIT").expect("item");
+        let assets = root.path().join("hat.assets");
+        std::fs::create_dir(&assets).expect("assets");
+        std::fs::write(assets.join("atlas.png"), b"pixels").expect("atlas");
+        std::fs::write(root.path().join("secret.txt"), b"secret").expect("outside");
+
+        let bundled = bundled_assets(&item);
+        assert_eq!(bundled.len(), 1);
+        assert_eq!(
+            bundled.get("atlas.png"),
+            Some(&serde_json::json!(
+                ankhimate_plugins::importer::encode_base64(b"pixels")
+            ))
+        );
+        assert!(!bundled.contains_key("secret.txt"));
+    }
 
     #[test]
     fn a_panel_visibility_effect_is_transient_session_state() {

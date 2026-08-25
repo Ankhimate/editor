@@ -92,6 +92,8 @@ pub enum Widget {
     },
     /// A host-mediated file picker. The action value is an array of
     /// `{ name, bytes_base64 }` objects and is never retained as panel state.
+    /// With `assets`, each object also has an `assets` map containing the files
+    /// in the selected file's sibling `<stem>.assets` directory.
     File {
         file: String,
         on: String,
@@ -99,6 +101,8 @@ pub enum Widget {
         extensions: Vec<String>,
         #[serde(default)]
         multiple: bool,
+        #[serde(default)]
+        assets: bool,
         #[serde(default)]
         tooltip: Option<String>,
     },
