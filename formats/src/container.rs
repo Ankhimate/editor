@@ -114,7 +114,15 @@ pub fn asset_root(project: &Path) -> PathBuf {
 
 pub fn confined_asset(root: &Path, uri: &str) -> Result<PathBuf, ContainerError> {
     let relative = Path::new(uri);
+    let bytes = uri.as_bytes();
+    let has_drive_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    let has_unsafe_portable_component = uri
+        .split(['/', '\\'])
+        .any(|part| matches!(part, "." | ".."));
     if relative.is_absolute()
+        || has_drive_prefix
+        || uri.starts_with('\\')
+        || has_unsafe_portable_component
         || relative
             .components()
             .any(|part| !matches!(part, Component::Normal(_)))
@@ -143,5 +151,8 @@ mod tests {
         assert!(confined_asset(root, "ab/hash.png").is_ok());
         assert!(confined_asset(root, "../secret.png").is_err());
         assert!(confined_asset(root, "C:/secret.png").is_err());
+        assert!(confined_asset(root, r"C:\secret.png").is_err());
+        assert!(confined_asset(root, r"ab\..\secret.png").is_err());
+        assert!(confined_asset(root, r"\\server\secret.png").is_err());
     }
 }

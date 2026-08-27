@@ -10,7 +10,7 @@ Normative architecture decisions:
 - [0001: slotmap IDs](https://github.com/Ankhimate/editor/blob/main/docs/adr/0001-slotmap-ids.md)
 - [0002: Affine2 transform math](https://github.com/Ankhimate/editor/blob/main/docs/adr/0002-affine2-transform-math.md)
 - [0003: skin attachment resolution](https://github.com/Ankhimate/editor/blob/main/docs/adr/0003-skin-attachment-resolution.md)
-- [0004: binary Ankh v1 with external assets](adr/0004-ankh-binary-external-assets.md)
+- [0004: binary Ankh v1 with external assets](https://github.com/Ankhimate/editor/blob/main/docs/adr/0004-ankh-binary-external-assets.md)
 - [0005: license and clean-room policy](https://github.com/Ankhimate/editor/blob/main/docs/adr/0005-license-and-clean-room-policy.md)
 - [0006: work modes](https://github.com/Ankhimate/editor/blob/main/docs/adr/0006-work-modes.md)
 - [0007: physics determinism](https://github.com/Ankhimate/editor/blob/main/docs/adr/0007-physics-determinism.md)

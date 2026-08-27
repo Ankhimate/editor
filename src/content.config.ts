@@ -3,7 +3,7 @@ import { glob } from 'astro/loaders';
 import { docsSchema } from '@astrojs/starlight/schema';
 
 const published = [
-  'index.md', 'comparison.md', 'appendices.md', 'DOCUMENTATION_PLAN.md',
+  'index.md', 'comparison.md', 'appendices.md', 'DOCUMENTATION_PLAN.md', 'format-spec.md',
   'export-context.md', 'plugin-api.md', 'mcp.md', 'psd-import.md',
   'graph-editor.md', 'rigging-walkthrough.md', 'getting-started/**/*.md',
   'animator/**/*.md', 'formats/**/*.md', 'automation/**/*.md',

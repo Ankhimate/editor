@@ -1,3 +1,8 @@
+---
+title: Ankh v1 project format
+description: Binary envelope, JSON profiles, and external asset rules for Ankh project files.
+---
+
 # Ankh v1 project format
 
 `.ankh` is the binary authoring format. This is version 1; no earlier Ankh
